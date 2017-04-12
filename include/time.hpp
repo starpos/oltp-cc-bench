@@ -25,7 +25,7 @@ public:
     }
 
     void pushTime(std::chrono::time_point<Clock> tp) {
-        q_.push_front(Clock::now());
+        q_.push_front(tp);
     }
 
     template <typename Duration>
