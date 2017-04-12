@@ -10,8 +10,9 @@
 #include <limits>
 #include <type_traits>
 #include <thread>
-#include "util.hpp" 
+#include "util.hpp"
 #include "random.hpp"
+#include "cmdline_option.hpp"
 
 
 constexpr size_t CACHE_LINE_SIZE = 64;
@@ -290,4 +291,63 @@ struct Result
         ss << *this;
         return ss.str();
     }
+};
+
+
+template <typename SharedData, typename Worker>
+void runExec(const CmdLineOption& opt, SharedData& shared, Worker&& worker)
+{
+    const size_t nrTh = opt.nrTh;
+
+    bool start = false;
+    bool quit = false;
+    bool shouldQuit = false;
+    cybozu::thread::ThreadRunnerSet thS;
+    std::vector<Result> resV(nrTh);
+    for (size_t i = 0; i < nrTh; i++) {
+        thS.add([&,i]() {
+                resV[i] = worker(i, start, quit, shouldQuit, shared);
+            });
+    }
+    thS.start();
+    start = true;
+    size_t sec = 0;
+    for (size_t i = 0; i < opt.runSec; i++) {
+        if (opt.verbose) {
+            ::printf("%zu\n", i);
+        }
+        sleepMs(1000);
+        sec++;
+        if (shouldQuit) break;
+    }
+    quit = true;
+    thS.join();
+    Result res;
+    for (size_t i = 0; i < nrTh; i++) {
+        if (opt.verbose) {
+            ::printf("worker %zu  %s\n", i, resV[i].str().c_str());
+        }
+        res += resV[i];
+    }
+    ::printf("concurrency:%zu sec:%zu tps:%.03f %s %s\n"
+             , nrTh, opt.runSec, res.nrCommit() / (double)opt.runSec
+             , res.str().c_str()
+             , shared.str().c_str());
+    ::fflush(::stdout);
+}
+
+enum ShortMode
+{
+    USE_R2W2 = 0,
+    USE_LONG_TX_2 = 1,
+    USE_READONLY_TX = 2,
+    USE_WRITEONLY_TX = 3,
+    USE_MIX_TX = 4,
+};
+
+enum TxIdGenType
+{
+    SCALABLE_TXID_GEN = 0,
+    BULK_TXID_GEN = 1,
+    SIMPLE_TXID_GEN = 2,
 };
