@@ -274,9 +274,9 @@ struct TLockShared
 
     std::string str() const {
         return cybozu::util::formatString(
-            "workload:%s mode:%s longTxSize:%zu nrMutex:%zu nrMutexPerTh:%zu "
+            "mode:%s workload:%s longTxSize:%zu nrMutex:%zu nrMutexPerTh:%zu "
             "shortMode:%d txIdGenType:%d"
-            , workload.c_str(), readModeToStr(rmode)
+            , readModeToStr(rmode), workload.c_str()
             , longTxSize, muV.size(), nrMuPerTh
             , shortMode, txIdGenType);
     }
