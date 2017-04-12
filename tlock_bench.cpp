@@ -11,7 +11,7 @@
 #include "cpuid.hpp"
 #include "lock.hpp"
 #include "trlock.hpp"
-
+#include "cmdline_option.hpp"
 
 //using PQLock = cybozu::lock::PQSpinLock;
 //using PQLock = cybozu::lock::PQMcsLock;
@@ -33,8 +33,6 @@ using IMutex = ILock::Mutex;
 using IMode = ILock::Mode;
 using ILockReader = cybozu::lock::InterceptibleLock64ReaderT<PQLock>;
 
-GlobalPriIdGenerator<12> globalPriIdGen;
-
 
 using Spinlock = cybozu::lock::TtasSpinlockT<0>;
 
@@ -44,17 +42,14 @@ using Spinlock = cybozu::lock::TtasSpinlockT<0>;
 #define BULK_TXID_ALLOCATION
 //#undef  BULK_TXID_ALLOCATION
 
-//#define USE_LONG_TX_2
-#undef USE_LONG_TX_2
 
-//#define USE_READONLY_TX
-#undef USE_READONLY_TX
-
-//#define USE_WRITEONLY_TX
-#undef USE_WRITEONLY_TX
-
-//#define USE_MIX_TX
-#undef USE_MIX_TX
+enum ShortMode {
+    USE_R2W2 = 0,
+    USE_LONG_TX_2 = 1,
+    USE_READONLY_TX = 2,
+    USE_WRITEONLY_TX = 3,
+    USE_MIX_TX = 4,
+};
 
 
 enum class ReadMode : uint8_t { LOCK, OCC, HYBRID };
@@ -70,6 +65,23 @@ const char* readModeToStr(ReadMode rmode)
         return "trlock-hybrid";
     }
     return nullptr;
+}
+
+ReadMode strToReadMode(const char *s)
+{
+    const char *hybrid = "trlock-hybrid";
+    const char *occ = "trlock-occ";
+    const char *lock = "trlock";
+
+    if (::strncmp(hybrid, s, ::strnlen(hybrid, 20)) == 0) {
+        return ReadMode::HYBRID;
+    } else if (::strncmp(occ, s, ::strnlen(occ, 20)) == 0) {
+        return ReadMode::OCC;
+    } else if (::strncmp(lock, s, ::strnlen(lock, 20)) == 0) {
+        return ReadMode::LOCK;
+    } else {
+        throw cybozu::Exception("strToReadMode: bad string") << s;
+    }
 }
 
 
@@ -255,12 +267,40 @@ void clearLocks(
     readSet.clear();
 }
 
-//template <typename TxIdGen>
-//Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, std::vector<Mutex>& muV, TxIdGen& txIdGen, ReadMode rmode, __attribute__((unused)) TxInfo& txInfo, size_t longTxSize)
-Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, std::vector<Mutex>& muV, LocalPriIdGenerator<12>& priIdGen, ReadMode rmode, __attribute__((unused)) TxInfo& txInfo, size_t longTxSize)
+
+struct TLockShared
+{
+    std::string workload;
+    std::vector<Mutex> muV;
+    size_t nrMuPerTh;
+    ReadMode rmode;
+    TxInfo txInfo;
+    size_t longTxSize;
+
+    std::string str() const {
+        return cybozu::util::formatString(
+            "workload:%s mode:%s longTxSize:%zu nrMutex:%zu nrMutexPerTh:%zu"
+            , workload.c_str(), readModeToStr(rmode)
+            , longTxSize, muV.size(), nrMuPerTh);
+    }
+};
+
+
+template <int shortMode>
+Result tWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, TLockShared& shared)
 {
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
+
+    std::vector<Mutex>& muV = shared.muV;
+    const ReadMode rmode = shared.rmode;
+    TxInfo& txInfo = shared.txInfo;
+    unused(txInfo);
+    const size_t longTxSize = shared.longTxSize;
+
+    PriorityIdGenerator<12> priIdGen;
+    priIdGen.init(idx + 1);
+
     Result res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     std::vector<size_t> muIdV(4);
@@ -271,14 +311,13 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
 
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
 
-#ifdef USE_MIX_TX
+    // USE_MIX_TX
     std::vector<bool> isWriteV(4);
     std::vector<size_t> tmpV2; // for fillModeVec;
-#endif
 
-#ifdef USE_LONG_TX_2
+    // USE_LONG_TX_2
     BoolRandom<decltype(rand)> boolRand(rand);
-#endif
+
 #ifdef MONITOR
     {
         Spinlock lk(&txInfo.mutex);
@@ -302,10 +341,10 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
         } else {
             muIdV.resize(4);
             fillMuIdVecLoop(muIdV, rand, muV.size());
-#ifdef USE_MIX_TX
-            isWriteV.resize(4);
-            fillModeVec(isWriteV, rand, 2, tmpV2);
-#endif
+            if (shortMode == USE_MIX_TX) {
+                isWriteV.resize(4);
+                fillModeVec(isWriteV, rand, 2, tmpV2);
+            }
         }
 #if 0 /* For test. */
         std::sort(muIdV.begin(), muIdV.end());
@@ -329,21 +368,23 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
             for (size_t i = 0; i < muIdV.size(); i++) {
                 //Mode mode = (rand() % 2 == 0 ? Mode::X : Mode::S);
                 Mode mode;
-#if defined(USE_LONG_TX_2)
-                mode = boolRand() ? Mode::X : Mode::S;
-#elif defined(USE_READONLY_TX)
-                mode = Mode::S;
-#elif defined(USE_WRITEONLY_TX)
-                mode = Mode::X;
-#elif defined(USE_MIX_TX)
-                mode = isWriteV[i] ? Mode::X : Mode::S;
-#else
-                if (i == sz - 1 || i == sz - 2) {
-                    mode = Mode::X;
-                } else {
+                if (shortMode == USE_LONG_TX_2) {
+                    mode = boolRand() ? Mode::X : Mode::S;
+                } else if (shortMode == USE_READONLY_TX) {
                     mode = Mode::S;
+                } else if (shortMode == USE_WRITEONLY_TX) {
+                    mode = Mode::X;
+                } else if (shortMode == USE_MIX_TX) {
+                    mode = isWriteV[i] ? Mode::X : Mode::S;
+                } else {
+                    assert(shortMode == USE_R2W2);
+                    if (i == sz - 1 || i == sz - 2) {
+                        mode = Mode::X;
+                    } else {
+                        mode = Mode::S;
+                    }
                 }
-#endif
+
 #ifdef MONITOR
                 {
                     Spinlock lk(&txInfo.mutex);
@@ -524,8 +565,10 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
 
 
 template <typename TxIdGen>
-Result readWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, std::vector<Mutex>& muV, TxIdGen& txIdGen, ReadMode rmode, __attribute__((unused)) TxInfo& txInfo, size_t longTxSize)
+Result readWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, std::vector<Mutex>& muV, TxIdGen& txIdGen, ReadMode rmode, __attribute__((unused)) TxInfo& txInfo)
 {
+    unused(shouldQuit);
+
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
     Result res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
@@ -537,7 +580,7 @@ Result readWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQ
     const bool isLongTx = false;
 
     while (!start) _mm_pause();
-    size_t count = 0;
+    //size_t count = 0;
     while (!quit) {
         muIdV.resize(4);
         fillMuIdVecLoop(muIdV, rand, muV.size());
@@ -545,7 +588,7 @@ Result readWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQ
         const uint32_t txId = txIdGen.get();
 
         for (size_t retry = 0;; retry++) {
-            bool abort = false;
+            //bool abort = false;
             assert(writeLocks.empty());
             assert(readLocks.empty());
             assert(writeSet.empty());
@@ -745,13 +788,40 @@ Result contentionWorker(size_t idx, const bool& start, const bool& quit, std::ve
 }
 
 
+
+struct ILockShared
+{
+    std::string workload;
+    size_t nrMuPerTh;
+    std::vector<IMutex> muV;
+    ReadMode rmode;
+    size_t longTxSize;
+
+    std::string str() const {
+        return cybozu::util::formatString(
+            "workload:%s mode:%s longTxSize:%zu nrMutex:%zu nrMutexPerTh:%zu"
+            , workload.c_str(), readModeToStr(rmode)
+            , longTxSize, muV.size(), nrMuPerTh);
+    }
+};
+
+
 /**
  * Using ILock.
  */
-Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, std::vector<IMutex>& muV, LocalPriIdGenerator<12>& priIdGen, ReadMode rmode, size_t longTxSize)
+template <int shortMode>
+Result iWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared& shared)
 {
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
+
+    PriorityIdGenerator<12> priIdGen;
+    priIdGen.init(idx + 1);
+
+    std::vector<IMutex>& muV = shared.muV;
+    const ReadMode rmode = shared.rmode;
+    const size_t longTxSize = shared.longTxSize;
+
     Result res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     std::vector<size_t> muIdV(4);
@@ -762,14 +832,12 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
 
-#ifdef USE_MIX_TX
+    // for USE_MIX_TX
     std::vector<bool> isWriteV(4);
     std::vector<size_t> tmpV2; // for fillModeVec;
-#endif
 
-#ifdef USE_LONG_TX_2
+    // for USE_LONG_TX_2
     BoolRandom<decltype(rand)> boolRand(rand);
-#endif
 
     while (!start) _mm_pause();
     size_t count = 0; unused(count);
@@ -787,10 +855,10 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
         } else {
             muIdV.resize(4);
             fillMuIdVecLoop(muIdV, rand, muV.size());
-#ifdef USE_MIX_TX
-            isWriteV.resize(4);
-            fillModeVec(isWriteV, rand, 2, tmpV2);
-#endif
+            if (shortMode == USE_MIX_TX) {
+                isWriteV.resize(4);
+                fillModeVec(isWriteV, rand, 2, tmpV2);
+            }
         }
 #if 0 /* For test. */
         std::sort(muIdV.begin(), muIdV.end());
@@ -809,21 +877,23 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
             for (size_t i = 0; i < muIdV.size(); i++) {
                 //Mode mode = (rand() % 2 == 0 ? Mode::X : Mode::S);
                 IMode mode;
-#if defined(USE_LONG_TX_2)
-                mode = boolRand() ? IMode::X : IMode::S;
-#elif defined(USE_READONLY_TX)
-                mode = IMode::S;
-#elif defined(USE_WRITEONLY_TX)
-                mode = IMode::X;
-#elif defined(USE_MIX_TX)
-                mode = isWriteV[i] ? IMode::X : IMode::S;
-#else
-                if (i == sz - 1 || i == sz - 2) {
-                    mode = IMode::X;
-                } else {
+                if (shortMode == USE_LONG_TX_2) {
+                    mode = boolRand() ? IMode::X : IMode::S;
+                } else if (shortMode == USE_READONLY_TX) {
                     mode = IMode::S;
+                } else if (shortMode == USE_WRITEONLY_TX) {
+                    mode = IMode::X;
+                } else if (shortMode == USE_MIX_TX) {
+                    mode = isWriteV[i] ? IMode::X : IMode::S;
+                } else {
+                    assert(shortMode == USE_R2W2);
+                    if (i == sz - 1 || i == sz - 2) {
+                        mode = IMode::X;
+                    } else {
+                        mode = IMode::S;
+                    }
                 }
-#endif
+
                 IMutex &mutex = muV[muIdV[i]];
                 if (mode == IMode::S) {
                     const bool tryOccRead = rmode == ReadMode::OCC
@@ -834,7 +904,7 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
                         for (;;) {
                             r.prepare(mutex);
                             // read
-			    r.readFence();
+                            r.readFence();
                             if (r.verifyAll()) {
 #if 0
                                 ::printf("READ %zu %s\n", r.getMutexId(), r.getLockData().str().c_str()); // QQQ
@@ -946,54 +1016,27 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 
 
 
-void runExec(size_t nrMutex, size_t nrTh, size_t runSec, ReadMode rmode, bool verbose, size_t longTxSize, size_t nrOp, size_t nrWr)
+template <typename SharedData, typename Worker>
+void runExec(const CmdLineOption& opt, SharedData& shared, Worker&& worker)
 {
-#if 0
-    std::vector<Mutex> muV(nrMutex);
-#else
-    std::vector<IMutex> muV(nrMutex);
-#endif
+    const size_t nrTh = opt.nrTh;
+
     bool start = false;
     bool quit = false;
     bool shouldQuit = false;
-#ifdef BULK_TXID_ALLOCATION
-    GlobalTxIdGenerator globalTxIdGen(5, 10);
-#else
-    SimpleTxIdGenerator txIdGen;
-#endif
-    GlobalPriIdGenerator<12> gPriIdGen;
-
     cybozu::thread::ThreadRunnerSet thS;
     std::vector<Result> resV(nrTh);
-    std::vector<TxInfo> txInfo(nrTh);
     for (size_t i = 0; i < nrTh; i++) {
         thS.add([&,i]() {
-#ifdef BULK_TXID_ALLOCATION
-                TxIdGenerator txIdGen(&globalTxIdGen);
-#endif
-                //resV[i] = worker(i, start, quit, shouldQuit, muV, txIdGen, rmode, txInfo[i], longTxSize);
-                //resV[i] = readWorker(i, start, quit, shouldQuit, muV, txIdGen, rmode, txInfo[i], longTxSize);
-                //resV[i] = contentionWorker(i, start, quit, muV, txIdGen, rmode, nrOp, nrWr);
-
-#if 1
-                LocalPriIdGenerator<12> priIdGen = gPriIdGen.get();
-                resV[i] = worker2(i, start, quit, shouldQuit, muV, priIdGen, rmode, longTxSize);
-                //resV[i] = worker(i, start, quit, shouldQuit, muV, priIdGen, rmode, txInfo[i], longTxSize);
-#endif
+                resV[i] = worker(i, start, quit, shouldQuit, shared);
             });
     }
     thS.start();
     start = true;
     size_t sec = 0;
-    for (size_t i = 0; i < runSec; i++) {
-        if (verbose) {
-            ::printf("%zu %u\n", i
-#ifdef BULK_TXID_ALLOCATION
-                , globalTxIdGen.sniff()
-#else
-                , txIdGen.sniff()
-#endif
-                );
+    for (size_t i = 0; i < opt.runSec; i++) {
+        if (opt.verbose) {
+            ::printf("%zu\n", i);
         }
         sleepMs(1000);
         sec++;
@@ -1003,20 +1046,25 @@ void runExec(size_t nrMutex, size_t nrTh, size_t runSec, ReadMode rmode, bool ve
     thS.join();
     Result res;
     for (size_t i = 0; i < nrTh; i++) {
-        if (verbose) {
+        if (opt.verbose) {
             ::printf("worker %zu  %s\n", i, resV[i].str().c_str());
         }
         res += resV[i];
     }
-    ::printf("mode:%6s longTxSize:%zu nrMutex:%zu concurrency:%zu nrOp:%zu nrWr:%zu sec:%zu tps:%.03f %s\n"
-             , readModeToStr(rmode), longTxSize, nrMutex, nrTh, nrOp, nrWr
-             , sec, res.nrCommit() / (double)sec
-             , res.str().c_str());
+    ::printf("concurrency:%zu sec:%zu tps:%.03f %s %s\n"
+             , nrTh, opt.runSec, res.nrCommit() / (double)opt.runSec
+             , res.str().c_str()
+             , shared.str().c_str());
+#if 0
+    ::printf("longTxSize:%zu nrMutex:%zu nrOp:%zu nrWr:%zu "
+             , readModeToStr(rmode), longTxSize,
+             , nrMutex, nrTh, nrOp, nrWr);
+#endif
     ::fflush(::stdout);
 }
 
 
-int main()
+void runTest()
 {
 #if 0
     ::fprintf(::stderr, "sizeof(Mutex) = %zu\n", sizeof(Mutex));
@@ -1051,7 +1099,7 @@ int main()
     ::printf("%s\n", lockS.str().c_str());
 #endif
 
-#if 1
+#if 0
     //for (ReadMode rmode : {ReadMode::LOCK}) {
     for (ReadMode rmode : {ReadMode::LOCK, ReadMode::OCC, ReadMode::HYBRID}) {
     //for (ReadMode rmode : {ReadMode::HYBRID}) {
@@ -1129,4 +1177,84 @@ int main()
 #if 0
     testRandom();
 #endif
+}
+
+
+struct CmdLineOptionPlus : CmdLineOption
+{
+    using base = CmdLineOption;
+
+    std::string modeStr;
+    size_t nrMuPerTh;
+    std::string workload;
+    int shortMode;
+    size_t longTxSize;
+
+    CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
+        appendOpt(&modeStr, "lock", "mode", "[mode]: specify mode in trlock, trlock-occ, trlock-hybrid.");
+        appendMust(&nrMuPerTh, "mu", "[num]: number of mutexes per thread.");
+        appendMust(&workload, "w", "[workload]: workload type in 'shortlong-i', 'shortlong-t', 'high-contention', 'high-conflicts'.");
+        appendOpt(&shortMode, 0, "sm", "[id]: short workload mode (0:r2w2, 1:long2, 2:ro, 3:wo, 4:mix)");
+        appendOpt(&longTxSize, 0, "long-tx-size", "[size]: long tx size. 0 means no long tx.");
+    }
+    void parse(int argc, char *argv[]) {
+        base::parse(argc, argv);
+        if (nrMuPerTh == 0) {
+            throw cybozu::Exception("nrMuPerTh must not be 0.");
+        }
+        if (longTxSize > nrMuPerTh * nrTh) {
+            throw cybozu::Exception("longTxSize is too large: up to nrMuPerTh * nrTh.");
+        }
+    }
+};
+
+
+int main(int argc, char *argv[]) try
+{
+    CmdLineOptionPlus opt("tlock_bench: benchmark with transferable/interceptible lock.");
+    opt.parse(argc, argv);
+
+    if (opt.workload == "shortlong-i") {
+        ILockShared shared;
+        shared.workload = opt.workload;
+        shared.nrMuPerTh = opt.nrMuPerTh;
+        shared.muV.resize(opt.nrMuPerTh * opt.nrTh);
+        shared.rmode = strToReadMode(opt.modeStr.c_str());
+        shared.longTxSize = opt.longTxSize;
+        for (size_t i = 0; i < opt.nrLoop; i++) {
+            switch (opt.shortMode) {
+            case USE_R2W2: runExec(opt, shared, iWorker<USE_R2W2>); break;
+            case USE_LONG_TX_2: runExec(opt, shared, iWorker<USE_LONG_TX_2>); break;
+            case USE_READONLY_TX: runExec(opt, shared, iWorker<USE_READONLY_TX>); break;
+            case USE_WRITEONLY_TX: runExec(opt, shared, iWorker<USE_WRITEONLY_TX>); break;
+            case USE_MIX_TX: runExec(opt, shared, iWorker<USE_MIX_TX>); break;
+            default:
+                throw cybozu::Exception("bad shortMode") << opt.shortMode;
+            }
+        }
+    } else if (opt.workload == "shortlong-t") {
+        TLockShared shared;
+        shared.workload = opt.workload;
+        shared.nrMuPerTh = opt.nrMuPerTh;
+        shared.muV.resize(shared.nrMuPerTh * opt.nrTh);
+        shared.rmode = strToReadMode(opt.modeStr.c_str());
+        shared.longTxSize = opt.longTxSize;
+        for (size_t i = 0; i < opt.nrLoop; i++) {
+            switch (opt.shortMode) {
+            case USE_R2W2: runExec(opt, shared, tWorker<USE_R2W2>); break;
+            case USE_LONG_TX_2: runExec(opt, shared, tWorker<USE_LONG_TX_2>); break;
+            case USE_READONLY_TX: runExec(opt, shared, tWorker<USE_READONLY_TX>); break;
+            case USE_WRITEONLY_TX: runExec(opt, shared, tWorker<USE_WRITEONLY_TX>); break;
+            case USE_MIX_TX: runExec(opt, shared, tWorker<USE_MIX_TX>); break;
+            default:
+                throw cybozu::Exception("bad shortMode") << opt.shortMode;
+            }
+        }
+    } else {
+        throw cybozu::Exception("bad workload.") << opt.workload;
+    }
+} catch (std::exception& e) {
+    ::fprintf(::stderr, "exeption: %s\n", e.what());
+} catch (...) {
+    ::fprintf(::stderr, "unknown error\n");
 }

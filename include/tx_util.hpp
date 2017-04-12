@@ -8,6 +8,7 @@
  */
 
 #include "constexpr_util.hpp"
+#include "cybozu/exception.hpp"
 
 
 /**
@@ -192,7 +193,7 @@ private:
  */
 
 template <size_t bits>
-struct PriId
+struct PriorityId
 {
     static_assert(bits <= 64, "bits must be <= 64.");
     static_assert(bits >= 3, "bits must be >= 3.");
@@ -209,20 +210,29 @@ struct PriId
 };
 
 /**
- * Do not change fixed bits.
+ * Do not change fixed bits except initialization.
  * 0 and MAX_VALUE will not be generated because they are special values.
  */
 template <size_t bits>
-class LocalPriIdGenerator
+class PriorityIdGenerator
 {
 private:
-    PriId<bits> priId_;
-    constexpr static uint64_t MAX_VALUE = GetMaxValue(bits);
+    PriorityId<bits> priId_;
 public:
-    void init(uint64_t basePriId) {
-        priId_.value = basePriId;
+    /**
+     * Different worker thread must specify different fixedId to work well.
+     */
+    void init(uint64_t fixedId) {
+        priId_.value = 0;
+        const uint64_t maxValue = GetMaxValue(bits - 2);
+        /* 0 and max value is avoided in order not to use if clause inside get() method. */
+        if (fixedId == 0 || fixedId >= maxValue) {
+            throw cybozu::Exception("PriorityIdGenerator: out-of-range fixedId")
+                << fixedId << maxValue;
+        }
+        priId_.fixed = fixedId;
 #if 0
-        ::printf("LocalPriIdGenerator: %" PRIu64 "\n"
+        ::printf("PriorityIdGenerator: %" PRIu64 "\n"
                  "pri: %" PRIu64 " alloc: %" PRIu64 " fixed: %" PRIu64 "\n"
                  , priId_.value, priId_.pri, priId_.alloc, priId_.fixed);
 #endif
@@ -230,36 +240,8 @@ public:
     uint64_t get(uint64_t pri) {
         priId_.pri = pri;
         priId_.alloc++;
-#if 0
-        if (priId_.value == 0) {
-            priId_.alloc++;
-        }
-#endif
         assert(priId_.value != 0);
-        assert(priId_.value != MAX_VALUE);
+        assert(priId_.value != GetMaxValue(bits));
         return priId_.value;
-    }
-};
-
-template <size_t bits>
-class GlobalPriIdGenerator
-{
-private:
-    uint64_t fixed_:(bits - 2);
-public:
-    GlobalPriIdGenerator() : fixed_(1) {}
-    /**
-     * This is not thread-safe.
-     * Please call this function outside of worker thread
-     * and pass the returned generator to the worker thread.
-     */
-    LocalPriIdGenerator<bits> get() {
-        if (fixed_ == GetMaxValue(bits - 2)) {
-            throw std::runtime_error("GlobalPriIdGenerator: bits too small.");
-        }
-        LocalPriIdGenerator<bits> gen;
-        gen.init(fixed_);
-        fixed_++;
-        return gen;
     }
 };
