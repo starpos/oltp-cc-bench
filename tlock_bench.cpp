@@ -1175,7 +1175,7 @@ struct CmdLineOptionPlus : CmdLineOption
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&modeStr, "lock", "mode", "[mode]: specify mode in trlock, trlock-occ, trlock-hybrid.");
         appendMust(&nrMuPerTh, "mu", "[num]: number of mutexes per thread.");
-        appendMust(&workload, "w", "[workload]: workload type in 'shortlong-i', 'shortlong-t', 'high-contention', 'high-conflicts'.");
+        appendMust(&workload, "w", "[workload]: workload type in 'shortlong', 'shortlong-t', 'high-contention', 'high-conflicts'.");
         appendOpt(&shortMode, 0, "sm", "[id]: short workload mode (0:r2w2, 1:long2, 2:ro, 3:wo, 4:mix)");
         appendOpt(&txIdGenType, 0, "txid-gen", "[id]: txid gen method (0:sclable, 1:bulk, 2:simple)");
         appendOpt(&longTxSize, 0, "long-tx-size", "[size]: long tx size. 0 means no long tx.");
@@ -1261,7 +1261,7 @@ int main(int argc, char *argv[]) try
     CmdLineOptionPlus opt("tlock_bench: benchmark with transferable/interceptible lock.");
     opt.parse(argc, argv);
 
-    if (opt.workload == "shortlong-i") {
+    if (opt.workload == "shortlong") {
         ILockShared shared;
         shared.workload = opt.workload;
         shared.nrMuPerTh = opt.nrMuPerTh;
