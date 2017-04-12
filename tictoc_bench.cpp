@@ -25,9 +25,9 @@ struct Shared
 
     std::string str() const {
         return cybozu::util::formatString(
-            "workload:%s longTxSize:%zu nrMutex:%zu nrMutexPerTh:%zu "
+            "mode:%s workload:%s longTxSize:%zu nrMutex:%zu nrMutexPerTh:%zu "
             "shortMode:%d"
-            , workload.c_str()
+            , "tictoc", workload.c_str()
             , longTxSize, muV.size(), nrMuPerTh, shortMode);
     }
 };

@@ -7,20 +7,6 @@
 #include "leis_lock.hpp"
 
 
-//#define USE_LONG_TX_2
-#undef USE_LONG_TX_2
-
-//#define USE_READONLY_TX
-#undef USE_READONLY_TX
-
-//#define USE_WRITEONLY_TX
-#undef USE_WRITEONLY_TX
-
-//#define USE_MIX_TX
-#undef USE_MIX_TX
-
-
-
 using LeisLockSet  = cybozu::lock::LeisLockSet;
 using Mutex = LeisLockSet::Mutex;
 using Mode = LeisLockSet::Mode;
@@ -28,22 +14,49 @@ using Mode = LeisLockSet::Mode;
 const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
 
 
-Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, std::vector<Mutex>& muV, size_t longTxSize, size_t nrOp, size_t nrWr)
+struct Shared
+{
+    std::string workload;
+    size_t nrMuPerTh;
+    std::vector<Mutex> muV;
+    int shortMode;
+    size_t longTxSize;
+    size_t nrOp;
+    size_t nrWr;
+
+    std::string str() const {
+        return cybozu::util::formatString(
+            "mode:%s workload:%s longTxSize:%zu nrMutex:%zu nrMutexPerTh:%zu "
+            "shortMode:%d"
+            , "leis", workload.c_str()
+            , longTxSize, muV.size(), nrMuPerTh, shortMode);
+    }
+};
+
+
+template <int shortMode>
+Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
+
+    std::vector<Mutex>& muV = shared.muV;
+    const size_t longTxSize = shared.longTxSize;
+    const size_t nrOp = shared.nrOp;
+    const size_t nrWr = shared.nrWr;
+
     Result res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     std::vector<size_t> muIdV(nrOp);
     LeisLockSet llSet;
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
-#ifdef USE_MIX_TX
+
+    // USE_MIX_TX
     std::vector<bool> isWriteV(nrOp);
     std::vector<size_t> tmpV2; // for fillModeVec.
-#endif
-#ifdef USE_LONG_TX_2
+
+    // USE_LONG_TX_2
     BoolRandom<decltype(rand)> boolRand(rand);
-#endif
 
     while (!start) _mm_pause();
     size_t count = 0; unused(count);
@@ -59,10 +72,10 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
         } else {
             muIdV.resize(nrOp);
             fillMuIdVecLoop(muIdV, rand, muV.size());
-#ifdef USE_MIX_TX
-            isWriteV.resize(nrOp);
-            fillModeVec(isWriteV, rand, nrWr, tmpV2);
-#endif
+            if (shortMode == USE_MIX_TX ) {
+                isWriteV.resize(nrOp);
+                fillModeVec(isWriteV, rand, nrWr, tmpV2);
+            }
         }
 
 #if 0
@@ -78,22 +91,24 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
             for (size_t i = 0; i < muIdV.size(); i++) {
                 //Mode mode = (rand() % 2 == 0 ? Mode::X : Mode::S);
                 Mode mode;
-#if defined(USE_LONG_TX_2)
-                mode = boolRand() ? Mode::X : Mode::S;
-#elif defined(USE_READONLY_TX)
-                mode = Mode::S;
-#elif defined(USE_WRITEONLY_TX)
-                mode = Mode::X;
-#elif defined(USE_MIX_TX)
-                mode = isWriteV[i] ? Mode::X : Mode::S;
-#else
-                // Last two will be write op.
-                if (i == sz - 1 || i == sz - 2) {
-                    mode = Mode::X;
-                } else {
+                if (shortMode == USE_LONG_TX_2) {
+                    mode = boolRand() ? Mode::X : Mode::S;
+                } else if (shortMode == USE_READONLY_TX) {
                     mode = Mode::S;
+                } else if (shortMode == USE_WRITEONLY_TX) {
+                    mode = Mode::X;
+                } else if (shortMode == USE_MIX_TX) {
+                    mode = isWriteV[i] ? Mode::X : Mode::S;
+                } else {
+                    assert(shortMode == USE_R2W2);
+                    // Last two will be write op.
+                    if (i == sz - 1 || i == sz - 2) {
+                        mode = Mode::X;
+                    } else {
+                        mode = Mode::S;
+                    }
                 }
-#endif
+
                 if (!llSet.lock(&muV[muIdV[i]], mode)) {
                     res.incAbort(isLongTx);
                     abort = true;
@@ -124,49 +139,9 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
     return res;
 }
 
-void runExec(size_t nrResPerTh, size_t nrTh, size_t runSec, bool verbose, size_t longTxSize, size_t nrOp, size_t nrWr)
+void runTest()
 {
-    std::vector<Mutex> muV(nrResPerTh * nrTh);
-    bool start = false;
-    bool quit = false;
-    bool shouldQuit = false;
-
-    cybozu::thread::ThreadRunnerSet thS;
-    std::vector<Result> resV(nrTh);
-    for (size_t i = 0; i < nrTh; i++) {
-        thS.add([&,i]() {
-                resV[i] = worker(i, start, quit, shouldQuit, muV, longTxSize, nrOp, nrWr);
-            });
-    }
-    thS.start();
-    start = true;
-    size_t sec = 0;
-    for (size_t i = 0; i < runSec; i++) {
-        if (verbose) ::printf("%zu\n", i);
-        sleepMs(1000);
-        sec++;
-        if (shouldQuit) break;
-    }
-    quit = true;
-    thS.join();
-    Result res;
-    for (size_t i = 0; i < nrTh; i++) {
-        if (verbose) {
-            ::printf("worker %zu  %s", i, resV[i].str().c_str());
-        }
-        res += resV[i];
-    }
-    ::printf("mode:%s longTxSize:%zu nrResPerTh:%zu concurrency:%zu nrOp:%zu nrWr:%zu sec:%zu  tps:%.03f %s\n"
-             , "leis-lock"
-             , longTxSize, nrResPerTh, nrTh, nrOp, nrWr, sec, res.nrCommit() / (double)sec
-             , res.str().c_str());
-    ::fflush(::stdout);
-}
-
-
-int main()
-{
-#if 1
+#if 0
     //for (size_t nrResPerTh : {4}) {
     for (size_t nrResPerTh : {4000}) {
     //for (size_t nrResPerTh : {4, 4000}) {
@@ -225,4 +200,80 @@ int main()
         }
     }
 #endif
+}
+
+struct CmdLineOptionPlus : CmdLineOption
+{
+    using base = CmdLineOption;
+
+    size_t nrMuPerTh;
+    std::string workload;
+    int shortMode;
+    size_t longTxSize;
+
+    CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
+        appendMust(&nrMuPerTh, "mu", "[num]: number of mutexes per thread.");
+        appendMust(&workload, "w", "[workload]: workload type in 'shortlong', 'high-contention', 'high-conflicts'.");
+        appendOpt(&shortMode, 0, "sm", "[id]: short workload mode (0:r2w2, 1:long2, 2:ro, 3:wo, 4:mix)");
+        appendOpt(&longTxSize, 0, "long-tx-size", "[size]: long tx size. 0 means no long tx.");
+    }
+    void parse(int argc, char *argv[]) {
+        base::parse(argc, argv);
+        if (nrMuPerTh == 0) {
+            throw cybozu::Exception("nrMuPerTh must not be 0.");
+        }
+        if (longTxSize > nrMuPerTh * nrTh) {
+            throw cybozu::Exception("longTxSize is too large: up to nrMuPerTh * nrTh.");
+        }
+    }
+};
+
+
+void dispatch1(CmdLineOptionPlus& opt, Shared& shared)
+{
+    switch (opt.shortMode) {
+    case USE_R2W2:
+        runExec(opt, shared, worker<USE_R2W2>);
+        break;
+    case USE_LONG_TX_2:
+        runExec(opt, shared, worker<USE_LONG_TX_2>);
+        break;
+    case USE_READONLY_TX:
+        runExec(opt, shared, worker<USE_READONLY_TX>);
+        break;
+    case USE_WRITEONLY_TX:
+        runExec(opt, shared, worker<USE_WRITEONLY_TX>);
+        break;
+    case USE_MIX_TX:
+        runExec(opt, shared, worker<USE_MIX_TX>);
+        break;
+    default:
+        throw cybozu::Exception("bad shortMode") << opt.shortMode;
+    }
+}
+
+int main(int argc, char *argv[]) try
+{
+    CmdLineOptionPlus opt("leis_lock_bench: benchmark with leis lock.");
+    opt.parse(argc, argv);
+
+    if (opt.workload == "shortlong") {
+        Shared shared;
+        shared.workload = opt.workload;
+        shared.nrMuPerTh = opt.nrMuPerTh;
+        shared.muV.resize(opt.nrMuPerTh * opt.nrTh);
+        shared.shortMode = opt.shortMode;
+        shared.longTxSize = opt.longTxSize;
+        shared.nrOp = 4;
+        shared.nrWr = 2;
+        for (size_t i = 0; i < opt.nrLoop; i++) {
+            dispatch1(opt, shared);
+        }
+    } else {
+        throw cybozu::Exception("bad workload.") << opt.workload;
+    }
+} catch (std::exception& e) {
+    ::fprintf(::stderr, "exeption: %s\n", e.what());
+} catch (...) {
+    ::fprintf(::stderr, "unknown error\n");
 }
