@@ -1,0 +1,17 @@
+*~
+*.o
+*.d
+GPATH
+GRTAGS
+GSYMS
+GTAGS
+
+cn_bench
+leis_lock_bench
+lock_bench
+occ_bench
+pqlock_bench
+tictoc_bench
+tlock_bench
+txid_gen_bench
+wait_die_bench
