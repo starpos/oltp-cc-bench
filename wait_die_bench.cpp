@@ -104,6 +104,7 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
         }
 
         for (size_t retry = 0;; retry++) {
+            if (quit) break; // to quit under starvation.
             assert(lockV.empty());
             bool abort = false;
             const size_t sz = muIdV.size();

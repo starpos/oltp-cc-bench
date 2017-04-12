@@ -362,6 +362,7 @@ Result tWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
         }
 
         for (size_t retry = 0;; retry++) {
+            if (quit) break; // to quit under starvation.
             assert(writeLocks.empty());
             assert(readLocks.empty());
             assert(writeSet.empty());
@@ -595,6 +596,7 @@ Result readWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQ
         const uint32_t txId = txIdGen.get();
 
         for (size_t retry = 0;; retry++) {
+            if (quit) break; // to quit under starvation.
             //bool abort = false;
             assert(writeLocks.empty());
             assert(readLocks.empty());
