@@ -418,6 +418,7 @@ private:
                     // Try to lock again.
                     return;
                 }
+                _mm_pause();
             }
         }
     }
@@ -429,6 +430,7 @@ private:
         for (;;) {
             lockD = mutex_->load();
             if (canLock(lockD)) return;
+            _mm_pause();
         }
     }
 #endif
@@ -647,17 +649,22 @@ public:
         {
             __atomic_store_n(&lockObj, 0, __ATOMIC_RELAXED);
         }
-        LockData64 load(int mode = __ATOMIC_SEQ_CST) const {
+        LockData64 atomicLoad(int mode = __ATOMIC_ACQUIRE) const {
             return __atomic_load_n(&lockObj, mode);
         }
-        bool compareAndSwap(LockData64& before, const LockData64& after, int mode0 = __ATOMIC_SEQ_CST, int mode1 = __ATOMIC_SEQ_CST) {
-            return __atomic_compare_exchange(&lockObj, (uint64_t *)&before, (uint64_t *)&after, false, mode0, mode1);
+        LockData64 nonAtomicLoad() const {
+            return lockObj;
+        }
+        bool compareAndSwap(LockData64& before, const LockData64& after,
+                            int mode0 = __ATOMIC_ACQ_REL, int mode1 = __ATOMIC_ACQ_REL) {
+            return __atomic_compare_exchange(
+                &lockObj, (uint64_t *)&before, (uint64_t *)&after, false, mode0, mode1);
         }
         // You must be carefully to use this method.
         void nonAtomicSet(const LockData64& after) {
             lockObj = after;
         }
-        void atomicSet(const LockData64& after, int mode = __ATOMIC_SEQ_CST) {
+        void atomicSet(const LockData64& after, int mode = __ATOMIC_RELEASE) {
             __atomic_store_n(&lockObj, after, mode);
         }
     };
@@ -705,7 +712,7 @@ public:
         intercepted_ = false;
         updated_ = false;
 
-        LockData64 ld0 = mutex_->load();
+        LockData64 ld0 = mutex_->atomicLoad();
         for (;;) {
             LockData64 ld1;
             if (isUnlockedOrShared(ld0)) {
@@ -733,7 +740,7 @@ public:
                 mutex_ = nullptr;
                 return;
             }
-            LockData64 ld0 = mutex_->load();
+            LockData64 ld0 = mutex_->atomicLoad();
             if (interceptedDetail(ld0)) {
                 mutex_ = nullptr;
                 return;
@@ -821,12 +828,12 @@ public:
     bool intercepted() {
         if (intercepted_) return true;
         assert(mutex_);
-        LockData64 ld = mutex_->load();
+        LockData64 ld = mutex_->atomicLoad();
         return interceptedDetail(ld);
     }
     bool unchanged() {
         assert(mutex_);
-        LockData64 ld = mutex_->load();
+        LockData64 ld = mutex_->atomicLoad();
         // If protected by myself, uVersion may have been incremented.
         return !ld.isProtected() && uVersion_ == ld.uVersion;
     }
@@ -835,7 +842,7 @@ public:
         if (protected_) return true;
         for (;;) {
             assert(mutex_);
-            LockData64 ld0 = mutex_->load();
+            LockData64 ld0 = mutex_->atomicLoad();
             if (interceptedDetail(ld0)) return false;
             LockData64 ld1 = ld0;
             assert(ld1.writeReserve == 1);
@@ -858,7 +865,7 @@ public:
     }
     /* debug */
     std::string str() const {
-        return mutex_->load().str();
+        return mutex_->atomicLoad().str();
     }
     uintptr_t getMutexId() const {
         return uintptr_t(mutex_);
@@ -903,21 +910,47 @@ private:
         for (;;) {
             PQLock lk(mutex_->pqMutexP.get(), priId_);
             for (;;) {
-                ld = mutex_->load();
                 if (priId_ > lk.getTopPriorityInWaitQueue()) {
                     break; // Give the PQLock to the prior thread.
                 }
+#if 0 // like TTAS lock.
+                __atomic_thread_fence(__ATOMIC_ACQUIRE);
+                ld = mutex_->nonAtomicLoad();
+                if (canLock(ld)) {
+                    ld = mutex_->atomicLoad();
+                    if (canLock(ld)) {
+                        // Retry lock reservation again.
+                        return;
+                    }
+                }
+#else
+                ld = mutex_->atomicLoad();
                 if (canLock(ld)) {
                     // Retry lock reservation again.
                     return;
                 }
+#endif
+                _mm_pause();
             }
         }
 #else
+#if 0 // like TTAS lock.
         for (;;) {
-            ld = mutex_->load();
-            if (canLock(ld)) return;
+            __atomic_thread_fence(__ATOMIC_ACQUIRE);
+            ld = mutex_->nonAtomicLoad();
+            if (canLock(ld)) {
+                ld = mutex_->atomicLoad();
+                if (canLock(ld)) return;
+            }
+            _mm_pause();
         }
+#else
+        for (;;) {
+            ld = mutex_->atomicLoad();
+            if (canLock(ld)) return;
+            _mm_pause();
+        }
+#endif
 #endif
     }
     bool interceptedDetail(LockData64& ld0) {
@@ -991,19 +1024,19 @@ public:
     void prepare(Mutex &mutex) {
         mutex_ = &mutex;
         for (;;) {
-            ld_ = mutex_->load();
+            ld_ = mutex_->atomicLoad();
             if (!ld_.isProtected()) break;
             _mm_pause();
         }
     }
     bool verifyAll() const {
         assert(mutex_);
-        const LockData64 ld = mutex_->load();
+        const LockData64 ld = mutex_->atomicLoad();
         return !ld.isProtected() && ld_.uVersion == ld.uVersion;
     }
     bool verifyVersion() const {
         assert(mutex_);
-        const LockData64 ld = mutex_->load();
+        const LockData64 ld = mutex_->atomicLoad();
         return ld_.uVersion == ld.uVersion;
     }
     void readFence() const {
