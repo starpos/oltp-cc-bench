@@ -7,6 +7,17 @@
 namespace cybozu {
 namespace lock {
 
+
+class PQNoneLock
+{
+public:
+    struct Mutex {};
+    PQNoneLock() {}
+    PQNoneLock(Mutex *, uint32_t) {}
+    ~PQNoneLock() noexcept {}
+    uint32_t getTopPriorityInWaitQueue() const { return UINT32_MAX; }
+};
+
 /**
  * This is priority-queuing lock as an extended MCS lock.
  * This is a naive implementation.
@@ -292,11 +303,16 @@ public:
         //uint8_t dummyId;
         std::deque<std::unique_ptr<Node> > dummy;
         PriQueue priQ;
+#ifndef NDEBUG
         size_t dummyAlloc; // debug
         size_t dummyFree; // debug
+#endif
 
         Mutex() : tail(nullptr), nr(0), dummy(), priQ()
-                , dummyAlloc(0), dummyFree(0) {}
+#ifndef NDEBUG
+                , dummyAlloc(0), dummyFree(0)
+#endif
+                {}
     };
 private:
     Mutex *mutex_; /* shared by all threads. */
@@ -466,7 +482,9 @@ private:
         if (d.size() < nr) {
             if (pool.empty()) {
                 d.push_back(std::make_unique<Node>());
+#ifndef NDEBUG
                 atomicFetchAdd(&mutex_->dummyAlloc, 1);
+#endif
             } else {
                 d.push_back(std::move(pool.front()));
                 pool.pop_front();
@@ -488,7 +506,9 @@ private:
             d.pop_front();
         }
         if (pool.size() > MAX_NODE_POOL_SIZE) {
+#ifndef NDEBUG
             atomicFetchAdd(&mutex_->dummyFree, pool.size() - MAX_NODE_POOL_SIZE);
+#endif
             pool.resize(MAX_NODE_POOL_SIZE);
         }
     }

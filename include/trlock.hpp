@@ -7,8 +7,8 @@
 #include "lock_data.hpp"
 #include "constexpr_util.hpp"
 
-//#define USE_TRLOCK_PQMCS
-#undef USE_TRLOCK_PQMCS
+#define USE_TRLOCK_PQMCS
+//#undef USE_TRLOCK_PQMCS
 
 
 namespace cybozu {
@@ -158,10 +158,14 @@ public:
         AtomicDataType obj;
         static_assert(sizeof(LockData) <= sizeof(AtomicDataType), "LockData must not proceed AtomicDataType.");
 #ifdef USE_TRLOCK_PQMCS
-        typename PQLock::Mutex pqMutex;
+        std::unique_ptr<typename PQLock::Mutex> pqMutexP;
 #endif
 
-        Mutex() : obj() {
+        Mutex() : obj()
+#ifdef USE_TRLOCK_PQMCS
+                , pqMutexP(new typename PQLock::Mutex())
+#endif
+        {
             LockData lockD;
             __atomic_store_n(&obj, lockD, __ATOMIC_RELAXED);
         }
@@ -403,7 +407,7 @@ private:
      */
     void waitFor(LockData& lockD) {
         for (;;) {
-            PQLock lk(&mutex_->pqMutex, txId_);
+            PQLock lk(mutex_->pqMutexP.get(), txId_);
             for (;;) {
                 lockD = mutex_->load();
                 if (txId_ > lk.getTopPriorityInWaitQueue()) {
@@ -634,9 +638,13 @@ public:
 #endif
         uint64_t lockObj;
 #ifdef USE_TRLOCK_PQMCS
-        typename PQLock::Mutex pqMutex;
+        std::unique_ptr<typename PQLock::Mutex> pqMutexP;
 #endif
-        Mutex() : lockObj() {
+        Mutex() : lockObj()
+#ifdef USE_TRLOCK_PQMCS
+                , pqMutexP(new typename PQLock::Mutex())
+#endif
+        {
             __atomic_store_n(&lockObj, 0, __ATOMIC_RELAXED);
         }
         LockData64 load(int mode = __ATOMIC_SEQ_CST) const {
@@ -893,7 +901,7 @@ private:
     void waitFor(LockData64& ld) {
 #ifdef USE_TRLOCK_PQMCS
         for (;;) {
-            PQLock lk(&mutex_->pqMutex, priId_);
+            PQLock lk(mutex_->pqMutexP.get(), priId_);
             for (;;) {
                 ld = mutex_->load();
                 if (priId_ > lk.getTopPriorityInWaitQueue()) {
