@@ -7,7 +7,7 @@ GSYMS
 GTAGS
 
 cn_bench
-leis_lock_bench
+leis_bench
 lock_bench
 occ_bench
 pqlock_bench
