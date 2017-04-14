@@ -360,12 +360,12 @@ class GetModeFunc
 {
     Mode (GetModeFunc::*getMode_)(size_t);
     BoolRandom<Random>& boolRand_;
-    std::vector<bool> isWriteV_;
+    const std::vector<bool>& isWriteV_;
     size_t sz_;
     size_t nrWr_;
 
 public:
-    GetModeFunc(BoolRandom<Random>& boolRand, std::vector<bool>& isWriteV,
+    GetModeFunc(BoolRandom<Random>& boolRand, const std::vector<bool>& isWriteV,
                 bool isLongTx, int shortTxMode, int longTxMode, size_t sz, size_t nrWr)
         : getMode_(), boolRand_(boolRand), isWriteV_(isWriteV), sz_(sz), nrWr_(nrWr) {
         if (isLongTx) {
