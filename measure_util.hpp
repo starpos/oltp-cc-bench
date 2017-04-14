@@ -354,61 +354,89 @@ enum TxIdGenType
 };
 
 
+
 template <typename Random, typename Mode>
 class GetModeFunc
 {
-    std::function<Mode(size_t)> getMode_;
+    Mode (GetModeFunc::*getMode_)(size_t);
     BoolRandom<Random>& boolRand_;
     std::vector<bool> isWriteV_;
     size_t sz_;
     size_t nrWr_;
 
 public:
-    GetModeFunc(BoolRandom<Random>& boolRand, std::vector<bool>& isWriteV, bool isLongTx, int shortTxMode, int longTxMode, size_t sz, size_t nrWr)
+    GetModeFunc(BoolRandom<Random>& boolRand, std::vector<bool>& isWriteV,
+                bool isLongTx, int shortTxMode, int longTxMode, size_t sz, size_t nrWr)
         : getMode_(), boolRand_(boolRand), isWriteV_(isWriteV), sz_(sz), nrWr_(nrWr) {
         if (isLongTx) {
-            if (longTxMode == USE_HALF_AND_HALF_TX) {
-                getMode_ = [this](size_t) {
-                    return boolRand_() ? Mode::X : Mode::S;
-                };
-            } else if (longTxMode == USE_READONLY_TX) {
-                getMode_ = [this](size_t) { return Mode::S; };
-            } else if (longTxMode == USE_FIRST_WRITE_TX) {
-                getMode_ = [this](size_t i) {
-                    return i < nrWr_ ? Mode::X : Mode::S;
-                };
-            } else {
-                assert(longTxMode == USE_LAST_WRITE_TX);
-                getMode_ = [this](size_t i) {
-                    return i >= sz_ - nrWr_ ? Mode::X : Mode::S;
-                };
+            switch (longTxMode) {
+            case USE_HALF_AND_HALF_TX:
+                getMode_ = &GetModeFunc::getLong<USE_HALF_AND_HALF_TX>;
+                break;
+            case USE_READONLY_TX:
+                getMode_ = &GetModeFunc::getLong<USE_READONLY_TX>;
+                break;
+            case USE_FIRST_WRITE_TX:
+                getMode_ = &GetModeFunc::getLong<USE_FIRST_WRITE_TX>;
+                break;
+            default:
+                getMode_ = &GetModeFunc::getLong<USE_LAST_WRITE_TX>;
             }
         } else {
-            if (shortTxMode == USE_MIX_TX) {
-                getMode_ = [this](size_t i) {
-                    return isWriteV_[i] ? Mode::X : Mode::S;
-                };
-            } else if (shortTxMode == USE_HALF_AND_HALF_TX) {
-                getMode_ = [this](size_t) {
-                    return boolRand_() ? Mode::X : Mode::S;
-                };
-            } else if (shortTxMode == USE_READONLY_TX) {
-                getMode_ = [this](size_t) { return Mode::S; };
-            } else if (shortTxMode == USE_WRITEONLY_TX) {
-                getMode_ = [this](size_t) { return Mode::X; };
-            } else if (shortTxMode == USE_FIRST_WRITE_TX) {
-                getMode_ = [this](size_t i) {
-                    return i < nrWr_ ? Mode::X : Mode::S;
-                };
-            } else {
-                assert(shortTxMode == USE_LAST_WRITE_TX);
-                getMode_ = [this](size_t i) {
-                    return i >= sz_ - nrWr_ ? Mode::X : Mode::S;
-                };
+            switch (shortTxMode) {
+            case USE_MIX_TX:
+                getMode_ = &GetModeFunc::getShort<USE_MIX_TX>;
+                break;
+            case USE_HALF_AND_HALF_TX:
+                getMode_ = &GetModeFunc::getShort<USE_HALF_AND_HALF_TX>;
+                break;
+            case USE_READONLY_TX:
+                getMode_ = &GetModeFunc::getShort<USE_READONLY_TX>;
+                break;
+            case USE_WRITEONLY_TX:
+                getMode_ = &GetModeFunc::getShort<USE_WRITEONLY_TX>;
+                break;
+            case USE_FIRST_WRITE_TX:
+                getMode_ = &GetModeFunc::getShort<USE_FIRST_WRITE_TX>;
+                break;
+            default:
+                getMode_ = &GetModeFunc::getShort<USE_LAST_WRITE_TX>;
             }
         }
     }
     Mode operator()(size_t i) {
-        return getMode_(i);
+        return (this->*getMode_)(i);
+    }
+    template <int shortTxMode>
+    Mode getShort(size_t i) {
+        switch (shortTxMode) {
+        case USE_MIX_TX:
+            return isWriteV_[i] ? Mode::X : Mode::S;
+        case USE_HALF_AND_HALF_TX:
+            return boolRand_() ? Mode::X : Mode::S;
+        case USE_READONLY_TX:
+            return Mode::S;
+        case USE_WRITEONLY_TX:
+            return Mode::X;
+        case USE_FIRST_WRITE_TX:
+            return i < nrWr_ ? Mode::X : Mode::S;
+        default:
+            assert(shortTxMode == USE_LAST_WRITE_TX);
+            return i >= sz_ - nrWr_ ? Mode::X : Mode::S;
+        }
+    }
+    template <int longTxMode>
+    Mode getLong(size_t i) {
+        switch (longTxMode) {
+        case USE_HALF_AND_HALF_TX:
+            return boolRand_() ? Mode::X : Mode::S;
+        case USE_READONLY_TX:
+            return Mode::S;
+        case USE_FIRST_WRITE_TX:
+            return i < nrWr_ ? Mode::X : Mode::S;
+        default:
+            assert(longTxMode == USE_LAST_WRITE_TX);
+            return i >= sz_ - nrWr_ ? Mode::X : Mode::S;
+        }
     }
 };
