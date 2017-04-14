@@ -5,6 +5,6 @@ AUTHORS: Shigeo Mitsunari
 URL: https://github.com/herumi/cybozulib/
 
 FILES: others
-LICENCE_TYPE: GPL-2.0 or GPL-3.0 or BSD-3-Clause
+LICENCE_TYPE: BSD-3-Clause
 COPYRIGHT: (C) 2013 Cybozu Labs, Inc.
 AUTHORS: Takashi Hoshino
