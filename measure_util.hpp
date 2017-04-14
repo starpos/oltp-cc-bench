@@ -329,20 +329,21 @@ void runExec(const CmdLineOption& opt, SharedData& shared, Worker&& worker)
         }
         res += resV[i];
     }
-    ::printf("concurrency:%zu sec:%zu tps:%.03f %s %s\n"
-             , nrTh, opt.runSec, res.nrCommit() / (double)opt.runSec
-             , res.str().c_str()
-             , shared.str().c_str());
+    ::printf("%s tps:%.03f %s\n"
+             , opt.str().c_str()
+             , res.nrCommit() / (double)opt.runSec
+             , res.str().c_str());
     ::fflush(::stdout);
 }
 
-enum ShortMode
+enum TxMode
 {
-    USE_R2W2 = 0,
-    USE_LONG_TX_2 = 1,
+    USE_LAST_WRITE_TX = 0,
+    USE_FIRST_WRITE_TX = 1,
     USE_READONLY_TX = 2,
     USE_WRITEONLY_TX = 3,
-    USE_MIX_TX = 4,
+    USE_HALF_AND_HALF_TX = 4,
+    USE_MIX_TX = 5,
 };
 
 enum TxIdGenType
@@ -350,4 +351,64 @@ enum TxIdGenType
     SCALABLE_TXID_GEN = 0,
     BULK_TXID_GEN = 1,
     SIMPLE_TXID_GEN = 2,
+};
+
+
+template <typename Random, typename Mode>
+class GetModeFunc
+{
+    std::function<Mode(size_t)> getMode_;
+    BoolRandom<Random>& boolRand_;
+    std::vector<bool> isWriteV_;
+    size_t sz_;
+    size_t nrWr_;
+
+public:
+    GetModeFunc(BoolRandom<Random>& boolRand, std::vector<bool>& isWriteV, bool isLongTx, int shortTxMode, int longTxMode, size_t sz, size_t nrWr)
+        : getMode_(), boolRand_(boolRand), isWriteV_(isWriteV), sz_(sz), nrWr_(nrWr) {
+        if (isLongTx) {
+            if (longTxMode == USE_HALF_AND_HALF_TX) {
+                getMode_ = [this](size_t) {
+                    return boolRand_() ? Mode::X : Mode::S;
+                };
+            } else if (longTxMode == USE_READONLY_TX) {
+                getMode_ = [this](size_t) { return Mode::S; };
+            } else if (longTxMode == USE_FIRST_WRITE_TX) {
+                getMode_ = [this](size_t i) {
+                    return i < nrWr_ ? Mode::X : Mode::S;
+                };
+            } else {
+                assert(longTxMode == USE_LAST_WRITE_TX);
+                getMode_ = [this](size_t i) {
+                    return i >= sz_ - nrWr_ ? Mode::X : Mode::S;
+                };
+            }
+        } else {
+            if (shortTxMode == USE_MIX_TX) {
+                getMode_ = [this](size_t i) {
+                    return isWriteV_[i] ? Mode::X : Mode::S;
+                };
+            } else if (shortTxMode == USE_HALF_AND_HALF_TX) {
+                getMode_ = [this](size_t) {
+                    return boolRand_() ? Mode::X : Mode::S;
+                };
+            } else if (shortTxMode == USE_READONLY_TX) {
+                getMode_ = [this](size_t) { return Mode::S; };
+            } else if (shortTxMode == USE_WRITEONLY_TX) {
+                getMode_ = [this](size_t) { return Mode::X; };
+            } else if (shortTxMode == USE_FIRST_WRITE_TX) {
+                getMode_ = [this](size_t i) {
+                    return i < nrWr_ ? Mode::X : Mode::S;
+                };
+            } else {
+                assert(shortTxMode == USE_LAST_WRITE_TX);
+                getMode_ = [this](size_t i) {
+                    return i >= sz_ - nrWr_ ? Mode::X : Mode::S;
+                };
+            }
+        }
+    }
+    Mode operator()(size_t i) {
+        return getMode_(i);
+    }
 };

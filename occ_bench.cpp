@@ -16,25 +16,18 @@ const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
 
 struct Shared
 {
-    std::string workload;
-    size_t nrMuPerTh;
     std::vector<Mutex> muV;
-    int shortMode;
     size_t longTxSize;
     size_t nrOp;
     size_t nrWr;
-
-    std::string str() const {
-        return cybozu::util::formatString(
-            "mode:%s workload:%s longTxSize:%zu nrMutex:%zu nrMutexPerTh:%zu "
-            "shortMode:%d"
-            , "silo-occ", workload.c_str()
-            , longTxSize, muV.size(), nrMuPerTh, shortMode);
-    }
+    int shortTxMode;
+    int longTxMode;
 };
 
 
-template <int shortMode>
+enum class Mode : bool { S = false, X = true, };
+
+
 Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
@@ -44,6 +37,8 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
     const size_t longTxSize = shared.longTxSize;
     const size_t nrOp = shared.nrOp;
     const size_t nrWr = shared.nrWr;
+    const int shortTxMode = shared.shortTxMode;
+    const int longTxMode = shared.longTxMode;
 
     Result res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
@@ -62,6 +57,20 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
     // USE_LONG_TX_2
     BoolRandom<decltype(rand)> boolRand(rand);
 
+    const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
+    if (isLongTx) {
+        muIdV.resize(longTxSize);
+    } else {
+        muIdV.resize(nrOp);
+        if (shortTxMode == USE_MIX_TX) {
+            isWriteV.resize(nrOp);
+        }
+    }
+    GetModeFunc<decltype(rand), Mode>
+        getMode(boolRand, isWriteV, isLongTx,
+                shortTxMode, longTxMode, muIdV.size(), nrWr);
+
+
     while (!start) _mm_pause();
     while (!quit) {
         //const bool isLongTx = rand() % 1000 == 0; // 0.1% long transaction.
@@ -76,7 +85,7 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
         } else {
             muIdV.resize(nrOp);
             fillMuIdVecLoop(muIdV, rand, muV.size());
-            if (shortMode == USE_MIX_TX) {
+            if (shortTxMode == USE_MIX_TX) {
                 isWriteV.resize(nrOp);
                 fillModeVec(isWriteV, rand, nrWr, tmpV2);
             }
@@ -90,21 +99,8 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
             assert(readSet.empty());
             assert(lockV.empty());
 
-            const size_t sz = muIdV.size();
-            unused(sz);
             for (size_t i = 0; i < muIdV.size(); i++) {
-                bool isWrite;
-                if (shortMode == USE_LONG_TX_2) {
-                    isWrite = boolRand();
-                } else if (shortMode == USE_READONLY_TX) {
-                    isWrite = false;
-                } else if (shortMode == USE_WRITEONLY_TX) {
-                    isWrite = true;
-                } else if (shortMode == USE_MIX_TX) {
-                    isWrite = isWriteV[i];
-                } else {
-                    isWrite = (i == sz - 1 || i == sz - 2);
-                }
+                const bool isWrite = bool(getMode(i));
 
                 // read
                 for (;;) {
@@ -232,68 +228,29 @@ struct CmdLineOptionPlus : CmdLineOption
 {
     using base = CmdLineOption;
 
-    size_t nrMuPerTh;
-    std::string workload;
-    int shortMode;
-    size_t longTxSize;
-
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
-        appendMust(&nrMuPerTh, "mu", "[num]: number of mutexes per thread.");
-        appendMust(&workload, "w", "[workload]: workload type in 'shortlong', 'high-contention', 'high-conflicts'.");
-        appendOpt(&shortMode, 0, "sm", "[id]: short workload mode (0:r2w2, 1:long2, 2:ro, 3:wo, 4:mix)");
-        appendOpt(&longTxSize, 0, "long-tx-size", "[size]: long tx size. 0 means no long tx.");
     }
-    void parse(int argc, char *argv[]) {
-        base::parse(argc, argv);
-        if (nrMuPerTh == 0) {
-            throw cybozu::Exception("nrMuPerTh must not be 0.");
-        }
-        if (longTxSize > nrMuPerTh * nrTh) {
-            throw cybozu::Exception("longTxSize is too large: up to nrMuPerTh * nrTh.");
-        }
+    std::string str() const {
+        return cybozu::util::formatString("mode:silo-occ ") + base::str();
     }
 };
 
-
-void dispatch1(CmdLineOptionPlus& opt, Shared& shared)
-{
-    switch (opt.shortMode) {
-    case USE_R2W2:
-        runExec(opt, shared, worker<USE_R2W2>);
-        break;
-    case USE_LONG_TX_2:
-        runExec(opt, shared, worker<USE_LONG_TX_2>);
-        break;
-    case USE_READONLY_TX:
-        runExec(opt, shared, worker<USE_READONLY_TX>);
-        break;
-    case USE_WRITEONLY_TX:
-        runExec(opt, shared, worker<USE_WRITEONLY_TX>);
-        break;
-    case USE_MIX_TX:
-        runExec(opt, shared, worker<USE_MIX_TX>);
-        break;
-    default:
-        throw cybozu::Exception("bad shortMode") << opt.shortMode;
-    }
-}
 
 int main(int argc, char *argv[]) try
 {
     CmdLineOptionPlus opt("occ_bench: benchmark with silo-occ.");
     opt.parse(argc, argv);
 
-    if (opt.workload == "shortlong") {
+    if (opt.workload == "custom") {
         Shared shared;
-        shared.workload = opt.workload;
-        shared.nrMuPerTh = opt.nrMuPerTh;
-        shared.muV.resize(opt.nrMuPerTh * opt.nrTh);
-        shared.shortMode = opt.shortMode;
+        shared.muV.resize(opt.getNrMu());
         shared.longTxSize = opt.longTxSize;
-        shared.nrOp = 4;
-        shared.nrWr = 2;
+        shared.nrOp = opt.nrOp;
+        shared.nrWr = opt.nrWr;
+        shared.shortTxMode = opt.shortTxMode;
+        shared.longTxMode = opt.longTxMode;
         for (size_t i = 0; i < opt.nrLoop; i++) {
-            dispatch1(opt, shared);
+            runExec(opt, shared, worker);
         }
     } else {
         throw cybozu::Exception("bad workload.") << opt.workload;
