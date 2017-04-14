@@ -656,7 +656,7 @@ public:
             return lockObj;
         }
         bool compareAndSwap(LockData64& before, const LockData64& after,
-                            int mode0 = __ATOMIC_ACQ_REL, int mode1 = __ATOMIC_ACQ_REL) {
+                            int mode0 = __ATOMIC_ACQ_REL, int mode1 = __ATOMIC_RELAXED) {
             return __atomic_compare_exchange(
                 &lockObj, (uint64_t *)&before, (uint64_t *)&after, false, mode0, mode1);
         }
