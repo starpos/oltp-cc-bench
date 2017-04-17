@@ -17,3 +17,4 @@ txid_gen_bench
 wait_die_bench
 atomic_inc
 nowait_bench
+cas_bench

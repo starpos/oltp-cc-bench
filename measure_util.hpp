@@ -245,6 +245,7 @@ struct Result
     }
     size_t nrCommit() const { return value[0] + value[1]; }
     void incCommit(bool isLongTx) { value[isLongTx ? 1 : 0]++; }
+    void addCommit(bool isLongTx, size_t v) { value[isLongTx ? 1 : 0] += v; }
     void incAbort(bool isLongTx) { value[isLongTx ? 3 : 2]++; }
     void incIntercepted(bool isLongTx) { value[isLongTx ? 5 : 4]++; }
     void addRetryCount(bool isLongTx, size_t nrRetry) {
