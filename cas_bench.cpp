@@ -24,6 +24,7 @@ struct Line
 struct Shared
 {
     std::vector<Line> vec;
+    bool doParallel;
 };
 
 
@@ -36,7 +37,13 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
     size_t c = 0;
     Result res;
     uint64_t v1, v2;
-    uint64_t *obj = &shared.vec[idx].obj;
+    uint64_t *obj;
+
+    if (shared.doParallel) {
+        obj = &shared.vec[idx].obj;
+    } else {
+        obj = &shared.vec[0].obj;
+    }
 
     v1 = __atomic_load_n(obj, __ATOMIC_RELAXED);
     while (!quit) {
@@ -55,7 +62,13 @@ struct CmdLineOptionPlus : CmdLineOption
 {
     using base = CmdLineOption;
 
+    int parallel;
+
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
+        appendOpt(&parallel, 0, "parallel", "[0 or 1]: parallel mode (default:0)");
+    }
+    std::string str() const {
+        return base::str() + cybozu::util::formatString(" parallel:%d", parallel);
     }
 };
 
@@ -66,7 +79,12 @@ int main(int argc, char *argv[]) try
     opt.parse(argc, argv);
 
     Shared shared;
-    shared.vec.resize(opt.nrTh);
+    shared.doParallel = opt.parallel != 0;
+    if (shared.doParallel) {
+        shared.vec.resize(opt.nrTh);
+    } else {
+        shared.vec.resize(1);
+    }
     runExec(opt, shared, worker);
 
 } catch (std::exception& e) {
