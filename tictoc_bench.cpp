@@ -142,7 +142,6 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 
     Result res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
-    std::vector<size_t> muIdV(nrOp);
     cybozu::tictoc::LocalSet localSet;
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
 
@@ -154,41 +153,28 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     BoolRandom<decltype(rand)> boolRand(rand);
 
     const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
-    if (isLongTx) {
-        muIdV.resize(longTxSize);
-    } else {
-        muIdV.resize(nrOp);
-        if (shortTxMode == USE_MIX_TX) {
-            isWriteV.resize(nrOp);
-        }
+    const size_t realNrOp = isLongTx ? longTxSize : nrOp;
+    if (!isLongTx && shortTxMode == USE_MIX_TX) {
+        isWriteV.resize(nrOp);
     }
     GetModeFunc<decltype(rand), Mode>
         getMode(boolRand, isWriteV, isLongTx,
-                shortTxMode, longTxMode, muIdV.size(), nrWr);
+                shortTxMode, longTxMode, realNrOp, nrWr);
 
 
     while (!start) _mm_pause();
     size_t count = 0; unused(count);
     while (!quit) {
-        if (isLongTx) {
-            if (longTxSize > muV.size() * 5 / 1000) {
-                fillMuIdVecArray(muIdV, rand, muV.size(), tmpV);
-            } else {
-                fillMuIdVecLoop(muIdV, rand, muV.size());
-            }
-        } else {
-            fillMuIdVecLoop(muIdV, rand, muV.size());
-            if (shortTxMode == USE_MIX_TX) {
-                fillModeVec(isWriteV, rand, nrWr, tmpV2);
-            }
+        if (!isLongTx && shortTxMode == USE_MIX_TX) {
+            fillModeVec(isWriteV, rand, nrWr, tmpV2);
         }
 
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
             // Try to run transaction.
-            for (size_t i = 0; i < muIdV.size(); i++) {
+            for (size_t i = 0; i < realNrOp; i++) {
                 const bool isWrite = bool(getMode(i));
-                Mutex& mutex = muV[muIdV[i]];
+                Mutex& mutex = muV[rand() % muV.size()];
                 if (!isWrite) {
                     localSet.read(mutex);
                 } else {

@@ -1077,9 +1077,6 @@ Result iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     Result res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
 
-
-    std::vector<size_t> muIdV(nrOp);
-
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
 
     // for USE_MIX_TX
@@ -1091,36 +1088,22 @@ Result iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 
 
     const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
-    if (isLongTx) {
-        muIdV.resize(longTxSize);
-    } else {
-        muIdV.resize(nrOp);
+    const size_t realNrOp = isLongTx ? longTxSize : nrOp;
+    if (!isLongTx && shortTxMode == USE_MIX_TX) {
+        isWriteV.resize(nrOp);
     }
     GetModeFunc<decltype(rand), IMode>
         getMode(boolRand, isWriteV, isLongTx,
-                shortTxMode, longTxMode, muIdV.size(), nrWr);
+                shortTxMode, longTxMode, realNrOp, nrWr);
 
     cybozu::lock::ILockSet<PQLock> lockSet;
 
     while (!start) _mm_pause();
     size_t count = 0; unused(count);
     while (!quit) {
-        if (isLongTx) {
-            if (longTxSize > muV.size() * 5 / 1000) {
-                fillMuIdVecArray(muIdV, rand, muV.size(), tmpV);
-            } else {
-                fillMuIdVecLoop(muIdV, rand, muV.size());
-            }
-        } else {
-            fillMuIdVecLoop(muIdV, rand, muV.size());
-            if (shortTxMode == USE_MIX_TX) {
-                isWriteV.resize(nrOp);
-                fillModeVec(isWriteV, rand, nrWr, tmpV2);
-            }
+        if (!isLongTx && shortTxMode == USE_MIX_TX) {
+            fillModeVec(isWriteV, rand, nrWr, tmpV2);
         }
-#if 0 /* For test. */
-        std::sort(muIdV.begin(), muIdV.end());
-#endif
 
         uint64_t priId;
         if (txIdGenType == SCALABLE_TXID_GEN) {
@@ -1140,9 +1123,9 @@ Result iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
 
-            for (size_t i = 0; i < muIdV.size(); i++) {
+            for (size_t i = 0; i < realNrOp; i++) {
                 IMode mode = getMode(i);
-                IMutex &mutex = muV[muIdV[i]];
+                IMutex &mutex = muV[rand() % muV.size()];
 
 #if 0
                 ::printf("%p mutex:%p mode:%hhu  %s\n", &lockSet, &mutex, mode, mutex.atomicLoad().str().c_str()); // QQQQQ
