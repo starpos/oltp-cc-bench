@@ -22,6 +22,7 @@ LDFLAGS = -Wl,-R,'$$ORIGIN' -L./
 #LDLIBS = -ltcmalloc_minimal
 #LDLIBS = -ltcmalloc
 #LDLIBS = libtcmalloc.a
+#LDLIBS = -ljemalloc
 
 ifeq ($(STATIC),1)
 LDFLAGS += -static -static-libgcc -static-libstdc++

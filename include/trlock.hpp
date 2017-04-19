@@ -6,6 +6,7 @@
 #include "lock.hpp"
 #include "lock_data.hpp"
 #include "constexpr_util.hpp"
+#include "allocator.hpp"
 
 #define USE_TRLOCK_PQMCS
 //#undef USE_TRLOCK_PQMCS
@@ -684,10 +685,11 @@ private:
     bool protected_;
     bool intercepted_;
     bool updated_;
+    bool isOptimisticRead_;
 public:
     InterceptibleLock64T()
         : mutex_(nullptr), uVersion_(), iVersion_(), priId_(), mode_(Mode::INVALID)
-        , protected_(false), intercepted_(false), updated_(false) {
+        , protected_(false), intercepted_(false), updated_(false), isOptimisticRead_(false) {
     }
     InterceptibleLock64T(Mutex& mutex, Mode mode, uint32_t priId)
         : InterceptibleLock64T() {
@@ -700,7 +702,36 @@ public:
     InterceptibleLock64T(InterceptibleLock64T&& rhs) : InterceptibleLock64T() { swap(rhs); }
     InterceptibleLock64T& operator=(const InterceptibleLock64T&) = delete;
     InterceptibleLock64T& operator=(InterceptibleLock64T&& rhs) { swap(rhs); return *this; }
+    bool operator<(const InterceptibleLock64T& rhs) const {
+        return getMutexId() < rhs.getMutexId();
+    }
 
+    /* Optimistic read. */
+    void prepareOptimisticRead(Mutex &mutex) {
+        mutex_ = &mutex;
+        mode_ = Mode::S;
+        isOptimisticRead_ = true;
+        for (;;) {
+            const LockData64 ld = mutex_->atomicLoad();
+            uVersion_ = ld.uVersion;
+            if (!ld.isProtected()) break;
+            _mm_pause();
+        }
+    }
+    bool verifyAll() const {
+        assert(mutex_);
+        assert(isOptimisticRead_);
+        const LockData64 ld = mutex_->atomicLoad();
+        return !ld.isProtected() && ld.uVersion == uVersion_;
+    }
+    bool verifyVersion() const {
+        assert(mutex_);
+        assert(isOptimisticRead_);
+        const LockData64 ld = mutex_->atomicLoad();
+        return ld.uVersion == uVersion_;
+    }
+
+    // This is lock reserve.
     void lock(Mutex &mutex, Mode mode, uint32_t priId) {
         assert(!mutex_);
         assert(mode != Mode::INVALID);
@@ -711,6 +742,7 @@ public:
         protected_ = false;
         intercepted_ = false;
         updated_ = false;
+        isOptimisticRead_ = false;
 
         LockData64 ld0 = mutex_->atomicLoad();
         for (;;) {
@@ -734,6 +766,10 @@ public:
     }
     void unlock() {
         if (!mutex_) return;
+        if (isOptimisticRead_) {
+            mutex_ = nullptr;
+            return;
+        }
         for (;;) {
             if (intercepted_) {
                 assert(!protected_);
@@ -855,6 +891,29 @@ public:
             }
         }
     }
+    bool upgrade() {
+        assert(mutex_);
+        assert(mode_ == Mode::S);
+        LockData64 ld0 = mutex_->atomicLoad();
+        if (!isNotIntercepted(ld0)) return false;
+        while (ld0.priId == priId_) {
+            // Try to intercept
+            LockData64 ld1;
+            ld1.intercept(ld0, Mode::X, priId_);
+            if (mutex_->compareAndSwap(ld0, ld1)) {
+                mode_ = Mode::X;
+                // Other fields do not change.
+                return true;
+            }
+        }
+        // Try to relock and check version unchanged.
+        Mutex *mutex = mutex_;
+        uint32_t priId = priId_;
+        uint64_t uVersion = uVersion_;
+        unlock();
+        lock(*mutex, Mode::X, priId);
+        return uVersion == uVersion_;
+    }
     void update() {
         if (!protected_) return;
         updated_ = true;
@@ -863,14 +922,32 @@ public:
     void writeFence() const {
         __atomic_thread_fence(__ATOMIC_RELEASE);
     }
+    void readFence() const {
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    }
     /* debug */
     std::string str() const {
-        return mutex_->atomicLoad().str();
+        std::stringstream ss;
+        ss << cybozu::util::formatString(
+            "mutex:%p uVer:%lu iVer:%u priId:%0x mode:%d "
+            "protected:%d intercepted:%d updated:%d optimistic:%d"
+            , mutex_, uVersion_, iVersion_, priId_
+            , mode_, protected_
+            , intercepted_, updated_, isOptimisticRead_);
+        if (mutex_) {
+            ss << " (" << mutex_->atomicLoad().str() << ")";
+        }
+        return ss.str();
     }
     uintptr_t getMutexId() const {
         return uintptr_t(mutex_);
     }
-
+    uint64_t uVersion() const {
+        return uVersion_;
+    }
+    bool isOptimisticRead() const {
+        return isOptimisticRead_;
+    }
 private:
     void swap(InterceptibleLock64T& rhs) {
         std::swap(mutex_, rhs.mutex_);
@@ -879,6 +956,7 @@ private:
         std::swap(protected_, rhs.protected_);
         std::swap(intercepted_, rhs.intercepted_);
         std::swap(updated_, rhs.updated_);
+        std::swap(isOptimisticRead_, rhs.isOptimisticRead_);
     }
     bool isUnlockedOrShared(const LockData64& ld) const {
         if (mode_ == Mode::X) {
@@ -1045,11 +1123,192 @@ public:
     uintptr_t getMutexId() const {
         return uintptr_t(mutex_);
     }
+    uint64_t uVersion() const {
+        return ld_.uVersion;
+    }
 
 private:
     void swap(InterceptibleLock64ReaderT& rhs) {
         std::swap(mutex_, rhs.mutex_);
         std::swap(ld_, rhs.ld_);
+    }
+};
+
+
+
+template <typename PQLock>
+class ILockSet
+{
+public:
+    using ILock = InterceptibleLock64T<PQLock>;
+    using Reader = InterceptibleLock64ReaderT<PQLock>;
+    using Mutex = typename ILock::Mutex;
+    using Mode = typename ILock::Mode;
+
+    using VecL = std::vector<ILock>;
+
+    // key: mutex addr, value: index in the lock vector.
+#if 0
+    using Map = std::unordered_map<uintptr_t, size_t>;
+#else
+    using Map = std::unordered_map<
+        uintptr_t, size_t,
+        std::hash<uintptr_t>,
+        std::equal_to<uintptr_t>,
+        LowOverheadAllocatorT<std::pair<const uintptr_t, size_t> > >;
+#endif
+
+    VecL vecL_;
+    Map map_;
+    uint32_t priId_;
+
+public:
+    // You must set priId before read/write.
+    void setPriorityId(uint32_t priId) {
+        priId_ = priId;
+    }
+    bool optimisticRead(Mutex& mutex) {
+        const uintptr_t key = uintptr_t(&mutex);
+        typename VecL::iterator it = findInVec(key);
+        if (it != vecL_.end()) {
+            // read local version.
+            return true;
+        }
+        vecL_.emplace_back();
+        ILock& lk = vecL_.back();
+        for (;;) {
+            lk.prepareOptimisticRead(mutex);
+            // read shared data.
+            lk.readFence();
+            if (lk.unchanged()) break;
+        }
+        return true;
+    }
+    bool pessimisticRead(Mutex& mutex) {
+        const uintptr_t key = uintptr_t(&mutex);
+        typename VecL::iterator it0 = findInVec(key);
+
+        if (it0 == vecL_.end()) {
+            vecL_.emplace_back(mutex, Mode::S, priId_);
+            ILock& lk = vecL_.back();
+            for (;;) {
+                // read shared version.
+                if (lk.unchanged()) return true;
+                lk.unlock();
+                lk.lock(mutex, Mode::S, priId_);
+            }
+        } else {
+            ILock& lk = *it0;
+            if (lk.isOptimisticRead()) {
+                const uint64_t uVersion = lk.uVersion();
+                lk.unlock();
+                lk.lock(mutex, Mode::S, priId_);
+#if 0
+                ::printf("%p mutex:%p optimistic-->read_reserve\n"
+                         , this, &mutex); // QQQQQ
+#endif
+                if (lk.uVersion() != uVersion) return false;
+            }
+            // read local version.
+            return true;
+        }
+    }
+    bool write(Mutex& mutex) {
+        const uintptr_t key = uintptr_t(&mutex);
+        typename VecL::iterator it0 = findInVec(key);
+        if (it0 == vecL_.end()) {
+            vecL_.emplace_back(mutex, Mode::X, priId_);
+            // write local version;
+            return true;
+        }
+        ILock& lk = *it0;
+        if (lk.isOptimisticRead()) {
+            const uint64_t uVersion = lk.uVersion();
+            lk.unlock();
+            lk.lock(mutex, Mode::X, priId_);
+            if (lk.uVersion() != uVersion) return false;
+        } else if (lk.mode() == Mode::S) {
+            if (!lk.upgrade()) return false;
+        }
+        // write local version.
+        return true;
+    }
+    bool protect() {
+#if 0
+        std::sort(vecL_.begin(), vecL_.end());
+#endif
+
+        for (ILock& lk : vecL_) {
+            if (lk.mode() == Mode::X) {
+                if (!lk.protect()) return false;
+            }
+        }
+        // Here is serialization point.
+        __atomic_thread_fence(__ATOMIC_ACQ_REL);
+        return true;
+    }
+    bool verify() {
+        for (ILock& lk : vecL_) {
+            if (lk.mode() == Mode::X) continue;
+            if (!lk.unchanged()) return false;
+            /* This is S2PL protocol, so we can release read locks here. */
+            lk.unlock();
+        }
+        return true;
+    }
+    void updateAndUnlock() {
+        for (ILock& lk : vecL_) {
+            if (lk.mode() != Mode::X) continue;
+            lk.update();
+            lk.writeFence();
+            lk.unlock();
+        }
+        vecL_.clear();
+        map_.clear();
+    }
+    /**
+     * Call this to reuse the object.
+     */
+    void clear() {
+        vecL_.clear();
+        map_.clear();
+    }
+    bool isEmpty() const {
+        return vecL_.empty();
+    }
+
+    // debug
+    void print() const {
+        ::printf("%p BEGIN\n", this);
+        for (const ILock& lk : vecL_) {
+            ::printf("%p %s\n", this, lk.str().c_str());
+        }
+        ::printf("%p END\n", this);
+        ::fflush(::stdout);
+    }
+private:
+    typename VecL::iterator findInVec(uintptr_t key) {
+        // 4KiB scan in average.
+        const size_t threshold = 4096 * 2 / sizeof(ILock);
+        if (vecL_.size() > threshold) {
+            // create indexes.
+            for (size_t i = map_.size(); i < vecL_.size(); i++) {
+                map_[vecL_[i].getMutexId()] = i;
+            }
+            // use indexes.
+            Map::iterator it = map_.find(key);
+            if (it == map_.end()) {
+                return vecL_.end();
+            } else {
+                size_t idx = it->second;
+                return vecL_.begin() + idx;
+            }
+        }
+        return std::find_if(
+            vecL_.begin(), vecL_.end(),
+            [&](const ILock& lk) {
+                return lk.getMutexId() == key;
+            });
     }
 };
 

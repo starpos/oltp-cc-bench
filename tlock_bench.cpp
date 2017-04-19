@@ -1050,6 +1050,156 @@ Result iWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 }
 
 
+/**
+ * Using ILock.
+ */
+template <int txIdGenType, typename PQLock>
+Result iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
+{
+    using IMutex = typename ILockTypes<PQLock>::IMutex;
+    using IMode = typename ILockTypes<PQLock>::IMode;
+
+    unused(shouldQuit);
+    cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
+
+    PriorityIdGenerator<12> priIdGen;
+    priIdGen.init(idx + 1);
+    TxIdGenerator localTxIdGen(&shared.globalTxIdGen);
+
+    std::vector<IMutex>& muV = shared.muV;
+    const ReadMode rmode = shared.rmode;
+    const size_t longTxSize = shared.longTxSize;
+    const size_t nrOp = shared.nrOp;
+    const size_t nrWr = shared.nrWr;
+    const int shortTxMode = shared.shortTxMode;
+    const int longTxMode = shared.longTxMode;
+
+    Result res;
+    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+
+
+    std::vector<size_t> muIdV(nrOp);
+
+    std::vector<size_t> tmpV; // for fillMuIdVecArray.
+
+    // for USE_MIX_TX
+    std::vector<bool> isWriteV;
+    std::vector<size_t> tmpV2; // for fillModeVec;
+
+    // for USE_LONG_TX_2
+    BoolRandom<decltype(rand)> boolRand(rand);
+
+
+    const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
+    if (isLongTx) {
+        muIdV.resize(longTxSize);
+    } else {
+        muIdV.resize(nrOp);
+    }
+    GetModeFunc<decltype(rand), IMode>
+        getMode(boolRand, isWriteV, isLongTx,
+                shortTxMode, longTxMode, muIdV.size(), nrWr);
+
+    cybozu::lock::ILockSet<PQLock> lockSet;
+
+    while (!start) _mm_pause();
+    size_t count = 0; unused(count);
+    while (!quit) {
+        if (isLongTx) {
+            if (longTxSize > muV.size() * 5 / 1000) {
+                fillMuIdVecArray(muIdV, rand, muV.size(), tmpV);
+            } else {
+                fillMuIdVecLoop(muIdV, rand, muV.size());
+            }
+        } else {
+            fillMuIdVecLoop(muIdV, rand, muV.size());
+            if (shortTxMode == USE_MIX_TX) {
+                isWriteV.resize(nrOp);
+                fillModeVec(isWriteV, rand, nrWr, tmpV2);
+            }
+        }
+#if 0 /* For test. */
+        std::sort(muIdV.begin(), muIdV.end());
+#endif
+
+        uint64_t priId;
+        if (txIdGenType == SCALABLE_TXID_GEN) {
+            priId = priIdGen.get(isLongTx ? 0 : 1);
+        } else if (txIdGenType == BULK_TXID_GEN) {
+            priId = localTxIdGen.get();
+        } else if (txIdGenType == SIMPLE_TXID_GEN) {
+            priId = shared.simpleTxIdGen.get();
+        } else {
+            throw cybozu::Exception("bad txIdGenType") << txIdGenType;
+        }
+        //::printf("worker %zu priId: %" PRIx64 "\n", idx, priId);
+
+        assert(lockSet.isEmpty());
+        lockSet.setPriorityId(priId);
+
+        for (size_t retry = 0;; retry++) {
+            if (quit) break; // to quit under starvation.
+
+            for (size_t i = 0; i < muIdV.size(); i++) {
+                IMode mode = getMode(i);
+                IMutex &mutex = muV[muIdV[i]];
+
+#if 0
+                ::printf("%p mutex:%p mode:%hhu  %s\n", &lockSet, &mutex, mode, mutex.atomicLoad().str().c_str()); // QQQQQ
+                ::fflush(::stdout);
+#endif
+
+                if (mode == IMode::S) {
+                    const bool tryOccRead = rmode == ReadMode::OCC
+                        || (rmode == ReadMode::HYBRID && !isLongTx && retry == 0);
+                    if (tryOccRead) {
+                        bool ret = lockSet.optimisticRead(mutex);
+                        unused(ret);
+                        assert(ret);
+                    } else {
+                        if (!lockSet.pessimisticRead(mutex)) {
+                            res.incAbort(isLongTx);
+                            goto abort;
+                        }
+                    }
+                } else {
+                    assert(mode == IMode::X);
+                    if (!lockSet.write(mutex)) {
+                        res.incIntercepted(isLongTx);
+                        goto abort;
+                    }
+                }
+                //lockSet.print(); // QQQQQ
+            }
+
+            // Pre-commit.
+            if (!lockSet.protect()) {
+                res.incIntercepted(isLongTx);
+                goto abort;
+            }
+            if (!lockSet.verify()) {
+                res.incAbort(isLongTx);
+                goto abort;
+            }
+
+            // We can commit.
+            lockSet.updateAndUnlock();
+            res.incCommit(isLongTx);
+
+            // Tx succeeded.
+            res.addRetryCount(isLongTx, retry);
+            break;
+
+          abort:
+            lockSet.clear();
+        }
+    }
+
+    return res;
+}
+
+
+
 
 void runTest()
 {
@@ -1199,7 +1349,11 @@ template <typename PQLock, int txIdGenType, typename Shared>
 struct Dispatch3<PQLock, 0, txIdGenType, Shared>
 {
     static void run(CmdLineOptionPlus& opt, Shared& shared) {
+#if 0
         runExec(opt, shared, iWorker<txIdGenType, PQLock>);
+#else
+        runExec(opt, shared, iWorker2<txIdGenType, PQLock>);
+#endif
     }
 };
 
