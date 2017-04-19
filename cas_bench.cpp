@@ -1,17 +1,7 @@
-#include <unordered_map>
-#include <iostream>
-#include <sstream>
 #include <immintrin.h>
-#include <unistd.h>
-#include "thread_util.hpp"
-#include "random.hpp"
-#include "tx_util.hpp"
 #include "measure_util.hpp"
-#include "time.hpp"
-#include "cpuid.hpp"
-#include "lock.hpp"
-#include "trlock.hpp"
 #include "cmdline_option.hpp"
+#include "cpuid.hpp"
 
 
 const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
