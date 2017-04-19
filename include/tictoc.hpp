@@ -12,6 +12,7 @@
 #include <vector>
 #include <algorithm>
 #include <cstring>
+#include <unordered_map>
 #include "lock.hpp"
 
 
@@ -160,7 +161,7 @@ public:
     Writer(Writer&& rhs) : Writer() { swap(rhs); }
     Writer& operator=(Writer&& rhs) { swap(rhs); return *this; }
 
-    uint64_t getId() const {
+    uintptr_t getId() const {
         uintptr_t ret;
         ::memcpy(&ret, &mutex, sizeof(uintptr_t));
         return ret;
@@ -238,6 +239,7 @@ public:
         __attribute__((unused)) const bool ret = mutex_->compareAndSwap(tsw_, tsw0);
         assert(ret);
 #else
+        __atomic_thread_fence(__ATOMIC_RELEASE);
         mutex_->set(tsw0);
 #endif
         mutex_ = nullptr;
@@ -320,7 +322,6 @@ bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags)
     // Write phase.
     for (Lock& lk : ls) {
         // Write.
-        __atomic_thread_fence(__ATOMIC_RELEASE);
         lk.updateAndUnlock(commitTs);
     }
     ret = true;
@@ -332,5 +333,95 @@ bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags)
     flags.clear();
     return ret;
 }
+
+
+class LocalSet
+{
+    ReadSet rs_;
+    WriteSet ws_;
+    LockSet ls_;
+    Flags flags_;
+
+    using Index = std::unordered_map<uintptr_t, size_t>;
+    Index ridx_;
+    Index widx_;
+
+public:
+    void read(Mutex& mutex) {
+        ReadSet::iterator it = findInReadSet(uintptr_t(&mutex));
+        if (it != rs_.end()) {
+            // read local data.
+            return;
+        }
+        rs_.emplace_back();
+        Reader& r = rs_.back();
+        r.prepare(&mutex);
+        for (;;) {
+            // read shared data.
+            r.readFence();
+            if (r.isReadSucceeded()) break;
+            r.prepareRetry();
+        }
+    }
+    void write(Mutex& mutex) {
+        WriteSet::iterator it = findInWriteSet(uintptr_t(&mutex));
+        if (it != ws_.end()) {
+            // write local data.
+            return;
+        }
+        ws_.emplace_back(&mutex);
+        // write local data.
+    }
+    bool preCommit() {
+        bool ret = cybozu::tictoc::preCommit(rs_, ws_, ls_, flags_);
+        ridx_.clear();
+        widx_.clear();
+        return ret;
+    }
+    void clear() {
+        ws_.clear();
+        rs_.clear();
+        ls_.clear();
+        flags_.clear();
+        ridx_.clear();
+        widx_.clear();
+    }
+private:
+    ReadSet::iterator findInReadSet(uintptr_t key) {
+        return findInSet(
+            key, rs_, ridx_,
+            [](const Reader& r) { return r.getId(); });
+    }
+    WriteSet::iterator findInWriteSet(uintptr_t key) {
+        return findInSet(
+            key, ws_, widx_,
+            [](const Writer& w) { return w.getId(); });
+    }
+    template <typename Vector, typename Map, typename Func>
+    typename Vector::iterator findInSet(uintptr_t key, Vector& vec, Map& map, Func&& func) {
+        if (shouldUseIndex(vec)) {
+            for (size_t i = map.size(); i < vec.size(); i++) {
+                map[func(vec[i])] = i;
+            }
+            typename Map::iterator it = map.find(key);
+            if (it == map.end()) {
+                return vec.end();
+            } else {
+                size_t idx = it->second;
+                return vec.begin() + idx;
+            }
+        }
+        return std::find_if(
+            vec.begin(), vec.end(),
+            [&](const typename Vector::value_type& v) {
+                return func(v) == key;
+            });
+    }
+    template <typename Vector>
+    bool shouldUseIndex(const Vector& vec) const {
+        const size_t threshold = 2048 * 2 / sizeof(typename Vector::value_type);
+        return vec.size() > threshold;
+    }
+};
 
 }} // namespace cybozu::tictoc.
