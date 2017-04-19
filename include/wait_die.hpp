@@ -162,7 +162,27 @@ public:
         }
         init();
     }
-
+    bool upgrade() {
+        assert(mutex_);
+        assert(mode_ == Mode::S);
+        WaitDieData wd0 = mutex_->atomicRead();
+        while (txId_ == wd0.txId && wd0.getLockState()->getCount(Mode::S) == 1) {
+            WaitDieData wd1 = wd0;
+            wd1.getLockState()->clearAll();
+            wd1.getLockState()->set(Mode::X);
+            if (mutex_->compareAndSwap(wd0, wd1)) {
+                mode_ = Mode::X;
+                return true;
+            }
+        }
+        return false;
+    }
+    Mode mode() const {
+        return mode_;
+    }
+    uintptr_t getMutexId() const {
+        return uintptr_t(mutex_);
+    }
 private:
     void init() {
         mutex_ = nullptr;
@@ -181,6 +201,92 @@ private:
             if (wd.getLockState()->canSet(mode_) || wd.txId <= txId_) return;
             _mm_pause();
         }
+    }
+};
+
+
+class LockSet
+{
+    using Mode = cybozu::lock::LockStateXS::Mode;
+    using Mutex = WaitDieLock::Mutex;
+    using LockV = std::vector<WaitDieLock>;
+
+    // key: mutex addr, value: index in the vector.
+    using Index = std::unordered_map<uintptr_t, size_t>;
+
+    LockV lockV_;
+    Index index_;
+
+    TxId txId_;
+
+public:
+    /* call this before read/write. */
+    void setTxId(TxId txId) { txId_ = txId; }
+
+    bool lock(Mutex& mutex, Mode mode) {
+        return mode == Mode::S ? read(mutex) : write(mutex);
+    }
+    bool read(Mutex& mutex) {
+        LockV::iterator it = find(uintptr_t(&mutex));
+        if (it != lockV_.end()) {
+            // read shared data.
+            return true;
+        }
+        lockV_.emplace_back();
+        WaitDieLock &lk = lockV_.back();
+        if (!lk.lock(&mutex, Mode::S, txId_)) {
+            // should die.
+            return false;
+        }
+        // read shared data.
+        return true;
+    }
+    bool write(Mutex& mutex) {
+        LockV::iterator it = find(uintptr_t(&mutex));
+        if (it != lockV_.end()) {
+            WaitDieLock& lk = *it;
+            if (lk.mode() == Mode::S && !lk.upgrade()) {
+                return false;
+            }
+            // write shared data.
+            return true;
+        }
+        lockV_.emplace_back();
+        WaitDieLock &lk = lockV_.back();
+        if (!lk.lock(&mutex, Mode::X, txId_)) {
+            // should die.
+            return false;
+        }
+        // write shared data.
+        return true;
+    }
+    void clear() {
+        lockV_.clear(); // unlock.
+        index_.clear();
+    }
+    bool empty() const {
+        return lockV_.empty() && index_.empty();
+    }
+private:
+    LockV::iterator find(uintptr_t key) {
+        const size_t threshold = 4096 / sizeof(WaitDieLock);
+        if (lockV_.size() > threshold) {
+            for (size_t i = index_.size(); i < lockV_.size(); i++) {
+                index_[lockV_[i].getMutexId()] = i;
+            }
+            Index::iterator it = index_.find(key);
+            if (it == index_.end()) {
+                return lockV_.end();
+            } else {
+                size_t idx = it->second;
+                return lockV_.begin() + idx;
+            }
+        }
+        return std::find_if(
+            lockV_.begin(), lockV_.end(),
+            [&](const WaitDieLock& lk) {
+                return lk.getMutexId() == key;
+            });
     }
 };
 

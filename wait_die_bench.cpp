@@ -145,6 +145,110 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
 }
 
 
+template <int txIdGenType>
+Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+{
+    unused(shouldQuit);
+    cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
+
+    std::vector<Mutex>& muV = shared.muV;
+    const size_t longTxSize = shared.longTxSize;
+    const size_t nrOp = shared.nrOp;
+    const size_t nrWr = shared.nrWr;
+    const int shortTxMode = shared.shortTxMode;
+    const int longTxMode = shared.longTxMode;
+
+    Result res;
+    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    std::vector<size_t> muIdV(nrOp);
+    cybozu::wait_die::LockSet lockSet;
+    std::vector<size_t> tmpV; // for fillMuIdVecArray.
+
+    PriorityIdGenerator<12> priIdGen;
+    priIdGen.init(idx + 1);
+    TxIdGenerator localTxIdGen(&shared.globalTxIdGen);
+
+    // USE_MIX_TX
+    std::vector<bool> isWriteV(nrOp);
+    std::vector<size_t> tmpV2; // for fillModeVec.
+
+    // USE_LONG_TX_2
+    BoolRandom<decltype(rand)> boolRand(rand);
+
+
+    const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
+    if (isLongTx) {
+        muIdV.resize(longTxSize);
+    } else {
+        muIdV.resize(nrOp);
+        if (shortTxMode == USE_MIX_TX) {
+            isWriteV.resize(nrOp);
+        }
+    }
+    GetModeFunc<decltype(rand), Mode>
+        getMode(boolRand, isWriteV, isLongTx,
+                shortTxMode, longTxMode, muIdV.size(), nrWr);
+
+
+    while (!start) _mm_pause();
+    size_t count = 0; unused(count);
+    while (!quit) {
+        if (isLongTx) {
+            if (longTxSize > muV.size() * 5 / 1000) { // over 0.5%
+                fillMuIdVecArray(muIdV, rand, muV.size(), tmpV);
+            } else {
+                fillMuIdVecLoop(muIdV, rand, muV.size());
+            }
+        } else {
+            fillMuIdVecLoop(muIdV, rand, muV.size());
+            if (shortTxMode == USE_MIX_TX) {
+                fillModeVec(isWriteV, rand, nrWr, tmpV2);
+            }
+        }
+
+        // Do not sort with noWait mode.
+        //std::sort(muIdV.begin(), muIdV.end());
+
+        uint64_t txId;
+        if (txIdGenType == SCALABLE_TXID_GEN) {
+            txId = priIdGen.get(isLongTx ? 0 : 1);
+        } else if (txIdGenType == BULK_TXID_GEN) {
+            txId = localTxIdGen.get();
+        } else if (txIdGenType == SIMPLE_TXID_GEN) {
+            txId = shared.simpleTxIdGen.get();
+        } else {
+            throw cybozu::Exception("bad txIdGenType") << txIdGenType;
+        }
+        lockSet.setTxId(txId);
+
+        for (size_t retry = 0;; retry++) {
+            if (quit) break; // to quit under starvation.
+            assert(lockSet.empty());
+            bool abort = false;
+            for (size_t i = 0; i < muIdV.size(); i++) {
+                Mode mode = getMode(i);
+                Mutex& mutex = muV[muIdV[i]];
+                if (!lockSet.lock(mutex, mode)) {
+                    abort = true;
+                    break;
+                }
+            }
+            if (abort) {
+                lockSet.clear();
+                res.incAbort(isLongTx);
+                continue;
+            }
+
+            res.incCommit(isLongTx);
+            lockSet.clear();
+            res.addRetryCount(isLongTx, retry);
+            break; // retry is not required.
+        }
+    }
+    return res;
+}
+
+
 void runTest()
 {
 #if 0
@@ -223,13 +327,13 @@ void dispatch1(CmdLineOptionPlus& opt, Shared& shared)
 {
     switch (opt.txIdGenType) {
     case SCALABLE_TXID_GEN:
-        runExec(opt, shared, worker<SCALABLE_TXID_GEN>);
+        runExec(opt, shared, worker2<SCALABLE_TXID_GEN>);
         break;
     case BULK_TXID_GEN:
-        runExec(opt, shared, worker<BULK_TXID_GEN>);
+        runExec(opt, shared, worker2<BULK_TXID_GEN>);
         break;
     case SIMPLE_TXID_GEN:
-        runExec(opt, shared, worker<SIMPLE_TXID_GEN>);
+        runExec(opt, shared, worker2<SIMPLE_TXID_GEN>);
         break;
     default:
         throw cybozu::Exception("bad txIdGenType") << opt.txIdGenType;
