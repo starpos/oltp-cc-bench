@@ -7,9 +7,11 @@
 #include "leis_lock.hpp"
 
 
-using LeisLockSet  = cybozu::lock::LeisLockSet;
-using Mutex = LeisLockSet::Mutex;
-using Mode = LeisLockSet::Mode;
+template <bool UseMap>
+using LeisLockSet  = cybozu::lock::LeisLockSet<UseMap>;
+
+using Mutex = cybozu::lock::XSLock::Mutex;
+using Mode = Mutex::Mode;
 
 const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
 
@@ -24,6 +26,7 @@ struct Shared
     int longTxMode;
 };
 
+template <bool UseMap>
 Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
@@ -39,7 +42,7 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
     Result res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     std::vector<size_t> muIdV(nrOp);
-    LeisLockSet llSet;
+    LeisLockSet<UseMap> llSet;
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
 
     // USE_MIX_TX
@@ -188,10 +191,15 @@ struct CmdLineOptionPlus : CmdLineOption
 {
     using base = CmdLineOption;
 
+    int useVector;
+
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
+        appendOpt(&useVector, 0, "vector", "[0 or 1]: use vector instead of map.");
     }
     std::string str() const {
-        return cybozu::util::formatString("mode:leis ") + base::str();
+        return cybozu::util::formatString("mode:leis ") +
+            base::str() +
+            cybozu::util::formatString(" vector:%d", useVector != 0);
     }
 };
 
@@ -210,7 +218,11 @@ int main(int argc, char *argv[]) try
         shared.shortTxMode = opt.shortTxMode;
         shared.longTxMode = opt.longTxMode;
         for (size_t i = 0; i < opt.nrLoop; i++) {
-            runExec(opt, shared, worker);
+            if (opt.useVector != 0) {
+                runExec(opt, shared, worker<0>);
+            } else {
+                runExec(opt, shared, worker<1>);
+            }
         }
     } else {
         throw cybozu::Exception("bad workload.") << opt.workload;

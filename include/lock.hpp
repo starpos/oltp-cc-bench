@@ -16,8 +16,8 @@
 #include <stdexcept>
 #include <memory>
 #include <map>
-
 #include <string>
+#include "util.hpp"
 
 
 namespace cybozu {
@@ -245,11 +245,16 @@ public:
             assert(false);
         }
     }
+    std::string str() const {
+        return cybozu::util::formatString(
+            "XSMutex(%d)", __atomic_load_n(&v_, __ATOMIC_RELAXED));
+    }
 private:
     void lockX() {
         for (;;) {
             if (v_ != 0) {
                 _mm_pause();
+                __atomic_thread_fence(__ATOMIC_ACQUIRE);
                 continue;
             }
             if (__atomic_load_n(&v_, __ATOMIC_RELAXED) != 0) {
@@ -283,6 +288,7 @@ private:
         for (;;) {
             if (v_ < 0) {
                 _mm_pause();
+                __atomic_thread_fence(__ATOMIC_ACQUIRE);
                 continue;
             }
             int v = __atomic_load_n(&v_, __ATOMIC_RELAXED);
@@ -365,6 +371,12 @@ public:
     }
     const Mutex* mutex() const { return mutex_; }
     Mutex* mutex() { return mutex_; }
+    uintptr_t getMutexId() const { return uintptr_t(mutex_); }
+
+    /*
+     * This is used for dummy object to comparison.
+     */
+    void setMutex(Mutex *mutex) { mutex_ = mutex; }
 private:
     void init() {
         mutex_ = nullptr;
