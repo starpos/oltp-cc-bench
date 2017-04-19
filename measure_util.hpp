@@ -13,6 +13,7 @@
 #include "util.hpp"
 #include "random.hpp"
 #include "cmdline_option.hpp"
+#include "thread_util.hpp"
 
 
 constexpr size_t CACHE_LINE_SIZE = 64;
