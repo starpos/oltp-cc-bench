@@ -231,13 +231,11 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 
             for (size_t i = 0; i < muIdV.size(); i++) {
                 const bool isWrite = bool(getMode(i));
-
                 Mutex& mutex = muV[muIdV[i]];
-                bool ret = lockSet.read(mutex);
-                unused(ret); assert(ret);
-                if (isWrite) {
-                    ret = lockSet.write(mutex);
-                    assert(ret);
+                if (!isWrite) {
+                    lockSet.read(mutex);
+                } else {
+                    lockSet.write(mutex);
                 }
             }
 

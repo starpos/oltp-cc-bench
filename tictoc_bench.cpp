@@ -188,10 +188,10 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
             // Try to run transaction.
             for (size_t i = 0; i < muIdV.size(); i++) {
                 const bool isWrite = bool(getMode(i));
-
                 Mutex& mutex = muV[muIdV[i]];
-                localSet.read(mutex);
-                if (isWrite) {
+                if (!isWrite) {
+                    localSet.read(mutex);
+                } else {
                     localSet.write(mutex);
                 }
             }

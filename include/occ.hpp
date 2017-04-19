@@ -242,11 +242,11 @@ private:
     LockV lockV_;
 
 public:
-    bool read(Mutex& mutex) {
+    void read(Mutex& mutex) {
         ReadV::iterator it = findInReadSet(uintptr_t(&mutex));
         if (it != readV_.end()) {
             // read local data.
-            return true;
+            return;
         }
         readV_.emplace_back();
         OccReader& r = readV_.back();
@@ -256,17 +256,15 @@ public:
             r.readFence();
             if (r.verifyAll()) break;
         }
-        return true;
     }
-    bool write(Mutex& mutex) {
+    void write(Mutex& mutex) {
         WriteV::iterator it = findInWriteSet(uintptr_t(&mutex));
         if (it != writeV_.end()) {
             // write local data.
-            return true;
+            return;
         }
         writeV_.push_back(uintptr_t(&mutex));
         // write local data.
-        return true;
     }
     void lock() {
         std::sort(writeV_.begin(), writeV_.end());
