@@ -8,6 +8,7 @@
  */
 #include <stdexcept>
 #include <immintrin.h>
+#include <unordered_map>
 #include "lock.hpp"
 
 #define USE_OCC_MCS
@@ -132,10 +133,9 @@ public:
             throw std::runtime_error("OccLock::unlock: CAS failed. Something is wrong.");
         }
 #else
-        // You must write fence before really unlock.
+        writeFence();
         mutex_->lockD.set(lockD);
 #endif
-
         mutex_ = nullptr;
     }
     void update() {
@@ -147,8 +147,8 @@ public:
     void writeFence() const {
         __atomic_thread_fence(__ATOMIC_RELEASE);
     }
-    uintptr_t getId() const {
-        return reinterpret_cast<uintptr_t>(mutex_);
+    uintptr_t getMutexId() const {
+        return uintptr_t(mutex_);
     }
 private:
     void swap(OccLock& rhs) {
@@ -188,7 +188,6 @@ public:
      */
     void prepare(const Mutex *mutex) {
         mutex_ = mutex;
-
         for (;;) {
             lockD_ = mutex_->lockD.load();
             if (!lockD_.isLocked()) break;
@@ -214,8 +213,8 @@ public:
         const LockData lockD = mutex_->lockD.load();
         return lockD_.getVersion() == lockD.getVersion();
     }
-    uintptr_t getId() const {
-        return reinterpret_cast<uintptr_t>(mutex_);
+    uintptr_t getMutexId() const {
+        return uintptr_t(mutex_);
     }
 private:
     void swap(OccReader& rhs) {
@@ -223,5 +222,141 @@ private:
         std::swap(lockD_, rhs.lockD_);
     }
 };
+
+
+class LockSet
+{
+public:
+    using Mutex = OccMutex;
+
+private:
+    using LockV = std::vector<OccLock>;
+    using ReadV = std::vector<OccReader>;
+    using WriteV = std::vector<uintptr_t>; // mutex pointers.
+    using IndexM = std::unordered_map<uintptr_t, size_t>;
+
+    WriteV writeV_; // write set.
+    IndexM writeM_; // write set index.
+    ReadV readV_; // read set.
+    IndexM readM_; // read set index.
+    LockV lockV_;
+
+public:
+    bool read(Mutex& mutex) {
+        ReadV::iterator it = findInReadSet(uintptr_t(&mutex));
+        if (it != readV_.end()) {
+            // read local data.
+            return true;
+        }
+        readV_.emplace_back();
+        OccReader& r = readV_.back();
+        for (;;) {
+            r.prepare(&mutex);
+            // read shared data.
+            r.readFence();
+            if (r.verifyAll()) break;
+        }
+        return true;
+    }
+    bool write(Mutex& mutex) {
+        WriteV::iterator it = findInWriteSet(uintptr_t(&mutex));
+        if (it != writeV_.end()) {
+            // write local data.
+            return true;
+        }
+        writeV_.push_back(uintptr_t(&mutex));
+        // write local data.
+        return true;
+    }
+    void lock() {
+        std::sort(writeV_.begin(), writeV_.end());
+        for (uintptr_t mutex : writeV_) {
+            lockV_.emplace_back((Mutex *)mutex);
+        }
+        // Serialization point.
+        __atomic_thread_fence(__ATOMIC_ACQ_REL);
+    }
+    bool verify() {
+        const bool useIndex = shouldUseIndex(writeV_);
+        if (!useIndex) {
+            std::sort(writeV_.begin(), writeV_.end());
+        }
+        for (OccReader& r : readV_) {
+            bool inWriteSet;
+            if (useIndex) {
+                inWriteSet = findInWriteSet(r.getMutexId()) != writeV_.end();
+            } else {
+                inWriteSet = std::binary_search(
+                    writeV_.begin(), writeV_.end(), r.getMutexId());
+            }
+            const bool valid = inWriteSet ? r.verifyVersion() : r.verifyAll();
+            if (!valid) return false;
+        }
+        return true;
+    }
+    void updateAndUnlock() {
+        for (OccLock& lk : lockV_) {
+            lk.update();
+            lk.unlock();
+        }
+        clear();
+    }
+    void clear() {
+        lockV_.clear();
+        readV_.clear();
+        readM_.clear();
+        writeV_.clear();
+        writeM_.clear();
+    }
+    bool empty() const {
+        return lockV_.empty() &&
+            readV_.empty() &&
+            readM_.empty() &&
+            writeV_.empty() &&
+            writeM_.empty();
+    }
+private:
+    ReadV::iterator findInReadSet(uintptr_t key) {
+        return findInSet(
+            key, readV_, readM_,
+            [](const OccReader& r) { return r.getMutexId(); });
+    }
+    WriteV::iterator findInWriteSet(uintptr_t key) {
+        return findInSet(
+            key, writeV_, writeM_,
+            [](uintptr_t v) { return v; });
+    }
+    /**
+     * func: uintptr_t(const Vector::value_type&)
+     */
+    template <typename Vector, typename Map, typename Func>
+    typename Vector::iterator findInSet(uintptr_t key, Vector& vec, Map& map, Func&& func) {
+        if (shouldUseIndex(vec)) {
+            // create indexes.
+            for (size_t i = map.size(); i < vec.size(); i++) {
+                map[func(vec[i])] = i;
+            }
+            // use indexes.
+            typename Map::iterator it = map.find(key);
+            if (it == map.end()) {
+                return vec.end();
+            } else {
+                size_t idx = it->second;
+                return vec.begin() + idx;
+            }
+        }
+        return std::find_if(
+            vec.begin(), vec.end(),
+            [&](const typename Vector::value_type& v) {
+                return func(v) == key;
+            });
+    }
+    template <typename Vector>
+    bool shouldUseIndex(const Vector& vec) const {
+        const size_t threshold = 2048 * 2 / sizeof(typename Vector::value_type);
+        return vec.size() > threshold;
+    }
+};
+
 
 }} // namespace cybozu::occ
