@@ -122,6 +122,93 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
 }
 
 
+Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+{
+    unused(shouldQuit);
+    cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
+
+    std::vector<Mutex>& muV = shared.muV;
+    const size_t longTxSize = shared.longTxSize;
+    const size_t nrOp = shared.nrOp;
+    const size_t nrWr = shared.nrWr;
+    const int shortTxMode = shared.shortTxMode;
+    const int longTxMode = shared.longTxMode;
+
+    Result res;
+    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    std::vector<size_t> muIdV(nrOp);
+    cybozu::lock::NoWaitLockSet lockSet;
+    std::vector<size_t> tmpV; // for fillMuIdVecArray.
+
+    // USE_MIX_TX
+    std::vector<bool> isWriteV(nrOp);
+    std::vector<size_t> tmpV2; // for fillModeVec.
+
+    // USE_LONG_TX_2
+    BoolRandom<decltype(rand)> boolRand(rand);
+
+
+    const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
+    if (isLongTx) {
+        muIdV.resize(longTxSize);
+    } else {
+        muIdV.resize(nrOp);
+        if (shortTxMode == USE_MIX_TX) {
+            isWriteV.resize(nrOp);
+        }
+    }
+    GetModeFunc<decltype(rand), Mode>
+        getMode(boolRand, isWriteV, isLongTx,
+                shortTxMode, longTxMode, muIdV.size(), nrWr);
+
+
+    while (!start) _mm_pause();
+    size_t count = 0; unused(count);
+    while (!quit) {
+        if (isLongTx) {
+            if (longTxSize > muV.size() * 5 / 1000) {
+                fillMuIdVecArray(muIdV, rand, muV.size(), tmpV);
+            } else {
+                fillMuIdVecLoop(muIdV, rand, muV.size());
+            }
+        } else {
+            fillMuIdVecLoop(muIdV, rand, muV.size());
+            if (shortTxMode == USE_MIX_TX) {
+                fillModeVec(isWriteV, rand, nrWr, tmpV2);
+            }
+        }
+
+        // Do not sort with noWait mode.
+        //std::sort(muIdV.begin(), muIdV.end());
+
+        for (size_t retry = 0;; retry++) {
+            if (quit) break; // to quit under starvation.
+            assert(lockV.empty());
+            bool abort = false;
+            for (size_t i = 0; i < muIdV.size(); i++) {
+                Mode mode = getMode(i);
+                Mutex& mutex = muV[muIdV[i]];
+                if (!lockSet.lock(mutex, mode)) {
+                    abort = true;
+                    break;
+                }
+            }
+            if (abort) {
+                res.incAbort(isLongTx);
+                lockSet.clear();
+                continue;
+            }
+
+            res.incCommit(isLongTx);
+            lockSet.clear();
+            res.addRetryCount(isLongTx, retry);
+            break; // retry is not required.
+        }
+    }
+    return res;
+}
+
+
 void runTest()
 {
 #if 0
@@ -219,7 +306,7 @@ int main(int argc, char *argv[]) try
         shared.shortTxMode = opt.shortTxMode;
         shared.longTxMode = opt.longTxMode;
         for (size_t i = 0; i < opt.nrLoop; i++) {
-            runExec(opt, shared, worker);
+            runExec(opt, shared, worker2);
         }
     } else {
         throw cybozu::Exception("bad workload.") << opt.workload;
