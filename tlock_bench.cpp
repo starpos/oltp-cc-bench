@@ -1132,6 +1132,20 @@ Result iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                 ::fflush(::stdout);
 #endif
 
+#if 1
+                const bool tryOccRead = rmode == ReadMode::OCC
+                    || (rmode == ReadMode::HYBRID && !isLongTx && retry == 0);
+                if (tryOccRead) {
+                    bool ret = lockSet.optimisticRead(mutex);
+                    unused(ret);
+                    assert(ret);
+                } else if (mode == IMode::S) {
+                    if (!lockSet.pessimisticRead(mutex)) {
+                        res.incAbort(isLongTx);
+                        goto abort;
+                    }
+                }
+#else
                 if (mode == IMode::S) {
                     const bool tryOccRead = rmode == ReadMode::OCC
                         || (rmode == ReadMode::HYBRID && !isLongTx && retry == 0);
@@ -1145,7 +1159,9 @@ Result iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                             goto abort;
                         }
                     }
-                } else {
+                }
+#endif
+                if (mode == IMode::X) {
                     assert(mode == IMode::X);
                     if (!lockSet.write(mutex)) {
                         res.incIntercepted(isLongTx);
