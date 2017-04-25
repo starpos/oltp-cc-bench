@@ -1,0 +1,120 @@
+#!/usr/bin/ipython3
+
+import util
+import sys
+
+prefix = 'short-only/short-only'
+logpath = prefix + '.log'
+
+def classifier(d):
+    cond0 = d['nrMuPerTh'] == '4000' and d['workload'] == 'custom' and d['shortTxMode'] == '0'
+    if cond0 and (d['mode'] in ['nowait', 'wait-die', 'silo-occ', 'tictoc', 'trlock', 'trlock-occ']):
+        return d['mode']
+    if cond0 and (d['mode'] in ['leis']):
+        if d['vector'] == '0':
+            return 'leis-map'
+        if d['vector'] == '1':
+            return 'leis-vec'
+    if cond0 and (d['mode'] in ['trlock-hybrid']):
+        if d['pqLockType'] == '0':
+            return 'trlock-hybrid'
+        if d['pqLockType'] == '4':
+            return 'trlock-hybrid-pqmcs2'
+    return None
+
+def key(name, d):
+    return name, int(d['concurrency'])
+
+
+dl = util.make_dictlist(logpath)
+print(dl[0])
+g = util.classify(dl, key, classifier)
+
+#print(g)
+
+def accumulate1(dl):
+    tpl_l = [float(d['tps']) for d in dl]
+    mega = lambda x: x / 1000000
+    return [mega(sum(tpl_l)/len(tpl_l)), mega(min(tpl_l)), mega(max(tpl_l))]
+
+pl = util.make_plot_data(g, accumulate1)
+#print(pl)
+plot_path1 = prefix + '-throughput.plot'
+util.save_plot_data(pl, plot_path1)
+
+
+def accumulate2(dl):
+    def abort_rate(d):
+        c = float(d['commitS'])
+        a = float(d['abortS'])
+        i = float(d['interceptedS'])
+        return (a + i) / (c + a + i)
+    li = [abort_rate(d) for d in dl]
+    return [sum(li) / len(li), min(li), max(li)]
+
+
+pl = util.make_plot_data(g, accumulate2)
+#print(pl)
+plot_path2 = prefix + '-abortrate.plot'
+util.save_plot_data(pl, plot_path2)
+
+
+png1_path = prefix + '-throughput.png'
+png2_path = prefix + '-abortrate.png'
+
+
+def make_graph_1(gp_path):
+    name_li = ['nowait', 'wait-die', 'leis-map', 'leis-vec', 'silo-occ', 'tictoc', 'trlock', 'trlock-occ', 'trlock-hybrid', 'trlock-hybrid-pqmcs2']
+    with open(gp_path, 'w') as f:
+        print('''
+set title "Short-only Tx (r2w2) workload, 4k mutexes per thread."
+#set key top left
+set key outside right reverse Left
+set xrange [*:*]
+set xlabel "Number of threads"
+set grid
+
+#lw0 = 1.2
+lw0 = 2
+ps0 = 1.5
+
+set style line 1 pt 1  ps ps0 lw lw0
+set style line 2 pt 2  ps ps0 lw lw0
+set style line 3 pt 3  ps ps0 lw lw0
+set style line 4 pt 4  ps ps0 lw lw0
+set style line 5 pt 6  ps ps0 lw lw0
+set style line 6 pt 8  ps ps0 lw lw0
+set style line 7 pt 10 ps ps0 lw lw0
+set style line 8 pt 12 ps ps0 lw lw0
+set style line 9 pt 5 ps ps0 lw lw0
+set style line 10 pt 7 ps ps0 lw lw0
+set style line 11 pt 9 ps ps0 lw lw0
+
+set yrange [*:*]
+set ylabel "Throughput [10^6 tps]"
+#set terminal png size 1024,768 font "Arial,18"
+set terminal png size 1280,480 font "Arial,18"
+set output "{}"
+#set terminal postscript eps enhanced color solid size 10cm,10cm font "Consolas,14"
+#set output "short-all.eps"
+
+'''.format(png1_path), file=f)
+        print('plot \\', file=f)
+        for name, ls in zip(name_li, range(1, 100)):
+            print('"< cat {} |grep \\"^{} \\"" using 2:3:4:5 title "{}" with yerrorlines ls {}, \\'.format(plot_path1, name, name, ls), file=f)
+        print('NaN notitle', file=f)
+        print('''
+set ylabel "Abort rate"
+set yrange [0:*]
+set output "{}"
+'''.format(png2_path), file=f)
+        print('plot \\', file=f)
+        for name, ls in zip(name_li, range(1, 100)):
+            print('"< cat {} |grep \\"^{} \\"" using 2:3:4:5 title "{}" with yerrorlines ls {}, \\'.format(plot_path2, name, name, ls), file=f)
+        print('NaN notitle', file=f)
+
+
+gp_path = prefix + '.gp'
+make_graph_1(gp_path)
+! gnuplot {gp_path}
+

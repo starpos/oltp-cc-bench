@@ -1,0 +1,121 @@
+#!/usr/bin/ipython3
+
+import util
+import sys
+
+prefix = 'high-conflicts/high-conflicts'
+logpath = prefix + '.log'
+
+def classifier(d):
+    cond0 = d['nrMutex'] == '50' and d['nrOp'] == '10' and d['concurrency'] == '32' and d['workload'] == 'custom' and d['shortTxMode'] == '5'
+    if cond0 and (d['mode'] in ['nowait', 'wait-die', 'silo-occ', 'tictoc', 'trlock', 'trlock-occ']):
+        return d['mode']
+    if cond0 and (d['mode'] in ['leis']):
+        if d['vector'] == '0':
+            return 'leis-map'
+        if d['vector'] == '1':
+            return 'leis-vec'
+    if cond0 and (d['mode'] in ['trlock-hybrid']):
+        if d['pqLockType'] == '0':
+            return 'trlock-hybrid'
+        if d['pqLockType'] == '4':
+            return 'trlock-hybrid-pqmcs2'
+       
+    return None
+
+def key(name, d):
+    return name, int(d['nrWr'])
+
+dl = util.make_dictlist(logpath)
+print(dl[0])
+g = util.classify(dl, key, classifier)
+
+#print(g)
+
+def accumulate1(dl):
+    tps_list = [] 
+    abort_rate_list = []
+    mega = lambda x: x / 1000000
+    for d in dl:
+        #print(d)  # QQQQQ
+        tps_list.append(float(d['tps']))
+        commit_s = int(d['commitS'])
+        intercepted_s = int(d['interceptedS'])
+        abort_s = int(d['abortS'])
+        abort_rate = (intercepted_s + abort_s) / (commit_s + intercepted_s + abort_s)
+        abort_rate_list.append(abort_rate)
+
+    def average(li):
+        return sum(li) / len(li)
+
+    return [mega(average(tps_list)), mega(min(tps_list)), mega(max(tps_list))] + \
+           [average(abort_rate_list), min(abort_rate_list), max(abort_rate_list)]
+
+
+pl = util.make_plot_data(g, accumulate1)
+#print(pl)
+plot_path = prefix + '.plot'
+util.save_plot_data(pl, plot_path)
+
+
+png1_path = prefix + '-throughput.png'
+png2_path = prefix + '-abort-rate.png'
+
+def make_graph_1(gp_path, plot_path):
+    name_li = ['nowait', 'wait-die', 'leis-map', 'leis-vec', 'silo-occ', 'tictoc', 'trlock', 'trlock-occ', 'trlock-hybrid', 'trlock-hybrid-pqmcs2']
+    with open(gp_path, 'w') as f:
+        print('''
+set title "High-conflicts Tx (r(10-X)wXrnd) workload, 32 threads, 50 mutexes totally."
+#set key top right
+set key outside right reverse Left
+#set logscale x
+set xrange [-1:11] 
+set xlabel "Number of writes in each Transaction"
+set logscale y
+set grid
+
+#lw0 = 1.2
+lw0 = 2
+ps0 = 1.5
+
+set style line 1 pt 1  ps ps0 lw lw0
+set style line 2 pt 2  ps ps0 lw lw0
+set style line 3 pt 3  ps ps0 lw lw0
+set style line 4 pt 4  ps ps0 lw lw0
+set style line 5 pt 6  ps ps0 lw lw0
+set style line 6 pt 8  ps ps0 lw lw0
+set style line 7 pt 10 ps ps0 lw lw0
+set style line 8 pt 12 ps ps0 lw lw0
+set style line 9 pt 5 ps ps0 lw lw0
+set style line 10 pt 7 ps ps0 lw lw0
+set style line 11 pt 9 ps ps0 lw lw0
+
+set ylabel "Throughput [10^6 tps]"
+set yrange [0.001:*]
+#set terminal png size 1024,768 font "Arial,18"
+set terminal png size 1280,480 font "Arial,18"
+#set terminal postscript eps enhanced color solid size 10cm,10cm font "Consolas,14"
+set output "{}"
+
+'''.format(png1_path), file=f)
+        print('plot \\', file=f)
+        for name, ls in zip(name_li, range(1, 100)):
+            print('"< cat {} |grep \\"^{} \\"" using 2:3:4:5 title "{}" with yerrorlines ls {}, \\'.format(plot_path, name, name, ls), file=f)
+        print('NaN notitle', file=f)
+        print('''
+set ylabel "Abort rate"
+set key outside top right reverse Left
+set nologscale y
+set yrange [0:1]
+set output "{}"
+'''.format(png2_path), file=f)
+        print('plot \\', file=f)
+        for name, ls in zip(name_li, range(1, 100)):
+            print('"< cat {} |grep \\"^{} \\"" using 2:6:7:8 title "{}" with yerrorlines ls {}, \\'.format(plot_path, name, name, ls), file=f)
+        print('NaN notitle', file=f)
+
+
+gp_path = prefix + '.gp'
+make_graph_1(gp_path, plot_path)
+! gnuplot {gp_path}
+
