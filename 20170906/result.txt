@@ -1,0 +1,22 @@
+128bit CAS performance
+
+
+build option: -Ofast -DNDEBUG -mtree-vectorize -mmcx16
+(for gcc-7.2, use -latomic)
+(for clang-4.0.1, use -stdlib=libc++)
+
+atomic: use __atomic_compare_exchange().
+sync:   use __sync_val_compare_and_swap().
+asm:    inline assembly code using cmpxchg16b.
+
+CPU: Two Xeon E5-2450@2.10GHz processors (16 cores total, 32 threads total)
+Number of threads: 16
+Measurement: average of 10 times runs each of which measures succeeded CAS throughput under 10 seconds
+
+Result Throughput(Mops)
+
+             atomic sync   asm
+gcc-5.4      14.8   13.4   11.4
+gcc-6.4      14.8   13.2   12.4
+gcc-7.2      12.5   15.2   14.9
+clang-4.0.1  17.8   16.2   14.6

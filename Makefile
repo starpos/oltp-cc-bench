@@ -1,11 +1,13 @@
 CXX = g++
+CXX_KIND = $(shell $(CXX) --version |head -n1 |cut -d ' ' -f 1)
 
 ifeq ($(DEBUG),1)
     CFLAGS = -O0 -g -DDEBUG -mcx16
 else
     #CFLAGS = -O2 -g -DNDEBUG -mcx16 -march=native
     #CFLAGS = -Ofast -g -DNDEBUG -mcx16 -march=native
-    CFLAGS = -Ofast -g -DNDEBUG -mcx16
+    #CFLAGS = -Ofast -g -DNDEBUG -mcx16
+    CFLAGS = -Ofast -g -DNDEBUG -mcx16 -ftree-vectorize
 endif
 
 ifeq ($(MUTEX_ON_CACHELINE),0)
@@ -16,7 +18,7 @@ endif
 #CFLAGS +=  -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free
 
 CFLAGS += -Wall -Wextra -I./include -I./cybozulib/include
-CXXFLAGS = -std=c++14 -pthread $(CFLAGS)
+CXXFLAGS = -std=c++1z -pthread $(CFLAGS)
 #LDFLAGS = -latomic
 LDFLAGS = -Wl,-R,'$$ORIGIN' -L./
 #LDLIBS = -ltcmalloc_minimal
@@ -27,6 +29,16 @@ LDFLAGS = -Wl,-R,'$$ORIGIN' -L./
 ifeq ($(STATIC),1)
 LDFLAGS += -static -static-libgcc -static-libstdc++
 LDLIBS = -Wl,--whole-archive -lpthread -lrt -Wl,--no-whole-archive
+endif
+
+# Compiler specific options.
+ifeq ($(CXX_KIND),clang)
+  CXXFLAGS += -stdlib=libc++
+  #LDLIBS += -lcxxrt
+else
+  ifeq ($(findstring g++,$(CXX_KIND)),g++)
+    LDLIBS += -latomic  # for gcc-7 and later.
+  endif
 endif
 
 

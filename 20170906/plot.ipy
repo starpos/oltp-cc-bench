@@ -1,0 +1,51 @@
+#!/usr/bin/ipython3
+
+import collections
+import math
+
+lines = !grep compiler: expr.log
+
+data = []
+for kvs in (line.strip().split() for line in lines):
+    d = {}
+    for kv in kvs:
+        k, v = tuple(kv.split(':'))
+        d[k] = v
+    data.append(d)
+
+#print(data)
+
+def groupby(data, key_names, func):
+    '''
+    Args:
+        data: [{str:str}]
+        key_names: [str]
+        func: [{str:str}] -> T
+    Returns:
+        [T]
+    '''
+    def get_key(kv, key_names):
+        key_l = []
+        for key in key_names:
+            key_l.append(kv[key])
+        return tuple(key_l)
+    d = collections.defaultdict(list)
+    for kv in data:
+        key = get_key(kv, key_names)
+        d[key].append(kv)
+    l = []
+    for kv_list in d.values():
+        l.append(func(kv_list))
+    return l
+    
+
+def aggr(kv_list):
+    avg = sum(int(kv['success/s']) for kv in kv_list) / len(kv_list)
+    return kv_list[0]['compiler'], kv_list[0]['mode'], str(math.floor(avg / 100000) / 10) + 'Mops'
+    
+
+l = groupby(data, ['compiler', 'mode'], aggr)
+#print(l)
+for t in sorted(l):
+    print('\t'.join(map(str, t)))
+
