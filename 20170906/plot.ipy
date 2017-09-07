@@ -2,8 +2,9 @@
 
 import collections
 import math
+import sys
 
-lines = !grep compiler: expr.log
+lines = !grep compiler: {sys.argv[1]}
 
 data = []
 for kvs in (line.strip().split() for line in lines):

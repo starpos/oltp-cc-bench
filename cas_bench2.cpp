@@ -11,10 +11,15 @@ const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
 
 using uint128_t = __uint128_t;
 
+
+using ExprUInt = uint128_t;
+//using ExprUInt = uint64_t;
+
 alignas(16)
-uint128_t value_ = 0;
+ExprUInt value_ = 0;
 
 
+#if 0
 void worker0(size_t id, size_t& success, size_t& failure, const bool &start, const bool &quit)
 {
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[id]);
@@ -43,6 +48,7 @@ void worker0(size_t id, size_t& success, size_t& failure, const bool &start, con
     success = success0;
     failure = failure0;
 }
+#endif
 
 
 template <size_t atomic_kind>
@@ -59,11 +65,11 @@ void worker1(size_t id, size_t& success, size_t& failure, const bool &start, con
         _mm_pause();
     }
 
-    uint128_t v0;
-    my_atomic_load_16(value_, v0);
+    ExprUInt v0;
+    my_atomic_load(value_, v0);
     while (!quit) {
-        uint128_t v1 = v0 + 1;
-        if (my_atomic_compare_exchange_16<atomic_kind>(value_, v0, v1)) {
+        ExprUInt v1 = v0 + 1;
+        if (my_atomic_compare_exchange<atomic_kind>(value_, v0, v1)) {
             success0++;
             v0 = v1;
         } else {
@@ -82,6 +88,7 @@ void runBenchmark(Worker &&worker, const char *name, size_t nrTh, size_t nrSec)
     cybozu::thread::ThreadRunnerSet thSet;
     bool start = false, quit = false;
     std::vector<size_t> successV(nrTh), failureV(nrTh);
+    value_ = 0;
 
     for (size_t i = 0; i < nrTh; i++) {
         thSet.add([&,i]() {
@@ -100,14 +107,15 @@ void runBenchmark(Worker &&worker, const char *name, size_t nrTh, size_t nrSec)
         failure += failureV[i];
         //::printf("%02zu success %10zu failure %10zu\n", i, successV[i], failureV[i]);
     }
-    ::printf("%s success/s:%010zu failure/s:%010zu\n", name, success / nrSec, failure/ nrSec);
+    ::printf("%s success/s:%010zu failure/s:%010zu\n"
+             , name, success / nrSec, failure/ nrSec);
     ::fflush(::stdout);
 }
 
 
 int main()
 {
-    const size_t nrTh = 16;
+    const size_t nrTh = 32;
     const size_t nrSec = 10;
     const size_t nrLoop = 10;
 #if 0

@@ -1,7 +1,6 @@
-128bit CAS performance
+CAS performance
 
-
-build option: -Ofast -DNDEBUG -mtree-vectorize -mmcx16
+build option: -std=c++1z -Ofast -DNDEBUG -mmcx16 -ftree-vectorize -flto=thin
 (for gcc-7.2, use -latomic)
 (for clang-4.0.1, use -stdlib=libc++)
 
@@ -10,13 +9,63 @@ sync:   use __sync_val_compare_and_swap().
 asm:    inline assembly code using cmpxchg16b.
 
 CPU: Two Xeon E5-2450@2.10GHz processors (16 cores total, 32 threads total)
-Number of threads: 16
-Measurement: average of 10 times runs each of which measures succeeded CAS throughput under 10 seconds
+Measurement: average of 10 times runs each of which measures succeeded CAS throughput under 10 seconds.
+
 
 Result Throughput(Mops)
 
+
+128-bit CAS, number of threads: 1
+
              atomic sync   asm
-gcc-5.4      14.8   13.4   11.4
-gcc-6.4      14.8   13.2   12.4
-gcc-7.2      12.5   15.2   14.9
+gcc-5.4      71.4   59.5   57.1
+gcc-6.4      72.0   59.6   59.2
+gcc-7.2      59.1   60.1   59.8
+clang-4.0.1  74.8   70.0   57.8
+
+
+128-bit CAS, number of threads: 16
+
+             atomic sync   asm
+gcc-5.4      14.8   13.1   12.2
+gcc-6.4      14.5   13.3   12.1
+gcc-7.2      11.2   11.9   12.8
 clang-4.0.1  17.8   16.2   14.6
+
+
+128bit CAS, number of threads: 32
+
+             atomic sync   asm
+gcc-5.4       6.2    5.5    6.1
+gcc-6.4       7.9    7.8    7.7
+gcc-7.2       7.4    8.0    7.9
+clang-4.0.1   7.7    7.8    7.6
+
+
+64bit CAS, number of threads: 1
+
+             atomic sync   asm
+gcc-5.4      90.5   90.9   91.0
+gcc-6.4      90.9   91.1   91.1
+gcc-7.2      90.3   91.1   91.0
+clang-4.0.1  91.1   91.1   91.0
+
+
+
+64bit CAS, number of threads: 16
+
+             atomic sync   asm
+gcc-5.4      19.5   18.9   19.8
+gcc-6.4      20.0   19.3   18.7
+gcc-7.2      19.9   19.1   18.9
+clang-4.0.1  22.7   23.0   21.6
+
+
+64bit CAS, number of threads: 32
+
+             atomic sync   asm
+gcc-5.4       9.9    9.4    9.5
+gcc-6.4       9.8    9.4    9.5
+gcc-7.2      10.1    9.5    9.6
+clang-4.0.1  11.4   11.4   11.3
+

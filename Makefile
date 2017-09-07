@@ -1,5 +1,6 @@
 CXX = g++
 CXX_KIND = $(shell $(CXX) --version |head -n1 |cut -d ' ' -f 1)
+CXX_VERSION_GE_7 = $(shell test `$(CXX) -dumpversion |cut -d '.' -f 1` -ge 7 && echo true || echo false)
 
 ifeq ($(DEBUG),1)
     CFLAGS = -O0 -g -DDEBUG -mcx16
@@ -10,8 +11,11 @@ else
     CFLAGS = -Ofast -g -DNDEBUG -mcx16 -ftree-vectorize
 endif
 
-ifeq ($(MUTEX_ON_CACHELINE),0)
-else
+ifeq ($(LTO),1)
+    CFLAGS += -flto=thin
+endif
+
+ifneq ($(MUTEX_ON_CACHELINE),0)
     CFLAGS += -DMUTEX_ON_CACHELINE
 endif
 
@@ -37,7 +41,10 @@ ifeq ($(CXX_KIND),clang)
   #LDLIBS += -lcxxrt
 else
   ifeq ($(findstring g++,$(CXX_KIND)),g++)
-    LDLIBS += -latomic  # for gcc-7 and later.
+    ifeq ($(CXX_VERSION_GE_7),true)
+        LDLIBS += -latomic  # atomic builtin for 128bit requires libatomic from gcc-7.
+        CFLAGS += -fno-new-ttp-matching  # without this, cybozulib/option does not work well with -std=c++17.
+    endif
   endif
 endif
 
