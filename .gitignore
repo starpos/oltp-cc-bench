@@ -18,3 +18,5 @@ wait_die_bench
 atomic_inc
 nowait_bench
 cas_bench
+cas_bench2
+licc_bench
