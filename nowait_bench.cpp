@@ -170,7 +170,8 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
             bool abort = false;
             for (size_t i = 0; i < realNrOp; i++) {
                 Mode mode = getMode(i);
-                Mutex& mutex = muV[rand() % muV.size()];
+                const size_t key = rand() % muV.size();
+                Mutex& mutex = muV[key];
                 if (!lockSet.lock(mutex, mode)) {
                     abort = true;
                     break;
