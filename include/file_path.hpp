@@ -18,6 +18,7 @@
 #include <dirent.h>
 #include <cstdlib>
 #include <system_error>
+#include <sys/sysmacros.h>
 
 namespace cybozu {
 

@@ -2,15 +2,8 @@
 
 BIN=cas_bench2
 
-(
-make clean && make CXX=g++ LTO=1 $BIN
-./$BIN |ts 'compiler:gcc-5.4'
-make clean && make CXX=g++-6.4 LTO=1 $BIN
-./$BIN |ts 'compiler:gcc-6.4'
-make clean && make CXX=g++-7.2 LTO=1 $BIN
-./$BIN |ts 'compiler:gcc-7.2'
-make clean && make CXX=clang++-4.0 LTO=1 $BIN
-./$BIN |ts 'compiler:clang-4.0'
-make clean && make CXX=clang++-5.0 LTO=1 $BIN
-./$BIN |ts 'compiler:clang-5.0'
-) |tee expr.log
+for CXX in g++-5.4.0 g++-6.4.0 g++-7.2.0 clang++-4.0 clang++-5.0;
+do
+    make clean && make CXX=$CXX $BIN
+    ./$BIN |ts "compiler:$CXX"
+done |tee expr.log
