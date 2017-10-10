@@ -7,8 +7,8 @@ prefix = 'high-conflicts/high-conflicts'
 logpath = prefix + '.log'
 
 def classifier(d):
-    cond0 = d['nrMutex'] == '50' and d['nrOp'] == '10' and d['concurrency'] == '32' and d['workload'] == 'custom' and d['shortTxMode'] == '5'
-    if cond0 and (d['mode'] in ['nowait', 'wait-die', 'silo-occ', 'tictoc', 'trlock', 'trlock-occ']):
+    cond0 = d['nrMutex'] == '50' and d['nrOp'] == '10' and d['concurrency'] == '16' and d['workload'] == 'custom' and d['shortTxMode'] == '5'
+    if cond0 and (d['mode'] in ['nowait', 'wait-die', 'silo-occ', 'tictoc', 'trlock', 'trlock-occ', 'licc-pcc', 'licc-occ', 'licc-hybrid']):
         return d['mode']
     if cond0 and (d['mode'] in ['leis']):
         if d['vector'] == '0':
@@ -62,7 +62,7 @@ png1_path = prefix + '-throughput.png'
 png2_path = prefix + '-abort-rate.png'
 
 def make_graph_1(gp_path, plot_path):
-    name_li = ['nowait', 'wait-die', 'leis-map', 'leis-vec', 'silo-occ', 'tictoc', 'trlock', 'trlock-occ', 'trlock-hybrid', 'trlock-hybrid-pqmcs2']
+    name_li = ['nowait', 'wait-die', 'leis-map', 'leis-vec', 'silo-occ', 'tictoc', 'trlock', 'trlock-occ', 'trlock-hybrid', 'trlock-hybrid-pqmcs2', 'licc-pcc', 'licc-occ', 'licc-hybrid']
     with open(gp_path, 'w') as f:
         print('''
 set title "High-conflicts Tx (r(10-X)wXrnd) workload, 32 threads, 50 mutexes totally."
@@ -86,9 +86,12 @@ set style line 5 pt 6  ps ps0 lw lw0
 set style line 6 pt 8  ps ps0 lw lw0
 set style line 7 pt 10 ps ps0 lw lw0
 set style line 8 pt 12 ps ps0 lw lw0
-set style line 9 pt 5 ps ps0 lw lw0
+set style line 9 pt 5  ps ps0 lw lw0
 set style line 10 pt 7 ps ps0 lw lw0
 set style line 11 pt 9 ps ps0 lw lw0
+set style line 12 pt 11 ps ps0 lw lw0
+set style line 13 pt 13 ps ps0 lw lw0
+set style line 14 pt 14 ps ps0 lw lw0
 
 set ylabel "Throughput [10^6 tps]"
 set yrange [0.001:*]
