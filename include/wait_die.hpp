@@ -145,7 +145,12 @@ public:
                 if (txId < wd0.txId) {
                     wd1.txId = txId;
                 }
-                if (mutex_->compareAndSwap(wd0, wd1)) return true;
+                if (mutex_->compareAndSwap(wd0, wd1)) {
+#if 0 // debug
+                    ::printf("lock    %p %s\n", mutex, wd1.str().c_str());
+#endif
+                    return true;
+                }
                 continue;
             } else if (wd0.txId <= txId) {
                 break;
@@ -165,10 +170,15 @@ public:
             WaitDieData wd1 = wd0;
             assert(wd1.getLockState()->canClear(mode_));
             wd1.getLockState()->clear(mode_);
-            if (wd0.txId == txId_) {
+            if (wd0.txId == txId_ && wd1.getLockState()->isUnlocked()) {
                 wd1.txId = MAX_TXID;
             }
-            if (mutex_->compareAndSwap(wd0, wd1)) break;
+            if (mutex_->compareAndSwap(wd0, wd1)) {
+#if 0 // debug
+                ::printf("unlock  %p %s\n", mutex_, wd1.str().c_str());
+#endif
+                break;
+            }
         }
         init();
     }
@@ -182,6 +192,9 @@ public:
             wd1.getLockState()->set(Mode::X);
             if (mutex_->compareAndSwap(wd0, wd1)) {
                 mode_ = Mode::X;
+#if 0 // debug
+                ::printf("upgrade %p %s\n", mutex_, wd1.str().c_str());
+#endif
                 return true;
             }
         }
