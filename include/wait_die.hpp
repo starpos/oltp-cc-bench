@@ -18,6 +18,8 @@ using TxId = uint32_t;
 using TxId = uint64_t;
 #endif
 
+const TxId MAX_TXID = TxId(-1);
+
 struct WaitDieData
 {
     using Mode = cybozu::lock::LockStateXS::Mode;
@@ -45,21 +47,26 @@ struct WaitDieData
 
     WaitDieData() = default;
     void init() {
-#ifndef USE_64BIT_TXID
-        txId = UINT32_MAX;
-#else
-        txId = UINT64_MAX;
-#endif
+        txId = MAX_TXID;
         getLockState()->clearAll();
         reserved0 = 0;
         reserved1 = 0;
     }
+#ifndef USE_64BIT_TXID
     WaitDieData(uint64_t obj0) {
         obj = obj0;
     }
     operator uint64_t() const {
         return obj;
     }
+#else
+    WaitDieData(uint128_t obj0) {
+        obj = obj0;
+    }
+    operator uint128_t() const {
+        return obj;
+    }
+#endif
 
     cybozu::lock::LockStateXS* getLockState() {
         return (cybozu::lock::LockStateXS *)(&lkstObj);
@@ -158,6 +165,9 @@ public:
             WaitDieData wd1 = wd0;
             assert(wd1.getLockState()->canClear(mode_));
             wd1.getLockState()->clear(mode_);
+            if (wd0.txId == txId_) {
+                wd1.txId = MAX_TXID;
+            }
             if (mutex_->compareAndSwap(wd0, wd1)) break;
         }
         init();
