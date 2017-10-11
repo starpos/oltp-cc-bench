@@ -166,7 +166,7 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
-            assert(lockV.empty());
+            assert(lockSet.empty());
             bool abort = false;
             for (size_t i = 0; i < realNrOp; i++) {
                 Mode mode = getMode(i);
