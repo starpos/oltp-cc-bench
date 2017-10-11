@@ -272,19 +272,46 @@ private:
         }
     }
     bool tryLockX() {
+#if 0
         int v = __atomic_load_n(&v_, __ATOMIC_RELAXED);
         if (v != 0) return false;
         return __atomic_compare_exchange_n(&v_, &v, -1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+#else
+        // We should retry CAS.
+        int v = __atomic_load_n(&v_, __ATOMIC_RELAXED);
+        for (;;) {
+            if (v != 0) return false;
+            if (__atomic_compare_exchange_n(&v_, &v, -1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+                break;
+            }
+            _mm_pause();
+        }
+        return true;
+#endif
     }
     void unlockX() noexcept {
         __attribute__((unused)) int ret = __atomic_fetch_add(&v_, 1, __ATOMIC_RELEASE);
         assert(ret == -1);
     }
     bool tryLockS() {
+#if 0
         int v = __atomic_load_n(&v_, __ATOMIC_RELAXED);
         int w = v + 1;
         if (v < 0) return false;
         return __atomic_compare_exchange_n(&v_, &v, w, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+#else
+        // We should retry CAS.
+        int v = __atomic_load_n(&v_, __ATOMIC_RELAXED);
+        for (;;) {
+            if (v < 0) return false;
+            int w = v + 1;
+            if (__atomic_compare_exchange_n(&v_, &v, w, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+                break;
+            }
+            _mm_pause();
+        }
+        return true;
+#endif
     }
     void lockS() {
         for (;;) {
