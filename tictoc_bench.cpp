@@ -27,107 +27,6 @@ struct Shared
 enum class Mode : bool { S = false, X = true, };
 
 
-Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
-{
-    unused(shouldQuit);
-    cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
-
-    std::vector<Mutex>& muV = shared.muV;
-    const size_t longTxSize = shared.longTxSize;
-    const size_t nrOp = shared.nrOp;
-    const size_t nrWr = shared.nrWr;
-    const int shortTxMode = shared.shortTxMode;
-    const int longTxMode = shared.longTxMode;
-
-    Result res;
-    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
-    std::vector<size_t> muIdV(nrOp);
-    cybozu::tictoc::WriteSet ws;
-    cybozu::tictoc::ReadSet rs;
-    cybozu::tictoc::LockSet ls;
-    cybozu::tictoc::Flags flags;
-    std::vector<size_t> tmpV; // for fillMuIdVecArray.
-
-    // USE_MIX_TX
-    std::vector<bool> isWriteV(nrOp);
-    std::vector<size_t> tmpV2; // for fillModeVec.
-
-    // USE_LONG_TX_2
-    BoolRandom<decltype(rand)> boolRand(rand);
-
-    const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
-    if (isLongTx) {
-        muIdV.resize(longTxSize);
-    } else {
-        muIdV.resize(nrOp);
-        if (shortTxMode == USE_MIX_TX) {
-            isWriteV.resize(nrOp);
-        }
-    }
-    GetModeFunc<decltype(rand), Mode>
-        getMode(boolRand, isWriteV, isLongTx,
-                shortTxMode, longTxMode, muIdV.size(), nrWr);
-
-
-    while (!start) _mm_pause();
-    size_t count = 0; unused(count);
-    while (!quit) {
-        if (isLongTx) {
-            if (longTxSize > muV.size() * 5 / 1000) {
-                fillMuIdVecArray(muIdV, rand, muV.size(), tmpV);
-            } else {
-                fillMuIdVecLoop(muIdV, rand, muV.size());
-            }
-        } else {
-            fillMuIdVecLoop(muIdV, rand, muV.size());
-            if (shortTxMode == USE_MIX_TX) {
-                fillModeVec(isWriteV, rand, nrWr, tmpV2);
-            }
-        }
-
-        for (size_t retry = 0;; retry++) {
-            if (quit) break; // to quit under starvation.
-            // Try to run transaction.
-            for (size_t i = 0; i < muIdV.size(); i++) {
-                const bool isWrite = bool(getMode(i));
-
-                // read
-                cybozu::tictoc::Reader r;
-                r.prepare(&muV[muIdV[i]]);
-                for (;;) {
-                    // should read data here.
-                    r.readFence();
-                    if (r.isReadSucceeded()) break;
-                    r.prepareRetry();
-                }
-                rs.push_back(std::move(r));
-                if (isWrite) {
-                    // write
-                    ws.emplace_back(&muV[muIdV[i]]);
-                }
-            }
-            if (!cybozu::tictoc::preCommit(rs, ws, ls, flags)) {
-                res.incAbort(isLongTx);
-                continue;
-            }
-            res.incCommit(isLongTx);
-            res.addRetryCount(isLongTx, retry);
-            break;
-        }
-
-#if 0
-        // This is starvation expr only
-        count++;
-        if (isLongTx && (longTxSize >= 1 * muV.size() / 100) && count >= 5) {
-            shouldQuit = true;
-            break;
-        }
-#endif
-    }
-    return res;
-}
-
-
 Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
@@ -157,10 +56,11 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     if (!isLongTx && shortTxMode == USE_MIX_TX) {
         isWriteV.resize(nrOp);
     }
+#if 0
     GetModeFunc<decltype(rand), Mode>
         getMode(boolRand, isWriteV, isLongTx,
                 shortTxMode, longTxMode, realNrOp, nrWr);
-
+#endif
 
     while (!start) _mm_pause();
     size_t count = 0; unused(count);
@@ -169,25 +69,40 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
             fillModeVec(isWriteV, rand, nrWr, tmpV2);
         }
 
+        size_t firstRecIdx;
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
             // Try to run transaction.
             for (size_t i = 0; i < realNrOp; i++) {
+#if 0
                 const bool isWrite = bool(getMode(i));
-                Mutex& mutex = muV[rand() % muV.size()];
+#else
+                const bool isWrite = bool(
+                    getMode<decltype(rand), Mode>(
+                        boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
+                        realNrOp, nrWr, i));
+#endif
+                const size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode,
+                                               muV.size(), realNrOp, i, firstRecIdx);
+                Mutex& mutex = muV[key];
                 localSet.read(mutex);
                 if (isWrite) {
                     localSet.write(mutex);
                 }
             }
             if (!localSet.preCommit()) {
-                localSet.clear();
-                res.incAbort(isLongTx);
-                continue;
+                goto abort;
             }
             res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);
             break;
+          abort:
+            localSet.clear();
+            res.incAbort(isLongTx);
+#if 0 // Backoff
+            const size_t n = rand() % (retry < 10 ? (1 << (retry + 10)) : 1 << 20);
+            for (size_t i = 0; i < n; i++) _mm_pause();
+#endif
         }
     }
     return res;

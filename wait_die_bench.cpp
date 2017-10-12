@@ -32,120 +32,6 @@ struct Shared
 
 
 template <int txIdGenType>
-Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
-{
-    unused(shouldQuit);
-    cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
-
-    std::vector<Mutex>& muV = shared.muV;
-    const size_t longTxSize = shared.longTxSize;
-    const size_t nrOp = shared.nrOp;
-    const size_t nrWr = shared.nrWr;
-    const int shortTxMode = shared.shortTxMode;
-    const int longTxMode = shared.longTxMode;
-
-    Result res;
-    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
-    std::vector<size_t> muIdV(nrOp);
-    std::vector<Lock> lockV;
-    std::vector<size_t> tmpV; // for fillMuIdVecArray.
-
-    PriorityIdGenerator<12> priIdGen;
-    priIdGen.init(idx + 1);
-    TxIdGenerator localTxIdGen(&shared.globalTxIdGen);
-
-    // USE_MIX_TX
-    std::vector<bool> isWriteV(nrOp);
-    std::vector<size_t> tmpV2; // for fillModeVec.
-
-    // USE_LONG_TX_2
-    BoolRandom<decltype(rand)> boolRand(rand);
-
-
-    const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
-    if (isLongTx) {
-        muIdV.resize(longTxSize);
-    } else {
-        muIdV.resize(nrOp);
-        if (shortTxMode == USE_MIX_TX) {
-            isWriteV.resize(nrOp);
-        }
-    }
-    GetModeFunc<decltype(rand), Mode>
-        getMode(boolRand, isWriteV, isLongTx,
-                shortTxMode, longTxMode, muIdV.size(), nrWr);
-
-
-    while (!start) _mm_pause();
-    size_t count = 0; unused(count);
-    while (!quit) {
-        if (isLongTx) {
-            if (longTxSize > muV.size() * 5 / 1000) { // over 0.5%
-                fillMuIdVecArray(muIdV, rand, muV.size(), tmpV);
-            } else {
-                fillMuIdVecLoop(muIdV, rand, muV.size());
-            }
-        } else {
-            fillMuIdVecLoop(muIdV, rand, muV.size());
-            if (shortTxMode == USE_MIX_TX) {
-                fillModeVec(isWriteV, rand, nrWr, tmpV2);
-            }
-        }
-
-        // Do not sort with noWait mode.
-        //std::sort(muIdV.begin(), muIdV.end());
-
-        uint64_t txId;
-        if (txIdGenType == SCALABLE_TXID_GEN) {
-            txId = priIdGen.get(isLongTx ? 0 : 1);
-        } else if (txIdGenType == BULK_TXID_GEN) {
-            txId = localTxIdGen.get();
-        } else if (txIdGenType == SIMPLE_TXID_GEN) {
-            txId = shared.simpleTxIdGen.get();
-        } else {
-            throw cybozu::Exception("bad txIdGenType") << txIdGenType;
-        }
-
-        for (size_t retry = 0;; retry++) {
-            if (quit) break; // to quit under starvation.
-            assert(lockV.empty());
-            bool abort = false;
-            const size_t sz = muIdV.size();
-            unused(sz);
-            for (size_t i = 0; i < muIdV.size(); i++) {
-                Mode mode = getMode(i);
-                lockV.emplace_back();
-                if (!lockV.back().lock(&muV[muIdV[i]], mode, txId)) {
-                    res.incAbort(isLongTx);
-                    abort = true;
-                    break;
-                }
-            }
-            if (abort) {
-                lockV.clear();
-                continue;
-            }
-
-            res.incCommit(isLongTx);
-            lockV.clear();
-            res.addRetryCount(isLongTx, retry);
-            break; // retry is not required.
-        }
-
-#if 0
-        // This is starvation expr only.
-        count++;
-        if (isLongTx && (longTxSize >= 5 * muV.size() / 100) && count >= 5) {
-            shouldQuit = true;
-            break;
-        }
-#endif
-    }
-    return res;
-}
-
-
-template <int txIdGenType>
 Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
@@ -180,10 +66,11 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     if (!isLongTx && shortTxMode == USE_MIX_TX) {
         isWriteV.resize(nrOp);
     }
+#if 0
     GetModeFunc<decltype(rand), Mode>
         getMode(boolRand, isWriteV, isLongTx,
                 shortTxMode, longTxMode, realNrOp, nrWr);
-
+#endif
 
     while (!start) _mm_pause();
     size_t count = 0; unused(count);
@@ -203,14 +90,23 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
             throw cybozu::Exception("bad txIdGenType") << txIdGenType;
         }
         lockSet.setTxId(txId);
-
+        size_t firstRecIdx;
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
             assert(lockSet.empty());
             bool abort = false;
             for (size_t i = 0; i < realNrOp; i++) {
+#if 0
                 Mode mode = getMode(i);
-                Mutex& mutex = muV[rand() % muV.size()];
+#else
+                Mode mode = getMode<decltype(rand), Mode>(
+                    boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
+                    realNrOp, nrWr, i);
+#endif
+                size_t key = getRecordIdx(
+                    rand, isLongTx, shortTxMode, longTxMode,
+                    muV.size(), realNrOp, i, firstRecIdx);
+                Mutex& mutex = muV[key];
                 if (!lockSet.lock(mutex, mode)) {
                     abort = true;
                     break;

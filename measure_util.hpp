@@ -14,6 +14,7 @@
 #include "random.hpp"
 #include "cmdline_option.hpp"
 #include "thread_util.hpp"
+#include "cybozu/exception.hpp"
 
 
 constexpr size_t CACHE_LINE_SIZE = 64;
@@ -346,6 +347,9 @@ enum TxMode
     USE_WRITEONLY_TX = 3,
     USE_HALF_AND_HALF_TX = 4,
     USE_MIX_TX = 5,
+    USE_LAST_WRITE_HC_TX = 6,
+    USE_FIRST_WRITE_HC_TX = 7,
+    TXMODE_MAX = 8,
 };
 
 enum TxIdGenType
@@ -356,7 +360,7 @@ enum TxIdGenType
 };
 
 
-
+#if 0 // deprecated
 template <typename Random, typename Mode>
 class GetModeFunc
 {
@@ -401,6 +405,9 @@ public:
             case USE_FIRST_WRITE_TX:
                 getMode_ = &GetModeFunc::getShort<USE_FIRST_WRITE_TX>;
                 break;
+            case USE_LAST_WRITE_HC_TX:
+                getMode_ = &GetModeFunc::getShort<USE_LAST_WRITE_HC_TX>;
+                break;
             default:
                 getMode_ = &GetModeFunc::getShort<USE_LAST_WRITE_TX>;
             }
@@ -421,9 +428,10 @@ public:
         case USE_WRITEONLY_TX:
             return Mode::X;
         case USE_FIRST_WRITE_TX:
+        case USE_FIRST_WRITE_HC_TX:
             return i < nrWr_ ? Mode::X : Mode::S;
         default:
-            assert(shortTxMode == USE_LAST_WRITE_TX);
+            assert(shortTxMode == USE_LAST_WRITE_TX || shortTxMode == USE_LAST_WRITE_HC_TX);
             return i >= sz_ - nrWr_ ? Mode::X : Mode::S;
         }
     }
@@ -442,3 +450,118 @@ public:
         }
     }
 };
+#endif
+
+
+template <typename Random, typename Mode>
+Mode getMode(BoolRandom<Random>& boolRand, const std::vector<bool>& isWriteV,
+             bool isLongTx, int shortTxMode, int longTxMode,
+             size_t nrOp, size_t nrWr, size_t i)
+{
+    if (isLongTx) {
+        switch (longTxMode) {
+        case USE_HALF_AND_HALF_TX:
+            return boolRand() ? Mode::X : Mode::S;
+        case USE_READONLY_TX:
+            return Mode::S;
+        case USE_FIRST_WRITE_TX:
+            return i < nrWr ? Mode::X : Mode::S;
+        default:
+            assert(longTxMode == USE_LAST_WRITE_TX);
+            return i >= nrOp - nrWr ? Mode::X : Mode::S;
+        }
+    } else {
+        switch (shortTxMode) {
+        case USE_MIX_TX:
+            return isWriteV[i] ? Mode::X : Mode::S;
+        case USE_HALF_AND_HALF_TX:
+            return boolRand() ? Mode::X : Mode::S;
+        case USE_READONLY_TX:
+            return Mode::S;
+        case USE_WRITEONLY_TX:
+            return Mode::X;
+        case USE_FIRST_WRITE_TX:
+        case USE_FIRST_WRITE_HC_TX:
+            return i < nrWr ? Mode::X : Mode::S;
+        default:
+            assert(shortTxMode == USE_LAST_WRITE_TX || shortTxMode == USE_LAST_WRITE_HC_TX);
+            return i >= nrOp - nrWr ? Mode::X : Mode::S;
+        }
+    }
+}
+
+
+#if 0 // deprected.
+template <typename Random>
+class GetRecordIdxFunc
+{
+    size_t (GetRecordIdxFunc::*getIdx_)(size_t);
+    Random& rand_;
+    size_t nrMu_;
+    size_t nrOp_;
+    int firstRecIdx_; // state for USE_LAST_WRITE_HC_TX.
+
+public:
+    GetRecordIdxFunc(Random& rand, bool isLongTx, int shortTxMode, int longTxMode, size_t nrMu, size_t nrOp)
+        : getIdx_(), rand_(rand), nrMu_(nrMu), nrOp_(nrOp), firstRecIdx_() {
+        if (isLongTx) {
+            unused(longTxMode);
+            getIdx_ = &GetRecordIdxFunc::getLong;
+        } else {
+            switch (shortTxMode) {
+            case USE_LAST_WRITE_HC_TX:
+                getIdx_ = &GetRecordIdxFunc::getShort<USE_LAST_WRITE_HC_TX>;
+                if (nrOp_ < 2) {
+                    throw cybozu::Exception("USE_LAST_WRITE_HC_TX requires more than 2 mutexes.");
+                }
+                break;
+            default:
+                getIdx_ = &GetRecordIdxFunc::getShort<TXMODE_MAX>;
+            }
+        }
+    }
+
+    size_t operator()(size_t i) {
+        return (this->*getIdx_)(i);
+    }
+
+    size_t getLong(size_t) {
+        return rand_() % nrMu_;
+    }
+
+    template <int shortTxMode>
+    size_t getShort(size_t i) {
+        switch (shortTxMode) {
+        case USE_LAST_WRITE_HC_TX:
+            if (i == 0) {
+                firstRecIdx_ = rand_() & 0x1;
+                return firstRecIdx_;
+            } else if (i == nrOp_ - 1) {
+                return 1 - firstRecIdx_;
+            } else {
+                return rand() % nrMu_;
+            }
+        default:
+            return rand_() % nrMu_;
+        }
+    }
+};
+#endif
+
+template <typename Random>
+size_t getRecordIdx(Random& rand, bool isLongTx, int shortTxMode, int longTxMode,
+                    size_t nrMu, size_t nrOp, size_t i, size_t& firstRecIdx)
+{
+    unused(longTxMode);
+    if (!isLongTx && (shortTxMode == USE_LAST_WRITE_HC_TX || shortTxMode == USE_FIRST_WRITE_HC_TX)) {
+        if (i == 0) {
+            firstRecIdx = rand() & 0x1;
+            return firstRecIdx;
+        } else if (i == nrOp - 1) {
+            return 1 - firstRecIdx;
+        } else {
+            return rand() % nrMu;
+        }
+    }
+    return rand() % nrMu;
+}

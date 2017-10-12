@@ -34,7 +34,9 @@ struct CmdLineOption : cybozu::Option
         appendOpt(&longTxSize, 0, "long-tx-size", "[size]: long tx size for shortlong workload. 0 means no long tx.");
         appendOpt(&nrOp, 4, "nrop", "[num]: number of operations of short transactions (default:4).");
         appendOpt(&nrWr, 2, "nrwr", "[num]: number of write operations of short transactions (default:2).");
-        appendOpt(&shortTxMode, 0, "sm", "[id]: short Tx mode (0:last-writes, 1:first-writes, 2:read-only, 3:write-only, 4:half-and-half, 5:mix)");
+        appendOpt(&shortTxMode, 0, "sm", "[id]: short Tx mode "
+                  "(0:last-writes, 1:first-writes, 2:read-only, 3:write-only, 4:half-and-half, 5:mix, "
+                  "6:last-writes-hc, 7:first-writes-hc)");
         appendOpt(&longTxMode, 0, "lm", "[id]: long Tx mode (0:last-writes, 1:first-writes, 2:read-only, 4:half-and-half)");
         appendBoolOpt(&verbose, "v", ": puts verbose messages.");
         appendHelp("h", ": put this message.");

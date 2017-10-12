@@ -348,10 +348,6 @@ Result tWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
             isWriteV.resize(nrOp);
         }
     }
-    GetModeFunc<decltype(rand), Mode>
-        getMode(boolRand, isWriteV, isLongTx,
-                shortTxMode, longTxMode, muIdV.size(), nrWr);
-
 
     while (!start) _mm_pause();
     size_t count = 0; unused(count);
@@ -396,7 +392,9 @@ Result tWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
             }
 #endif
             for (size_t i = 0; i < muIdV.size(); i++) {
-                Mode mode = getMode(i);
+                Mode mode = getMode<decltype(rand), Mode>(
+                    boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
+                    nrOp, nrWr, i);
 #ifdef MONITOR
                 {
                     Spinlock lk(&txInfo.mutex);
@@ -882,10 +880,6 @@ Result iWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     } else {
         muIdV.resize(nrOp);
     }
-    GetModeFunc<decltype(rand), IMode>
-        getMode(boolRand, isWriteV, isLongTx,
-                shortTxMode, longTxMode, muIdV.size(), nrWr);
-
 
     while (!start) _mm_pause();
     size_t count = 0; unused(count);
@@ -927,7 +921,9 @@ Result iWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
             assert(readSet.empty());
 
             for (size_t i = 0; i < muIdV.size(); i++) {
-                IMode mode = getMode(i);
+                IMode mode = getMode<decltype(rand), IMode>(
+                    boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
+                    nrOp, nrWr, i);
 
                 IMutex &mutex = muV[muIdV[i]];
                 if (mode == IMode::S) {
@@ -1092,9 +1088,11 @@ Result iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     if (!isLongTx && shortTxMode == USE_MIX_TX) {
         isWriteV.resize(nrOp);
     }
+#if 0
     GetModeFunc<decltype(rand), IMode>
         getMode(boolRand, isWriteV, isLongTx,
                 shortTxMode, longTxMode, realNrOp, nrWr);
+#endif
 
     cybozu::lock::ILockSet<PQLock> lockSet;
 
@@ -1120,12 +1118,22 @@ Result iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         assert(lockSet.isEmpty());
         lockSet.setPriorityId(priId);
 
+        size_t firstRecIdx;
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
 
             for (size_t i = 0; i < realNrOp; i++) {
+#if 0
                 IMode mode = getMode(i);
-                IMutex &mutex = muV[rand() % muV.size()];
+#else
+                IMode mode = getMode<decltype(rand), IMode>(
+                    boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
+                    realNrOp, nrWr, i);
+
+#endif
+                size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode,
+                                          muV.size(), realNrOp, i, firstRecIdx);
+                IMutex &mutex = muV[key];
 
 #if 0
                 ::printf("%p mutex:%p mode:%hhu  %s\n", &lockSet, &mutex, mode, mutex.atomicLoad().str().c_str()); // QQQQQ

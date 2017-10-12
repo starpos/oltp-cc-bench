@@ -57,10 +57,11 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
     if (!isLongTx && shortTxMode == USE_MIX_TX) {
         isWriteV.resize(nrOp);
     }
+#if 0
     GetModeFunc<decltype(rand), Mode>
         getMode(boolRand, isWriteV, isLongTx,
                 shortTxMode, longTxMode, realNrOp, nrWr);
-
+#endif
 
     while (!start) _mm_pause();
     size_t count = 0; unused(count);
@@ -69,13 +70,21 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
             fillModeVec(isWriteV, rand, nrWr, tmpV2);
         }
 
+        size_t firstRecIdx;
         assert(llSet.empty());
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
             bool abort = false;
             for (size_t i = 0; i < realNrOp; i++) {
+#if 0
                 Mode mode = getMode(i);
-                Mutex& mutex = muV[rand() % muV.size()];
+#else
+                Mode mode = getMode<decltype(rand), Mode>(
+                    boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
+                    realNrOp, nrWr, i);
+#endif
+                size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode, muV.size(), realNrOp, i, firstRecIdx);
+                Mutex& mutex = muV[key];
                 if (!llSet.lock(&mutex, mode)) {
                     res.incAbort(isLongTx);
                     abort = true;

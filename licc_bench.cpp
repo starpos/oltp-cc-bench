@@ -105,9 +105,15 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     ordIdGen.workerId = idx;
     cybozu::lock::EpochGenerator epochGen;
 
+#if 0
     GetModeFunc<decltype(rand), IMode>
         getMode(boolRand, isWriteV, isLongTx,
                 shortTxMode, longTxMode, realNrOp, nrWr);
+#endif
+#if 0
+    GetRecordIdxFunc<decltype(rand)>
+        getRecordIdx(rand, isLongTx, shortTxMode, longTxMode, muV.size(), realNrOp);
+#endif
 
     cybozu::lock::ILockSet lockSet;
 
@@ -122,15 +128,30 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 
         lockSet.init(ordId);
         //::printf("Tx begin\n"); // debug code
+        size_t firstRecIdx;
 
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
             assert(lockSet.isEmpty());
-
+            //::printf("begin\n"); // QQQQQ
             for (size_t i = 0; i < realNrOp; i++) {
                 //::printf("op %zu\n", i); // debug code
+#if 0
                 IMode mode = getMode(i);
-                IMutex& mutex = muV[rand() % muV.size()];
+#else
+                IMode mode = getMode<decltype(rand), IMode>(
+                    boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
+                    realNrOp, nrWr, i);
+#endif
+#if 0
+                size_t key = getRecordIdx(i);
+#elif 1
+                size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode, muV.size(), realNrOp, i, firstRecIdx);
+#else
+                size_t key = rand() % muV.size();
+#endif
+                //::printf("mode %c key %zu\n", mode == IMode::S ? 'S' : 'X', key); // QQQQQ
+                IMutex& mutex = muV[key];
 
                 if (mode == IMode::S) {
                     const bool tryInvisibleRead =
@@ -138,7 +159,7 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
                         (rmode == ReadMode::HYBRID && !isLongTx && retry == 0);
                     if (tryInvisibleRead) {
                         lockSet.invisibleRead(mutex);
-                    } else if (mode == IMode::S) {
+                    } else {
                         if (!lockSet.reservedRead(mutex)) goto abort;
                     }
                 } else {
@@ -156,6 +177,10 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
           abort:
             res.incAbort(isLongTx);
             lockSet.clear();
+#if 0 // Backoff
+            const size_t n = rand() % (1 << (retry + 10));
+            for (size_t i = 0; i < n; i++) _mm_pause();
+#endif
         }
     }
     return res;
