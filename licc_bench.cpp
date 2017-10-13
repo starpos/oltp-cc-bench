@@ -3,6 +3,8 @@
 #include "cmdline_option.hpp"
 #include "measure_util.hpp"
 #include "cpuid.hpp"
+#include "time.hpp"
+#include <algorithm>
 
 
 struct CmdLineOptionPlus : CmdLineOption
@@ -117,6 +119,14 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 
     cybozu::lock::ILockSet lockSet;
 
+    //std::unordered_map<size_t, size_t> retryMap;
+    uint64_t tdiffTotal = 0;
+    uint64_t count = 0;
+
+    uint64_t nrSuccess = 1000; // initial abort rate is 0.1%.
+    uint64_t nrAbort = 1;
+    size_t factor = 1;
+
     while (!start) _mm_pause();
     while (!quit) {
         if (!isLongTx && shortTxMode == USE_MIX_TX) {
@@ -134,6 +144,7 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
             if (quit) break; // to quit under starvation.
             assert(lockSet.isEmpty());
             //::printf("begin\n"); // QQQQQ
+	    const uint64_t t0 = cybozu::time::rdtscp();
             for (size_t i = 0; i < realNrOp; i++) {
                 //::printf("op %zu\n", i); // debug code
 #if 0
@@ -173,6 +184,8 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
             lockSet.updateAndUnlock();
             res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);
+            //retryMap[retry]++;
+            nrSuccess++;
             break;
           abort:
             res.incAbort(isLongTx);
@@ -180,9 +193,51 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 #if 0 // Backoff
             const size_t n = rand() % (1 << (retry + 10));
             for (size_t i = 0; i < n; i++) _mm_pause();
+#elif 1
+            nrAbort++;
+            // Adaptive backoff.
+            const uint64_t t1 = cybozu::time::rdtscp();
+            const uint64_t tdiff = std::max<uint64_t>(t1 - t0, 2);
+            tdiffTotal += tdiff; count++;
+            uint64_t waittic = rand() % (tdiff << std::min<size_t>(retry + 1, 10));
+            //uint64_t waittic = rand() % (tdiff << 18);
+            uint64_t t2 = t1;
+            while (t2 - t1 < waittic) {
+                _mm_pause();
+                t2 = cybozu::time::rdtscp();
+            }
+#elif 0
+            nrAbort++;
+            if ((rand() & 0x1) == 0) continue; // do not use backoff.
+            if (nrAbort < 10000) {
+                // do noghint
+            } else if (nrAbort * 10 / (nrSuccess + nrAbort) > 0) {
+                // Abort rate > 10%
+                factor = std::min<size_t>(factor + 1, 20);
+            } else if (nrAbort * 10 / (nrSuccess + nrAbort) == 0) {
+                // Abort rate < 10%
+                factor = std::max<size_t>(factor - 1, 1);
+            }
+            if (nrSuccess + nrAbort > UINT64_MAX / 2) {
+                nrSuccess /= 2;
+                nrAbort = std::max<uint64_t>(nrAbort / 2, 1);
+            }
+            const uint64_t t1 = cybozu::time::rdtscp();
+            const uint64_t tdiff = std::max<uint64_t>(t1 - t0, 2);
+            uint64_t waittic = rand() % (tdiff << factor);
+            uint64_t t2 = t1;
+            while (t2 - t1 < waittic) {
+                _mm_pause();
+	        t2 = cybozu::time::rdtscp();
+	    }
 #endif
         }
     }
+    //for (const auto& pair: retryMap) {
+     //   ::printf("retry:%zu\tcount:%zu\n", pair.first, pair.second);
+    //}
+    //::printf("%zu\n", tdiffTotal / count);
+    //::printf("idx %zu factor %zu nrSuccess %zu nrAbort %zu\n", idx, factor, nrSuccess, nrAbort);
     return res;
 }
 
