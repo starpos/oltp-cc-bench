@@ -191,6 +191,12 @@ struct Holder : public HolderBase {
 	const void *get() const { return (void*)p_; }
 };
 
+/*
+	for gcc 7 with -fnew-ttp-matching
+	this specialization is not necessary under -fno-new-ttp-matching
+*/
+template struct Holder<std::string>;
+
 template<class T, class Alloc, template<class T_, class Alloc_>class Container>
 struct Holder<Container<T, Alloc> > : public HolderBase {
 	typedef Container<T, Alloc> Vec;
@@ -272,7 +278,7 @@ class Option {
 		std::string opt; // option param name without '-'
 		std::string help; // description of option
 
-		Info() : mode(N_is0) {}
+		Info() : mode(N_is0), isMust(false) {}
 		template<class T>
 		Info(T* pvar, Mode mode, bool isMust, const char *opt, const std::string& help)
 			: var(pvar)
