@@ -43,7 +43,6 @@ else
   ifeq ($(findstring g++,$(CXX_KIND)),g++)
     ifeq ($(CXX_VERSION_GE_7),true)
         LDLIBS += -latomic  # atomic builtin for 128bit requires libatomic from gcc-7.
-        CFLAGS += -fno-new-ttp-matching  # without this, cybozulib/option does not work well with -std=c++17.
     endif
   endif
 endif
