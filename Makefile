@@ -38,6 +38,7 @@ endif
 # Compiler specific options.
 ifeq ($(CXX_KIND),clang)
   CXXFLAGS += -stdlib=libc++
+  LDFLAGS += --rtlib=compiler-rt
 else
   ifeq ($(findstring g++,$(CXX_KIND)),g++)
     ifeq ($(CXX_VERSION_GE_7),true)
