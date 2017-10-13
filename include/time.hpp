@@ -59,6 +59,14 @@ public:
     }
 };
 
+
+uint64_t rdtscp()
+{
+    uint32_t eax, edx, ecx;
+    __asm__ volatile ("rdtscp" : "=a" (eax), "=d" (edx), "=c" (ecx));
+    return (uint64_t)edx << 32 | eax;
+}
+
 }} // namespace cybozu::time
 
 #endif /* CYBOZU_TIME_HPP */
