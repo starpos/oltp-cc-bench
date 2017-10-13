@@ -11,9 +11,236 @@
 #include <vector>
 #include "lock.hpp"
 
+#if 0
+// XSLock with helper MCS lock
+#define USE_LEIS_MCS
+#undef USE_LEIS_SXQL
+#elif 0
+// Shared eXclusive Queuing Lock (original)
+#include "sxql.hpp"
+#undef USE_LEIS_MCS
+#define USE_LEIS_SXQL
+#else
+// Normal XSLock
+#endif
+
+
 
 namespace cybozu {
 namespace lock {
+
+
+
+struct MutexWithMcs
+{
+    using Mode = XSMutex::Mode;
+
+    int obj;
+    McsSpinlock::Mutex mcsMu;
+
+    MutexWithMcs() : obj(0), mcsMu() {
+    }
+
+    bool compareAndSwap(int& before, int after) {
+        return __atomic_compare_exchange_n(&obj, &before, after, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    }
+    int atomicLoad() const {
+        return __atomic_load_n(&obj, __ATOMIC_ACQUIRE);
+    }
+    void store(int after) {
+        obj = after;
+        __atomic_thread_fence(__ATOMIC_RELEASE);
+    }
+    int atomicFetchAdd(int value) {
+        return __atomic_fetch_add(&obj, value, __ATOMIC_RELEASE);
+    }
+    int atomicFetchSub(int value) {
+        return __atomic_fetch_sub(&obj, value, __ATOMIC_RELEASE);
+    }
+    std::string str() const {
+        return cybozu::util::formatString("MutexWithMcs(%d)", obj);
+    }
+};
+
+
+#if 0
+size_t getThreadId()
+{
+    std::hash<std::thread::id> hasher;
+    return hasher(std::this_thread::get_id());
+}
+#endif
+
+
+class LockWithMcs
+{
+public:
+    using Mutex = MutexWithMcs;
+    using Mode = Mutex::Mode;
+private:
+    Mutex *mutex_;
+    Mode mode_;
+public:
+    LockWithMcs() : mutex_(nullptr), mode_(Mode::Invalid) {
+    }
+    LockWithMcs(Mutex* mutex, Mode mode) : LockWithMcs() {
+        lock(mutex, mode);
+        verify();
+    }
+    ~LockWithMcs() noexcept {
+        unlock();
+        verify();
+    }
+    LockWithMcs(const LockWithMcs&) = delete;
+    LockWithMcs(LockWithMcs&& rhs) : LockWithMcs() { swap(rhs); verify(); }
+    LockWithMcs& operator=(const LockWithMcs&) = delete;
+    LockWithMcs& operator=(LockWithMcs&& rhs) { swap(rhs); verify(); return *this; }
+
+    // debug
+    void verify() const {
+#if 0
+        if (mode_ == Mode::X || mode_ == Mode::S) {
+            assert(mutex_);
+        } else {
+            assert(mode_ == Mode::Invalid);
+        }
+#endif
+    }
+    std::string str() const {
+        return cybozu::util::formatString("LockWithMcs mutex:%p mode:%hhu", mutex_, mode_);
+    }
+
+    void lock(Mutex* mutex, Mode mode) {
+        verify();
+        assert(mutex);
+        assert(!mutex_);
+        assert(mode_ == Mode::Invalid);
+
+        mutex_ = mutex;
+        mode_ = mode;
+        int v = mutex_->atomicLoad();
+        if (mode == Mode::X) {
+            for (;;) {
+                if (v != 0) waitForWrite(v);
+                if (mutex_->compareAndSwap(v, -1)) {
+                    return;
+                }
+            }
+        }
+        assert(mode == Mode::S);
+        for (;;) {
+            if (v < 0) waitForRead(v);
+            if (mutex_->compareAndSwap(v, v + 1)) {
+                return;
+            }
+        }
+    }
+    bool tryLock(Mutex* mutex, Mode mode) {
+        verify();
+        assert(mutex);
+        assert(!mutex_);
+        assert(mode_ == Mode::Invalid);
+        assert(mode != Mode::Invalid);
+
+        int v = mutex->atomicLoad();
+        if (mode == Mode::X) {
+            while (v == 0) {
+                if (mutex->compareAndSwap(v, -1)) {
+                    mutex_ = mutex;
+                    mode_ = mode;
+                    return true;
+                }
+                _mm_pause();
+            }
+            return false;
+        }
+        assert(mode == Mode::S);
+        while (v >= 0) {
+            if (mutex->compareAndSwap(v, v + 1)) {
+                mutex_ = mutex;
+                mode_ = mode;
+                return true;
+            }
+            _mm_pause();
+        }
+        return false;
+    }
+    bool tryUpgrade() {
+        verify();
+        assert(mutex_);
+        assert(mode_ == Mode::S);
+
+        int v = mutex_->atomicLoad();
+        while (v == 1) {
+            if (mutex_->compareAndSwap(v, -1)) {
+                mode_ = Mode::X;
+                return true;
+            }
+            _mm_pause();
+        }
+        return false;
+    }
+    void unlock() noexcept {
+        verify();
+        if (mode_ == Mode::Invalid) {
+            mutex_ = nullptr;
+            return;
+        }
+        assert(mutex_);
+
+        if (mode_ == Mode::X) {
+            int ret = mutex_->atomicFetchAdd(1);
+            unusedVar(ret);
+            //mutex_->store(0);
+            assert(ret == -1);
+        } else {
+            assert(mode_ == Mode::S);
+            int ret = mutex_->atomicFetchSub(1);
+            unusedVar(ret);
+            assert(ret >= 1);
+        }
+        mode_ = Mode::Invalid;
+        mutex_ = nullptr;
+    }
+
+    bool isShared() const { return mode_ == Mode::S; }
+    const Mutex* mutex() const { return mutex_; }
+    Mutex* mutex() { return mutex_; }
+    uintptr_t getMutexId() const { return uintptr_t(mutex_); }
+    Mode mode() const { return mode_; }
+
+    // This is used for dummy object to comparison.
+    void setMutex(Mutex *mutex) {
+        mutex_ = mutex;
+        mode_ = Mode::Invalid;
+    }
+
+private:
+    void waitForWrite(int& v) {
+        McsSpinlock lock(&mutex_->mcsMu);
+        // Up to one thread can spin.
+        v = mutex_->atomicLoad();
+        while (v != 0) {
+            _mm_pause();
+            v = mutex_->atomicLoad();
+        }
+    }
+    void waitForRead(int& v) {
+        McsSpinlock lock(&mutex_->mcsMu);
+        // Up to one thread can spin.
+        v = mutex_->atomicLoad();
+        while (v < 0) {
+            _mm_pause();
+            v = mutex_->atomicLoad();
+        }
+    }
+    void swap(LockWithMcs& rhs) {
+        rhs.verify();
+        std::swap(mutex_, rhs.mutex_);
+        std::swap(mode_, rhs.mode_);
+    }
+};
+
 
 /**
  * Usage:
@@ -29,13 +256,26 @@ class LeisLockSet
 };
 
 
+/*
+ * Use std::map.
+ */
 template <>
 class LeisLockSet<1>
 {
 public:
+#ifdef USE_LEIS_MCS
+    using Lock = LockWithMcs;
+    using Mutex = Lock::Mutex;
+    using Mode = Mutex::Mode;
+#elif defined(USE_LEIS_SXQL)
+    using Lock = SXQLock;
+    using Mutex = Lock::Mutex;
+    using Mode = Mutex::Mode;
+#else
     using Lock = XSLock;
     using Mutex = Lock::Mutex;
     using Mode = Mutex::Mode;
+#endif
 
 private:
     using Map = std::map<Mutex*, Lock>;
@@ -49,8 +289,8 @@ private:
     Mode mode_;
     Map::iterator bgn_; // begin of M.
 
-
 public:
+    LeisLockSet() = default;
     ~LeisLockSet() noexcept {
         unlock();
     }
@@ -140,16 +380,39 @@ public:
     size_t size() const {
         return map_.size();
     }
+
+    void printLockV(const char *prefix) const {
+        ::printf("%p %s BEGIN\n", this, prefix);
+        for (const Map::value_type& pair : map_) {
+            const Lock& lk = pair.second;
+            ::printf("%p %s mutex:%p %s\n"
+                     , this, prefix, lk.mutex(), lk.mutex()->str().c_str());
+        }
+        ::printf("%p %s END\n", this, prefix);
+    }
 };
 
 
+/*
+ * Use std::vector and sort.
+ */
 template <>
 class LeisLockSet<0>
 {
 public:
+#ifdef USE_LEIS_MCS
+    using Lock = LockWithMcs;
+    using Mutex = Lock::Mutex;
+    using Mode = Mutex::Mode;
+#elif defined(USE_LEIS_SXQL)
+    using Lock = SXQLock;
+    using Mutex = Lock::Mutex;
+    using Mode = Mutex::Mode;
+#else
     using Lock = XSLock;
     using Mutex = Lock::Mutex;
     using Mode = Mutex::Mode;
+#endif
 
 private:
     using LockV = std::vector<Lock>;
@@ -255,7 +518,6 @@ public:
         maxMutex_ = lockV_.back().getMutexId();
         nrSorted_ = lockV_.size();
 
-        //printLockV("after     "); // QQQQQ
     }
     void unlock() noexcept {
         lockV_.clear();// automatically release the locks.
@@ -268,7 +530,7 @@ public:
     size_t size() const {
         return lockV_.size();
     }
-
+private:
     LockV::iterator find(Mutex *mutex) {
         const uintptr_t key = uintptr_t(mutex);
 #if 1
@@ -295,6 +557,7 @@ public:
             });
 #endif
     }
+public:
     void printLockV(const char *prefix) const {
         ::printf("%p %s BEGIN\n", this, prefix);
         for (const Lock& lk : lockV_) {

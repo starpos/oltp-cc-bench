@@ -10,8 +10,9 @@
 template <bool UseMap>
 using LeisLockSet  = cybozu::lock::LeisLockSet<UseMap>;
 
-using Mutex = cybozu::lock::XSLock::Mutex;
-using Mode = Mutex::Mode;
+// Mutex and Node must be the same among LeisLockSet<0> and LeisLockSet(1).
+using Mutex = LeisLockSet<0>::Mutex;
+using Mode = LeisLockSet<0>::Mode;
 
 const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
 
@@ -39,6 +40,7 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
     const int shortTxMode = shared.shortTxMode;
     const int longTxMode = shared.longTxMode;
 
+
     Result res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     LeisLockSet<UseMap> llSet;
@@ -50,7 +52,6 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
 
     // USE_LONG_TX_2
     BoolRandom<decltype(rand)> boolRand(rand);
-
 
     const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
     const size_t realNrOp = isLongTx ? longTxSize : nrOp;
