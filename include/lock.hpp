@@ -219,20 +219,20 @@ public:
      * S --> X
      */
     bool tryUpgrade() {
-        int v = __atomic_load_n(&v_, __ATOMIC_RELAXED);
+        int v = atomicLoad();
         if (v > 1) return false;
         assert(v == 1);
-        return __atomic_compare_exchange_n(&v_, &v, -1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+        return compareAndSwap(v, -1);
     }
     void upgrade() {
-        int v = __atomic_load_n(&v_, __ATOMIC_RELAXED);
+        int v = atomicLoad();
         for (;;) {
             while (v > 1) {
                 _mm_pause();
-                v = __atomic_load_n(&v_, __ATOMIC_RELAXED);
+                v = atomicLoad();
             }
             assert(v == 1);
-            if (__atomic_compare_exchange_n(&v_, &v, -1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+            if (compareAndSwap(v, -1)) {
                 return;
             }
         }
@@ -249,8 +249,9 @@ public:
     }
     std::string str() const {
         return cybozu::util::formatString(
-            "XSMutex(%d)", __atomic_load_n(&v_, __ATOMIC_RELAXED));
+            "XSMutex(%d)", atomicLoad());
     }
+
 private:
     void lockX() {
         for (;;) {
@@ -259,12 +260,12 @@ private:
                 __atomic_thread_fence(__ATOMIC_ACQUIRE);
                 continue;
             }
-            if (__atomic_load_n(&v_, __ATOMIC_RELAXED) != 0) {
+            if (atomicLoad() != 0) {
                 _mm_pause();
                 continue;
             }
             int v = 0;
-            if (!__atomic_compare_exchange_n(&v_, &v, -1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+            if (!compareAndSwap(v, -1)) {
                 _mm_pause();
                 continue;
             }
@@ -273,15 +274,15 @@ private:
     }
     bool tryLockX() {
 #if 0
-        int v = __atomic_load_n(&v_, __ATOMIC_RELAXED);
+        int v = atomicLoad();
         if (v != 0) return false;
-        return __atomic_compare_exchange_n(&v_, &v, -1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+        return compareAndSwap(v, -1);
 #else
         // We should retry CAS.
-        int v = __atomic_load_n(&v_, __ATOMIC_RELAXED);
+        int v = atomicLoad();
         for (;;) {
             if (v != 0) return false;
-            if (__atomic_compare_exchange_n(&v_, &v, -1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+            if (compareAndSwap(v, -1)) {
                 break;
             }
             _mm_pause();
@@ -295,17 +296,15 @@ private:
     }
     bool tryLockS() {
 #if 0
-        int v = __atomic_load_n(&v_, __ATOMIC_RELAXED);
-        int w = v + 1;
+        int v = atomicLoad();
         if (v < 0) return false;
-        return __atomic_compare_exchange_n(&v_, &v, w, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+        return compareAndSwap(v, v + 1);
 #else
         // We should retry CAS.
-        int v = __atomic_load_n(&v_, __ATOMIC_RELAXED);
+        int v = atomicLoad();
         for (;;) {
             if (v < 0) return false;
-            int w = v + 1;
-            if (__atomic_compare_exchange_n(&v_, &v, w, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+            if (compareAndSwap(v, v + 1)) {
                 break;
             }
             _mm_pause();
@@ -320,13 +319,12 @@ private:
                 __atomic_thread_fence(__ATOMIC_ACQUIRE);
                 continue;
             }
-            int v = __atomic_load_n(&v_, __ATOMIC_RELAXED);
+            int v = atomicLoad();
             if (v < 0) {
                 _mm_pause();
                 continue;
             }
-            int w = v + 1;
-            if (!__atomic_compare_exchange_n(&v_, &v, w, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+            if (!compareAndSwap(v, v + 1)) {
                 _mm_pause();
                 continue;
             }
@@ -336,6 +334,12 @@ private:
     void unlockS() noexcept {
         __attribute__((unused)) int ret = __atomic_fetch_sub(&v_, 1, __ATOMIC_RELEASE);
         assert(ret > 0);
+    }
+    bool compareAndSwap(int& before, int after) {
+        return __atomic_compare_exchange_n(&v_, &before, after, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    }
+    int atomicLoad() const {
+        return __atomic_load_n(&v_, __ATOMIC_ACQUIRE);
     }
 };
 
@@ -394,7 +398,8 @@ public:
         mode_ = Mode::X;
     }
     void unlock() noexcept {
-        if (!mutex_) return;
+        if (mode_ == Mode::Invalid) return;
+        assert(mutex_);
         mutex_->unlock(mode_);
         init();
     }
@@ -407,6 +412,7 @@ public:
      * This is used for dummy object to comparison.
      */
     void setMutex(Mutex *mutex) { mutex_ = mutex; }
+
 private:
     void init() {
         mutex_ = nullptr;
