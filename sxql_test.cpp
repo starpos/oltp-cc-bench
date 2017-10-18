@@ -28,7 +28,8 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 
     while (!start) _mm_pause();
     while (!quit) {
-        const SXQLock::Mode mode = (rand() & 0x1) ? SXQLock::Mode::X : SXQLock::Mode::S;
+        //const SXQLock::Mode mode = (rand() & 0x1) ? SXQLock::Mode::X : SXQLock::Mode::S;
+        const SXQLock::Mode mode = (rand() % 128 < 16) ? SXQLock::Mode::X : SXQLock::Mode::S;
         //const SXQLock::Mode mode = SXQLock::Mode::X;
         //const SXQLock::Mode mode = SXQLock::Mode::S;
         SXQLock lk(&muV[0], mode);

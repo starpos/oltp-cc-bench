@@ -94,6 +94,9 @@ struct Node
 };
 
 
+constexpr uint MAX_READERS = (1U << 8) - 1;
+
+
 struct LockData
 {
     uint isTailWriter:1;
@@ -101,8 +104,9 @@ struct LockData
     uint64_t tail:45;
     uint waitingPhase:8;
     uint lockingPhase:8;
-    uint unused2:3;
-    uint64_t nextWriter:45;
+    uint isNextWriter:1;
+    uint unused2:2;
+    uint64_t next:45;
     uint nrReaders:8;
     uint unused3:8;
 
@@ -123,8 +127,8 @@ struct LockData
     void setTail(const Node *node) {
         tail = (uint64_t(node) >> 3);
     }
-    void setNextWriter(const Node *node) {
-        nextWriter = (uint64_t(node) >> 3);
+    void setNext(const Node *node) {
+        next = (uint64_t(node) >> 3);
     }
 
     const Node *getTail() const {
@@ -133,11 +137,11 @@ struct LockData
     Node *getTail() {
         return (Node *)(tail << 3);
     }
-    const Node *getNextWriter() const {
-        return (const Node *)(nextWriter << 3);
+    const Node *getNext() const {
+        return (const Node *)(next << 3);
     }
-    Node *getNextWriter() {
-        return (Node *)(nextWriter << 3);
+    Node *getNext() {
+        return (Node *)(next << 3);
     }
 
     bool isSamePhase() const {
@@ -147,9 +151,9 @@ struct LockData
     std::string str() const {
         return cybozu::util::formatString(
             "LockData isTailWriter:%u tail:%p "
-            "waiting/locking:%u/%u nextWriter:%p nrReaders:%u"
-            , isTailWriter, getTail()
-            , waitingPhase, lockingPhase, getNextWriter(), nrReaders);
+            "waiting/locking:%u/%u isNextWriter:%u next:%p nrReaders:%u"
+            , isTailWriter, getTail(), waitingPhase, lockingPhase
+            , isNextWriter, getNext(), nrReaders);
     }
     void print() const {
         ::printf("%s\n", str().c_str());
@@ -297,7 +301,8 @@ public:
                     locked = true;
                 } else {
                     // (locked R,R,...,R),W <- It's me.
-                    ld1.setNextWriter(nodeP_);
+                    ld1.setNext(nodeP_);
+                    ld1.isNextWriter = true;
                     locked = false;
                     // A reader may notify me just after CAS.
                     nodeP_->wait = true;
@@ -357,10 +362,18 @@ public:
                 locked = false;
             } else {
                 if (ld0.getTail() == nullptr && ld0.isSamePhase()) {
-                    // TODO: consider nrReaders overflow.
-                    locked = true;
-                    ld1.setTail(nullptr);
-                    ld1.nrReaders++;
+                    if (ld0.nrReaders < sxq::MAX_READERS) {
+                        locked = true;
+                        ld1.setTail(nullptr);
+                        ld1.nrReaders++;
+                    } else {
+                        // (locked R, R, ..., R), R <- It's me.
+                        ld1.setNext(nodeP_);
+                        ld1.isNextWriter = false;
+                        locked = false;
+                        // A reader may notify me just after CAS.
+                        nodeP_->wait = true;
+                    }
                 } else {
                     locked = false;
                 }
@@ -389,9 +402,10 @@ public:
             return;
         }
         Node *prev = ld0.getTail();
-        assert(prev != nullptr);
-        nodeP_->wait = true;
-        prev->setNextAndIsWriter(nodeP_, false);
+        if (prev != nullptr) {
+            nodeP_->wait = true;
+            prev->setNextAndIsWriter(nodeP_, false);
+        }
         while (nodeP_->wait) _mm_pause(); // local spin wait
         // lock acquired.
         const bool shouldUpdateLockingPhase = ld0.isTailWriter;
@@ -419,7 +433,7 @@ public:
 #endif
         if (ld2.getTail() != nodeP_) {
             // Next node must exist (or will appear soon).
-            notifyNextReaderOrSetNextWriter(ld3);
+            notifyNextReaderOrSetNext(ld3);
         }
     }
     bool tryLockX(Mutex* mutex) {
@@ -468,7 +482,10 @@ public:
                 return false;
             }
             if (ld0.getTail() == nullptr) {
-                // TODO: consider nrReaders overflow.
+                if (ld0.nrReaders >= sxq::MAX_READERS) {
+                    init();
+                    return false;
+                }
                 locked = true;
                 ld1.setTail(nullptr);
                 ld1.nrReaders++;
@@ -513,7 +530,7 @@ public:
         }
         if (ld2.getTail() != nodeP_) {
             // Next node must exist (or will appear soon).
-            notifyNextReaderOrSetNextWriter(ld3);
+            notifyNextReaderOrSetNext(ld3);
         }
         return true;
     }
@@ -561,7 +578,8 @@ public:
                 } else {
                     assert(ld0.nrReaders > 0);
                     // (locked R,R,...,R),W <- It's me.
-                    ld1.setNextWriter(nodeP_);
+                    ld1.setNext(nodeP_);
+                    ld1.isNextWriter = true;
                     locked = false;
                     // A reader may notify me just after CAS.
                     nodeP_->wait = true;
@@ -643,15 +661,17 @@ public:
     void unlockS() noexcept {
         assert(mutex_);
         LockData ld0 = mutex_->atomicLoad();
-        Node *nextWriter = nullptr;
+        Node *next = nullptr;
         for (;;) {
             LockData ld1 = ld0;
             ld1.nrReaders--;
-            if (ld1.nrReaders == 0) {
-                // There is only me.
-                nextWriter = ld0.getNextWriter();
-                if (nextWriter != nullptr) {
-                    ld1.setNextWriter(nullptr);
+            const bool shouldNotifyNextReader = !ld0.isNextWriter && ld1.nrReaders < sxq::MAX_READERS;
+            const bool shouldNotifyNextWriter = ld0.isNextWriter && ld1.nrReaders == 0;
+            if (shouldNotifyNextReader || shouldNotifyNextWriter) {
+                next = ld0.getNext();
+                if (next != nullptr) {
+                    ld1.setNext(nullptr);
+                    ld1.isNextWriter = false;
                 }
             }
             if (mutex_->compareAndSwap(ld0, ld1)) {
@@ -666,8 +686,8 @@ public:
         LockData x; x.init(); x.unused1 = 1; x.tail = 7;
         sxq::ld_.push_back(x);
 #endif
-        if (nextWriter != nullptr) {
-            nextWriter->wait = false; // notify
+        if (next != nullptr) {
+            next->wait = false; // notify
         }
     }
 
@@ -693,19 +713,17 @@ private:
         std::swap(mode_, rhs.mode_);
         std::swap(nodeP_, rhs.nodeP_);
     }
-    void notifyNextReaderOrSetNextWriter(LockData ld0) {
+    void notifyNextReaderOrSetNext(LockData ld0) {
         sxq::NodePtrAndIsWriter npaiw = waitForNextPtrIsSet();
-        if (npaiw.isWriter()) {
-            for (;;) {
-                LockData ld1 = ld0;
-                ld1.setNextWriter(npaiw.getNode());
-                if (mutex_->compareAndSwap(ld0, ld1)) {
-                    break;
-                }
+        while (npaiw.isWriter() || ld0.nrReaders >= sxq::MAX_READERS) {
+            LockData ld1 = ld0;
+            ld1.setNext(npaiw.getNode());
+            ld1.isNextWriter = npaiw.isWriter();
+            if (mutex_->compareAndSwap(ld0, ld1)) {
+                return;
             }
-        } else {
-            npaiw.getNode()->wait = false; // notify.
         }
+        npaiw.getNode()->wait = false; // notify.
     }
     sxq::NodePtrAndIsWriter waitForNextPtrIsSet() {
         sxq::NodePtrAndIsWriter npaiw = nodeP_->loadNextAndIsWriter();
