@@ -35,6 +35,7 @@ class LowOverheadMemoryAllocator
         }
         void *alloc(size_t size) {
 #if 0
+            // If you want to get aligned memory, you should give an appropriate size argument.
             if (size % 8 != 0) { size += (8 - size % 8); }
 #endif
             if (buf.size() - offset >= size) {
@@ -141,6 +142,9 @@ public:
 };
 
 
+/**
+ * CAUTION: an allocation and the corresponding deallocation must be done by the same thread.
+ */
 LowOverheadMemoryAllocator<>& memAlloc() {
     thread_local LowOverheadMemoryAllocator<> memAlloc_;
     return memAlloc_;
