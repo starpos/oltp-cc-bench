@@ -12,26 +12,27 @@
 
 enum class LockType : uint8_t
 {
-    PQSpin, PQPosix, PQMcs1, PQMcs2, PQ1993, PQ1997,
+    PQSpin, PQPosix, PQMcs1, PQMcs2, PQMcs3, PQ1993, PQ1997,
 };
 
 
 const char *getPQLockName(LockType lkType)
 {
     std::pair<LockType, const char *> table[] = {
-        {LockType::PQSpin, "pqspin  "},
-        {LockType::PQPosix, "pqposix "},
-        {LockType::PQMcs1, "pqmcs1  "},
-        {LockType::PQMcs2, "pqmcs2  "},
-        {LockType::PQ1993, "pq1993  "},
-        {LockType::PQ1997, "pq1997  "},
+        {LockType::PQSpin,  "pqspin"},
+        {LockType::PQPosix, "pqposix"},
+        {LockType::PQMcs1,  "pqmcs1"},
+        {LockType::PQMcs2,  "pqmcs2"},
+        {LockType::PQMcs3,  "pqmcs3"},
+        {LockType::PQ1993,  "pq1993"},
+        {LockType::PQ1997,  "pq1997"},
     };
     const size_t nr = sizeof(table) / sizeof(table[0]);
 
     for (size_t i = 0; i < nr; i++) {
         if (lkType == table[i].first) return table[i].second;
     }
-    return "unknown ";
+    return "unknown";
 }
 
 
@@ -121,7 +122,7 @@ size_t worker(size_t idx, bool& start, bool& quit, std::vector<typename PQLock::
 
 
 template <typename PQLock>
-void runExecT(size_t nrRes, size_t nrTh, size_t runSec, bool verbose, const char *prefix="")
+void runExecT(size_t nrRes, size_t nrTh, size_t runSec, bool verbose, LockType lkType)
 {
     std::vector<typename PQLock::Mutex> muV(nrRes);
     std::vector<Resource> resV(nrRes);
@@ -171,8 +172,8 @@ void runExecT(size_t nrRes, size_t nrTh, size_t runSec, bool verbose, const char
         }
         total += cV[i];
     }
-    ::printf("%smutex %zu  concurrency %zu  %.03f op/sec  total %zu\n"
-             , prefix, nrRes, nrTh, total / (double)runSec, total);
+    ::printf("mode:%s mutex:%zu  concurrency:%zu  ops:%.03f  total:%zu\n"
+             , getPQLockName(lkType), nrRes, nrTh, total / (double)runSec, total);
     ::fflush(::stdout);
 }
 
@@ -181,22 +182,25 @@ void runExec(size_t nrRes, size_t nrTh, size_t runSec, bool verbose, LockType lk
 {
     switch (lkType) {
     case LockType::PQSpin:
-        runExecT<cybozu::lock::PQSpinLock>(nrRes, nrTh, runSec, verbose, getPQLockName(lkType));
+        runExecT<cybozu::lock::PQSpinLock>(nrRes, nrTh, runSec, verbose, lkType);
         break;
     case LockType::PQPosix:
-        runExecT<cybozu::lock::PQPosixLock>(nrRes, nrTh, runSec, verbose, getPQLockName(lkType));
+        runExecT<cybozu::lock::PQPosixLock>(nrRes, nrTh, runSec, verbose, lkType);
         break;
     case LockType::PQMcs1:
-        runExecT<cybozu::lock::PQMcsLock>(nrRes, nrTh, runSec, verbose, getPQLockName(lkType));
+        runExecT<cybozu::lock::PQMcsLock>(nrRes, nrTh, runSec, verbose, lkType);
         break;
     case LockType::PQMcs2:
-        runExecT<cybozu::lock::PQMcsLock2>(nrRes, nrTh, runSec, verbose, getPQLockName(lkType));
+        runExecT<cybozu::lock::PQMcsLock2>(nrRes, nrTh, runSec, verbose, lkType);
+        break;
+    case LockType::PQMcs3:
+        runExecT<cybozu::lock::PQMcsLock3>(nrRes, nrTh, runSec, verbose, lkType);
         break;
     case LockType::PQ1993:
-        runExecT<cybozu::lock::PQ1993Lock>(nrRes, nrTh, runSec, verbose, getPQLockName(lkType));
+        runExecT<cybozu::lock::PQ1993Lock>(nrRes, nrTh, runSec, verbose, lkType);
         break;
     case LockType::PQ1997:
-        runExecT<cybozu::lock::PQ1997Lock>(nrRes, nrTh, runSec, verbose, getPQLockName(lkType));
+        runExecT<cybozu::lock::PQ1997Lock>(nrRes, nrTh, runSec, verbose, lkType);
         break;
     default:
         throw std::runtime_error("no such lock type.");
@@ -208,14 +212,21 @@ int main() try
 {
 #if 1
     //for (LockType lkType : {LockType::PQSpin, LockType::PQPosix,
-    //LockType::PQMcs1, LockType::PQMcs2, LockType::PQ1993, LockType::PQ1997}) {
-    for (LockType lkType : {LockType::PQ1997}) {
+    //LockType::PQMcs1, LockType::PQMcs2, LockType::PQMcs3, LockType::PQ1993, LockType::PQ1997}) {
+    for (LockType lkType : {LockType::PQSpin, LockType::PQPosix,
+                LockType::PQMcs1, LockType::PQMcs2, LockType::PQMcs3, LockType::PQ1993}) {
+        //for (LockType lkType : {LockType::PQMcs1, LockType::PQMcs2, LockType::PQMcs3}) {
+        //for (LockType lkType : {LockType::PQMcs3}) {
         //for (size_t nrRes : {1, 10, 100, 1000, 10000}) {
         for (size_t nrRes : {1, 2, 4, 1024}) {
-            //for (size_t nrTh : {2, 4, 8, 16, 24, 32}) {
-            for (size_t nrTh = 1; nrTh <= 32; nrTh++) {
-                for (size_t i = 0; i < 10; i++) {
-                    runExec(nrRes, nrTh, 10, false, lkType);
+            //for (size_t nrTh : {1, 2, 4, 8, 16, 24, 32}) {
+            //for (size_t nrTh : {2}) {
+            //for (size_t nrTh = 1; nrTh <= 32; nrTh++) {
+            for (size_t nrTh : {1, 2, 4, 6, 8, 12, 16, 20, 24, 28, 32}) {
+                size_t nrLoop = 10;
+                for (size_t i = 0; i < nrLoop; i++) {
+                    size_t periodSec = 10;
+                    runExec(nrRes, nrTh, periodSec, false, lkType);
                 }
             }
         }

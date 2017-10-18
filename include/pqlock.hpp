@@ -403,6 +403,9 @@ public:
         mutex_ = nullptr;
     }
     uint32_t getSelfPriority() const { return node_.pri; }
+    /**
+     * You must call this thread with lock held.
+     */
     uint32_t getTopPriorityInWaitQueue() {
         assert(!node_.wait);
         if (getDummy()->next) {
@@ -555,6 +558,229 @@ private:
         return __atomic_fetch_sub(t, static_cast<T>(v), AtomicMode);
     }
 };
+
+
+/**
+ * An improvement version of PQMcsLock2.
+ * Dummy nodes are not required anymore.
+ */
+class PQMcsLock3
+{
+private:
+    struct Node {
+        alignas(8)
+        Node *next;
+        uint32_t order; // smaller is prior.
+        bool wait;
+        Node() : next(nullptr), order(UINT32_MAX), wait(false) {
+        }
+        void init() {
+            next = nullptr;
+            order = UINT32_MAX;
+            wait = false;
+        }
+    };
+    struct Compare {
+        bool operator()(const Node *a, const Node *b) const {
+            return a->order > b->order;
+        }
+    };
+    using PriQueue = std::priority_queue<Node*, std::vector<Node*>, Compare>;
+
+    template <typename T>
+    struct PtrAndBit {
+        uintptr_t obj;
+
+        bool getBit() const {
+            return (obj & 0x1);
+        }
+        void setBit(bool bit) {
+            obj &= ~0x1;
+            obj |= bit;
+        }
+        const T* getPtr() const {
+            return (const T*)(obj & ~0x1);
+        }
+        T* getPtr() {
+            return (T*)(obj & ~0x1);
+        }
+        void setPtr(const T* p) {
+            uintptr_t bit = getBit();
+            obj = uintptr_t(p) | bit;
+        }
+    };
+
+public:
+    struct Mutex {
+#ifdef MUTEX_ON_CACHELINE
+        alignas(CACHE_LINE_SIZE)
+#else
+        alignas(8)
+#endif
+        // This must be changed by CAS or XCHG.
+        // LSB is used to the manager existance.
+        // The manager is almost the lock holder except for the initial procedure.
+        // Initial state: (null, 1).
+        // Lock requester node0 exchanges tailWithBit with (node0, 0).
+        // Lock requester got (null, 1). LSB is 1 so it will be the manager.
+        // The manager has responsibility to maintain priQ and notify the requester with top priority.
+        // Notified node will hold the lock and become the next manager.
+        // The manager get the queue by exchanging tailWithBit with (null, 0) after getting head and making it null.
+        // If a node who got (null, 0), there is another manager but it must install head for the manager.
+        // If there is no requester, tailWithBit must be set from (null, 0) to (null, 1) with CAS.
+        uintptr_t tailWithBit;
+
+        // Only the manager can access the head.
+        // If this is not null, tail must not be null.
+        // Just three (head, tail) patterns are allowed: (null, null), (null, not null), (not null, not null).
+        Node *head;
+
+        // Only the manager can access this priority queue.
+        PriQueue priQ;
+
+        Mutex() : tailWithBit(1), head(nullptr), priQ() {
+        }
+    };
+private:
+    Mutex *mutex_; /* shared by all threads. */
+    Node node_; /* list node. */
+
+public:
+    PQMcsLock3() : mutex_(nullptr), node_() {
+    }
+    PQMcsLock3(Mutex *mutex, uint32_t order) : PQMcsLock3() {
+        lock(mutex, order);
+    }
+    ~PQMcsLock3() noexcept {
+        unlock();
+    }
+    PQMcsLock3(const PQMcsLock3& rhs) = delete;
+    PQMcsLock3& operator=(const PQMcsLock3& rhs) = delete;
+    /**
+     * Move can be supported because locked object's node_ is
+     * not included the shared structure.
+     */
+    PQMcsLock3(PQMcsLock3&& rhs) : PQMcsLock3() { swap(rhs); }
+    PQMcsLock3& operator=(PQMcsLock3&& rhs) { swap(rhs); return *this; }
+
+    void lock(Mutex *mutex, uint32_t order) {
+        assert(mutex);
+        mutex_ = mutex;
+        node_.order = order;
+
+        uintptr_t prevWithBit = __atomic_exchange_n(&mutex_->tailWithBit, uintptr_t(&node_), __ATOMIC_ACQ_REL);
+        const bool isManager = prevWithBit == 1; // prevWithBit & 0x1
+        Node *prev = (Node *)(prevWithBit & ~0x1);
+
+        if (prev != nullptr) {
+            node_.wait = true;
+            __atomic_thread_fence(__ATOMIC_RELEASE);
+            prev->next = &node_;
+            while (node_.wait) _mm_pause(); // local spin wait.
+            // Now I hold the lock.
+            return;
+        }
+        if (!isManager) {
+            node_.wait = true;
+            __atomic_thread_fence(__ATOMIC_RELEASE);
+            mutex_->head = &node_;
+            while (node_.wait) _mm_pause(); // local spin wait.
+            // Now I hold the lock.
+            return;
+        }
+        // I'm manager in the initial procedure.
+        assert(mutex_->head == nullptr);
+        assert(mutex_->priQ.empty());
+        uintptr_t tailWithBit = __atomic_exchange_n(&mutex_->tailWithBit, 0, __ATOMIC_ACQ_REL);
+        assert((tailWithBit & ~0x1) != 0);
+        Node *tail = (Node *)tailWithBit;
+        Node *node = &node_; // head.
+        moveQtoQ(node, tail);
+        node = mutex_->priQ.top();
+        mutex_->priQ.pop();
+        if (node == &node_) {
+            // Now I hold the lock.
+            return;
+        }
+        node_.wait = true;
+        __atomic_thread_fence(__ATOMIC_RELEASE);
+        node->wait = false; // notify
+        while (node_.wait) _mm_pause(); // local spin wait.
+        // Now I hold the lock.
+    }
+
+    void unlock() {
+        assert(mutex_);
+        uintptr_t tailWithBit = __atomic_load_n(&mutex_->tailWithBit, __ATOMIC_ACQUIRE);
+        while (tailWithBit == 0 && mutex_->priQ.empty()) {
+            // There is no requester.
+            bool success = __atomic_compare_exchange_n(
+                &mutex_->tailWithBit, &tailWithBit, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+            if (success) {
+                // The manager can leave.
+                return;
+            }
+        }
+        Node *node, *tail;
+        if (tailWithBit != 0) {
+            extractFromQ(&node, &tail);
+            moveQtoQ(node, tail);
+        }
+        node = mutex_->priQ.top();
+        mutex_->priQ.pop();
+        node->wait = false; // notify.
+    }
+
+    void extractFromQ(Node **nodeP, Node **tailP) {
+        while (mutex_->head == nullptr) _mm_pause();
+        *nodeP = mutex_->head;
+        mutex_->head = nullptr;
+        uintptr_t tailWithBit = __atomic_exchange_n(&mutex_->tailWithBit, 0, __ATOMIC_ACQ_REL);
+        assert(tailWithBit > 1);
+        *tailP = (Node *)tailWithBit;
+    }
+
+    /**
+     * Only the thread that hold the lock can call this method.
+     */
+    uint32_t getTopPriorityInWaitQueue() {
+        assert(mutex_);
+        uintptr_t tailWithBit = __atomic_load_n(&mutex_->tailWithBit, __ATOMIC_ACQUIRE);
+        assert(tailWithBit != 1);
+        if (tailWithBit != 0) {
+            Node *node, *tail;
+            extractFromQ(&node, &tail);
+            moveQtoQ(node, tail);
+        }
+        if (mutex_->priQ.empty()) return UINT32_MAX;
+        return mutex_->priQ.top()->order;
+    }
+
+private:
+    /**
+     * Do not call this in lock() function.
+     * Executing lock() function, node_ will be shared by multiple threads.
+     */
+    void swap(PQMcsLock3& rhs) {
+        std::swap(mutex_, rhs.mutex_);
+        std::swap(node_, rhs.node_);
+    }
+    /**
+     * Only the manager can call this.
+     */
+    void moveQtoQ(Node *node, Node *tail) {
+        assert(node);
+        assert(tail);
+
+        for (;;) {
+            mutex_->priQ.push(node);
+            if (node == tail) return;
+            while (node->next == nullptr) _mm_pause();
+            node = node->next;
+        }
+    }
+};
+
 
 
 /**
