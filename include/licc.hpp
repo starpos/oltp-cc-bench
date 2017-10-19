@@ -8,6 +8,7 @@
 #include "constexpr_util.hpp"
 #include "allocator.hpp"
 #include "util.hpp"
+#include "pqlock.hpp"
 
 
 namespace cybozu {
@@ -126,12 +127,21 @@ struct IMutex
     alignas(8)
 #endif
     uint64_t obj;
+#if 0
     typename PQLock::Mutex pqMutex;
+#else
+    std::unique_ptr<typename PQLock::Mutex> pqMutexPtr;
+#endif
 
     IMutex() {
         ILockData ld;
         ld.init();
         atomicStore(ld);
+#if 1
+        if constexpr (!std::is_same<PQLock, PQNoneLock>::value) {
+            pqMutexPtr.reset(new typename PQLock::Mutex());
+        }
+#endif
     }
     bool compareAndSwap(ILockData &before, const ILockData& after) {
 #if 1
@@ -271,7 +281,11 @@ private:
         ILockState st1;
 
         for (;;) {
+#if 0
             PQLock lk(&mutex_->pqMutex, ordId_);
+#else
+            PQLock lk(mutex_->pqMutexPtr.get(), ordId_);
+#endif
             for (;;) {
                 if (ordId_ > lk.getTopPriorityInWaitQueue()) {
                     break; // Give the PQLock to the prior thread.

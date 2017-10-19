@@ -13,27 +13,36 @@ struct CmdLineOptionPlus : CmdLineOption
     using base = CmdLineOption;
 
     std::string modeStr;
+    int pqLockType;
+    int usesBackOff; // 0 or 1.
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&modeStr, "licc-hybrid", "mode", "[mode]: specify mode in licc-pcc, licc-occ, licc-hybrid.");
+        appendOpt(&pqLockType, 0, "pqlock", "[id]: pqlock type (0:none, 1:pqspin, 3:pqmcs1, 4:pqmcs2, 5:pq1993, 6:pq1997, 7:pqmcs3)");
+        appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
     }
     std::string str() const {
-        return cybozu::util::formatString("mode:%s %s", modeStr.c_str(), base::str().c_str());
+        return cybozu::util::formatString(
+            "mode:%s %s pqLockType:%d backoff:%d"
+            , modeStr.c_str(), base::str().c_str(), pqLockType, usesBackOff ? 1 : 0);
     }
 };
 
-//using PQLock = cybozu::lock::PQMcsLock3;
-using PQLock = cybozu::lock::PQNoneLock;
 
 using ILockData = cybozu::lock::ILockData;
-using ILock = cybozu::lock::ILock<PQLock>;
-using IMutex = cybozu::lock::IMutex<PQLock>;
-using ILockSet = cybozu::lock::ILockSet<PQLock>;
-
 
 enum class IMode : uint8_t {
     S = 0, X = 1, INVALID = 2,
 };
+
+template <typename PQLock>
+struct ILockTypes
+{
+    using ILock = cybozu::lock::ILock<PQLock>;
+    using IMutex = cybozu::lock::IMutex<PQLock>;
+    using ILockSet = cybozu::lock::ILockSet<PQLock>;
+};
+
 
 const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
 
@@ -70,8 +79,11 @@ ReadMode strToReadMode(const char *s)
 }
 
 
+template <typename PQLock>
 struct ILockShared
 {
+    using IMutex = typename ILockTypes<PQLock>::IMutex;
+
     std::vector<IMutex> muV;
     ReadMode rmode;
     size_t longTxSize;
@@ -79,11 +91,16 @@ struct ILockShared
     size_t nrWr;
     int shortTxMode;
     int longTxMode;
+    bool usesBackOff;
 };
 
 
-Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared& shared)
+template <typename PQLock>
+Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
 {
+    using IMutex = typename ILockTypes<PQLock>::IMutex;
+    using ILockSet = typename ILockTypes<PQLock>::ILockSet;
+
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
@@ -125,12 +142,14 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     ILockSet lockSet;
 
     //std::unordered_map<size_t, size_t> retryMap;
+#if 0
     uint64_t tdiffTotal = 0;
     uint64_t count = 0;
 
     uint64_t nrSuccess = 1000; // initial abort rate is 0.1%.
     uint64_t nrAbort = 1;
     size_t factor = 1;
+#endif
 
     while (!start) _mm_pause();
     while (!quit) {
@@ -145,11 +164,14 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
         //::printf("Tx begin\n"); // debug code
         size_t firstRecIdx;
 
+        uint64_t t0;
+        if (shared.usesBackOff) {
+            t0 = cybozu::time::rdtscp();
+        }
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
             assert(lockSet.isEmpty());
             //::printf("begin\n"); // QQQQQ
-	    const uint64_t t0 = cybozu::time::rdtscp();
             for (size_t i = 0; i < realNrOp; i++) {
                 //::printf("op %zu\n", i); // debug code
 #if 0
@@ -190,7 +212,9 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
             res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);
             //retryMap[retry]++;
+#if 0
             nrSuccess++;
+#endif
             break;
           abort:
             res.incAbort(isLongTx);
@@ -198,18 +222,12 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 #if 0 // Backoff
             const size_t n = rand() % (1 << (retry + 10));
             for (size_t i = 0; i < n; i++) _mm_pause();
-#elif 0
+#elif 1
+#if 0
             nrAbort++;
-            // Adaptive backoff.
-            const uint64_t t1 = cybozu::time::rdtscp();
-            const uint64_t tdiff = std::max<uint64_t>(t1 - t0, 2);
-            tdiffTotal += tdiff; count++;
-            uint64_t waittic = rand() % (tdiff << std::min<size_t>(retry + 1, 10));
-            //uint64_t waittic = rand() % (tdiff << 18);
-            uint64_t t2 = t1;
-            while (t2 - t1 < waittic) {
-                _mm_pause();
-                t2 = cybozu::time::rdtscp();
+#endif
+            if (shared.usesBackOff) {
+                backOff(t0, retry, rand);
             }
 #elif 0
             nrAbort++;
@@ -233,8 +251,9 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
             uint64_t t2 = t1;
             while (t2 - t1 < waittic) {
                 _mm_pause();
-	        t2 = cybozu::time::rdtscp();
-	    }
+                t2 = cybozu::time::rdtscp();
+            }
+            t0 = t2;
 #endif
         }
     }
@@ -247,7 +266,8 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 }
 
 
-void setShared(const CmdLineOptionPlus& opt, ILockShared& shared)
+template <typename PQLock>
+void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
 {
     shared.muV.resize(opt.getNrMu());
     shared.rmode = strToReadMode(opt.modeStr.c_str());
@@ -256,19 +276,75 @@ void setShared(const CmdLineOptionPlus& opt, ILockShared& shared)
     shared.nrWr = opt.nrWr;
     shared.shortTxMode = opt.shortTxMode;
     shared.longTxMode = opt.longTxMode;
+    shared.usesBackOff = opt.usesBackOff != 0;
 }
 
+
+template <typename PQLock>
+void dispatch1(CmdLineOptionPlus& opt)
+{
+    ILockShared<PQLock> shared;
+    setShared<PQLock>(opt, shared);
+
+    for (size_t i = 0; i < opt.nrLoop; i++) {
+        runExec(opt, shared, worker0<PQLock>);
+    }
+}
+
+
+enum PQLockType
+{
+    // (0:none, 1:pqspin, 2:pqposix, 3:pqmcs1, 4:pqmcs2, 5:pq1993, 6:pq1997, 7:pqmcs3)");
+    USE_PQNoneLock = 0,
+    USE_PQSpinLock = 1,
+    USE_PQPosixLock = 2,
+    USE_PQMcsLock = 3,
+    USE_PQMcsLock2 = 4,
+    USE_PQ1993Lock = 5,
+    USE_PQ1997Lock = 6, // buggy.
+    USE_PQMcsLock3 = 7,
+};
+
+
+void dispatch0(CmdLineOptionPlus& opt)
+{
+    switch (opt.pqLockType) {
+    case USE_PQNoneLock:
+        dispatch1<cybozu::lock::PQNoneLock>(opt);
+        break;
+    case USE_PQSpinLock:
+        dispatch1<cybozu::lock::PQSpinLock>(opt);
+        break;
+#if 0 // PQPosixLock does not support move constructor/assign.
+    case USE_PQPosixLock:
+        dispatch1<cybozu::lock::PQPosixLock>(opt);
+        break;
+#endif
+    case USE_PQMcsLock:
+        dispatch1<cybozu::lock::PQMcsLock>(opt);
+        break;
+    case USE_PQMcsLock2:
+        dispatch1<cybozu::lock::PQMcsLock2>(opt);
+        break;
+    case USE_PQ1993Lock:
+        dispatch1<cybozu::lock::PQ1993Lock>(opt);
+        break;
+    case USE_PQ1997Lock:
+        dispatch1<cybozu::lock::PQ1997Lock>(opt);
+        break;
+    case USE_PQMcsLock3:
+        dispatch1<cybozu::lock::PQMcsLock3>(opt);
+        break;
+    default:
+        throw cybozu::Exception("bad pqLockType") << opt.pqLockType;
+    }
+}
 
 int main(int argc, char *argv[]) try
 {
     CmdLineOptionPlus opt("licc_bench: benchmark with licc lock.");
     opt.parse(argc, argv);
-
-    ILockShared shared;
-    setShared(opt, shared);
-    for (size_t i = 0; i < opt.nrLoop; i++) {
-        runExec(opt, shared, worker0);
-    }
+    dispatch0(opt);
 
 } catch (std::exception& e) {
     ::fprintf(::stderr, "exception: %s\n", e.what());

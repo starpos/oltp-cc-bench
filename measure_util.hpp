@@ -15,6 +15,7 @@
 #include "cmdline_option.hpp"
 #include "thread_util.hpp"
 #include "cybozu/exception.hpp"
+#include "time.hpp"
 
 
 constexpr size_t CACHE_LINE_SIZE = 64;
@@ -564,4 +565,20 @@ size_t getRecordIdx(Random& rand, bool isLongTx, int shortTxMode, int longTxMode
         }
     }
     return rand() % nrMu;
+}
+
+
+template <typename Random>
+void backOff(uint64_t& t0, size_t retry, Random& rand)
+{
+    const uint64_t t1 = cybozu::time::rdtscp();
+    const uint64_t tdiff = std::max<uint64_t>(t1 - t0, 2);
+    uint64_t waitTic = rand() % (tdiff << std::min<size_t>(retry + 1, 10));
+    //uint64_t waitTic = rand() % (tdiff << 18);
+    uint64_t t2 = t1;
+    while (t2 - t1 < waitTic) {
+        _mm_pause();
+        t2 = cybozu::time::rdtscp();
+    }
+    t0 = t2;
 }
