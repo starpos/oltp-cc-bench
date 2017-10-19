@@ -47,7 +47,7 @@ struct TxInfo
 
 enum PQLockType
 {
-    // (0:none, 1:pqspin, 2:pqposix, 3:pqmcs1, 4:pqmcs2, 5:pq1993, 6:pq1997)");
+    // (0:none, 1:pqspin, 2:pqposix, 3:pqmcs1, 4:pqmcs2, 5:pq1993, 6:pq1997, 7:pqmcs3)");
     USE_PQNoneLock = 0,
     USE_PQSpinLock = 1,
     USE_PQPosixLock = 2,
@@ -55,6 +55,7 @@ enum PQLockType
     USE_PQMcsLock2 = 4,
     USE_PQ1993Lock = 5,
     USE_PQ1997Lock = 6, // buggy.
+    USE_PQMcsLock3 = 7,
 };
 
 //using PQLock = cybozu::lock::PQNoneLock;
@@ -64,6 +65,7 @@ enum PQLockType
 //using PQLock = cybozu::lock::PQPosixLock;
 //using PQLock = cybozu::lock::PQ1993Lock;
 //using PQLock = cybozu::lock::PQ1997Lock;
+//using PQLock = cybozu::lock::PQMcsLock3;
 
 
 template <typename PQLock>
@@ -1335,7 +1337,7 @@ struct CmdLineOptionPlus : CmdLineOption
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&modeStr, "trlock", "mode", "[mode]: specify mode in trlock, trlock-occ, trlock-hybrid.");
         appendOpt(&txIdGenType, 0, "txid-gen", "[id]: txid gen method (0:sclable, 1:bulk, 2:simple)");
-        appendOpt(&pqLockType, 0, "pqlock", "[id]: pqlock type (0:none, 1:pqspin, 2:pqposix, 3:pqmcs1, 4:pqmcs2, 5:pq1993, 6:pq1997)");
+        appendOpt(&pqLockType, 0, "pqlock", "[id]: pqlock type (0:none, 1:pqspin, 2:pqposix, 3:pqmcs1, 4:pqmcs2, 5:pq1993, 6:pq1997, 7:pqmcs3)");
     }
     std::string str() const {
         return cybozu::util::formatString("mode:%s ", modeStr.c_str()) +
@@ -1446,6 +1448,9 @@ void dispatch0(CmdLineOptionPlus& opt)
         break;
     case USE_PQ1997Lock:
         dispatch1<cybozu::lock::PQ1997Lock>(opt);
+        break;
+    case USE_PQMcsLock3:
+        dispatch1<cybozu::lock::PQMcsLock3>(opt);
         break;
     default:
         throw cybozu::Exception("bad pqLockType") << opt.pqLockType;
