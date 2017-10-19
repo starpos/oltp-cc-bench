@@ -42,6 +42,8 @@ public:
     struct Mutex {
 #ifdef MUTEX_ON_CACHELINE
         alignas(CACHE_LINE_SIZE)
+#else
+        alignas(8)
 #endif
         Node *tail;
         std::vector<Node*> buf; // sort buffer;
@@ -586,29 +588,6 @@ private:
         }
     };
     using PriQueue = std::priority_queue<Node*, std::vector<Node*>, Compare>;
-
-    template <typename T>
-    struct PtrAndBit {
-        uintptr_t obj;
-
-        bool getBit() const {
-            return (obj & 0x1);
-        }
-        void setBit(bool bit) {
-            obj &= ~0x1;
-            obj |= bit;
-        }
-        const T* getPtr() const {
-            return (const T*)(obj & ~0x1);
-        }
-        T* getPtr() {
-            return (T*)(obj & ~0x1);
-        }
-        void setPtr(const T* p) {
-            uintptr_t bit = getBit();
-            obj = uintptr_t(p) | bit;
-        }
-    };
 
 public:
     struct Mutex {

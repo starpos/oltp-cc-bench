@@ -13,7 +13,11 @@
 namespace cybozu {
 namespace lock {
 
+namespace licc_local {
+
 constexpr size_t CACHE_LINE_SIZE = 64;
+
+} // namespace licc_local
 
 
 /**
@@ -113,14 +117,16 @@ struct ILockData
 };
 
 
+template <typename PQLock>
 struct IMutex
 {
 #ifdef MUTEX_ON_CACHELINE
-    alignas(CACHE_LINE_SIZE)
+    alignas(licc_local::CACHE_LINE_SIZE)
 #else
     alignas(8)
 #endif
     uint64_t obj;
+    typename PQLock::Mutex pqMutex;
 
     IMutex() {
         ILockData ld;
@@ -203,10 +209,13 @@ struct ILockState
 };
 
 
+template <typename PQLock>
 class ILock
 {
 private:
-    IMutex *mutex_;
+    using Mutex = IMutex<PQLock>;
+
+    Mutex *mutex_;
     union {
         uint32_t ordId_;
         struct {
@@ -217,7 +226,7 @@ private:
     ILockState state_;
 
 public:
-    ILock(IMutex &mutex, uint32_t ordId) : mutex_(&mutex), ordId_(ordId), state_() {
+    ILock(Mutex &mutex, uint32_t ordId) : mutex_(&mutex), ordId_(ordId), state_() {
         state_.init();
     }
     ~ILock() {
@@ -248,6 +257,46 @@ public:
         }
     }
 
+private:
+    static const uint PREPARE_READ = 0;
+    static const uint PREPARE_UNLOCK_READ = 1;
+    static const uint PREPARE_WRITE = 2;
+    static const uint PREPARE_UNLOCK_WRITE = 3;
+    static const uint PREPARE_MAX = 4;
+
+    template <uint type>
+    void waitFor(ILockData& ld0) {
+        ILockData ld1;
+        ILockState st0 = state_;
+        ILockState st1;
+
+        for (;;) {
+            PQLock lk(&mutex_->pqMutex, ordId_);
+            for (;;) {
+                if (ordId_ > lk.getTopPriorityInWaitQueue()) {
+                    break; // Give the PQLock to the prior thread.
+                }
+                ld0 = mutex_->atomicLoad();
+                bool canReserve;
+                if constexpr (type == PREPARE_READ) {
+                    canReserve = prepareReadReserveOrIntercept(ld0, st0, ld1, st1);
+                } else if constexpr (type == PREPARE_UNLOCK_READ) {
+                    canReserve = prepareUnlockAndReadReserveOrIntercept(ld0, st0, ld1, st1);
+                } else if constexpr (type == PREPARE_WRITE) {
+                    canReserve = prepareWriteReserveOrIntercept(ld0, st0, ld1, st1);
+                } else if constexpr (type == PREPARE_UNLOCK_WRITE) {
+                    canReserve = prepareUnlockAndWriteReserveOrIntercept(ld0, st0, ld1, st1);
+                }
+                static_assert(type < PREPARE_MAX, "type is not supported.");
+                if (canReserve) {
+                    return; // Retry lock reservation.
+                }
+                _mm_pause();
+            }
+        }
+    }
+public:
+
     void readReserve() {
         ILockData ld0 = mutex_->atomicLoad();
         ILockState st0 = state_;
@@ -267,8 +316,12 @@ public:
             ILockData ld1;
             ILockState st1;
             if (!prepareReadReserveOrIntercept(ld0, st0, ld1, st1)) {
+#if 1
+                waitFor<PREPARE_READ>(ld0);
+#else
                 ld0 = mutex_->atomicLoad();
                 _mm_pause();
+#endif
                 continue;
             }
             if (mutex_->compareAndSwap(ld0, ld1)) {
@@ -297,8 +350,12 @@ public:
             ILockData ld1;
             ILockState st1;
             if (!prepareUnlockAndReadReserveOrIntercept(ld0, st0, ld1, st1)) {
+#if 1
+                waitFor<PREPARE_UNLOCK_READ>(ld0);
+#else
                 ld0 = mutex_->atomicLoad();
                 _mm_pause();
+#endif
                 continue;
             }
             if (ld0 == ld1) {
@@ -333,8 +390,12 @@ public:
             ILockData ld1;
             ILockState st1;
             if (!prepareWriteReserveOrIntercept(ld0, st0, ld1, st1)) {
+#if 1
+                waitFor<PREPARE_WRITE>(ld0);
+#else
                 ld0 = mutex_->atomicLoad();
                 _mm_pause();
+#endif
                 continue;
             }
             if (mutex_->compareAndSwap(ld0, ld1)) {
@@ -364,8 +425,12 @@ public:
             ILockData ld1;
             ILockState st1;
             if (!prepareUnlockAndWriteReserveOrIntercept(ld0, st0, ld1, st1)) {
+#if 1
+                waitFor<PREPARE_UNLOCK_WRITE>(ld0);
+#else
                 ld0 = mutex_->atomicLoad();
                 _mm_pause();
+#endif
                 continue;
             }
             if (ld0 == ld1) {
@@ -592,16 +657,21 @@ private:
 };
 
 
+template <typename PQLock>
 class ILockSet
 {
 public:
+    using Lock = ILock<PQLock>;
 
-    using Vec = std::vector<ILock>;
+
+    using Vec = std::vector<Lock>;
     using Map = std::unordered_map<
         uintptr_t, size_t,
         std::hash<uintptr_t>,
         std::equal_to<uintptr_t>,
         LowOverheadAllocatorT<std::pair<const uintptr_t, size_t> > >;
+
+    using Mutex = IMutex<PQLock>;
 
 private:
     Vec vec_;
@@ -613,7 +683,7 @@ public:
     void init(uint32_t ordId) {
         ordId_ = ordId;
     }
-    void invisibleRead(IMutex& mutex) {
+    void invisibleRead(Mutex& mutex) {
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it = findInVec(key);
         if (it != vec_.end()) {
@@ -621,7 +691,7 @@ public:
             return;
         }
         vec_.emplace_back(mutex, ordId_);
-        ILock& lk = vec_.back();
+        Lock& lk = vec_.back();
         lk.initInvisibleRead();
         for (;;) {
             lk.waitForInvisibleRead();
@@ -629,12 +699,12 @@ public:
             if (lk.unchanged()) break;
         }
     }
-    bool reservedRead(IMutex& mutex) {
+    bool reservedRead(Mutex& mutex) {
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
             vec_.emplace_back(mutex, ordId_);
-            ILock& lk = vec_.back();
+            Lock& lk = vec_.back();
             lk.readReserve();
             for (;;) {
                 // read shared version.
@@ -642,7 +712,7 @@ public:
                 lk.unlockAndReadReserve();
             }
         }
-        ILock& lk = *it0;
+        Lock& lk = *it0;
         if (lk.mode() == AccessMode::INVISIBLE_READ) {
             const uint32_t uVer = lk.state().uVer;
             lk.unlockAndReadReserve();
@@ -651,21 +721,21 @@ public:
         // read local version.
         return true;
     }
-    bool blindWrite(IMutex& mutex) {
+    bool blindWrite(Mutex& mutex) {
         // TODO: a bit optimization is capable for blind write.
         return write(mutex);
     }
-    bool write(IMutex& mutex) {
+    bool write(Mutex& mutex) {
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
             vec_.emplace_back(mutex, ordId_);
-            ILock& lk = vec_.back();
+            Lock& lk = vec_.back();
             lk.writeReserve();
             // write local version.
             return true;
         }
-        ILock& lk = *it0;
+        Lock& lk = *it0;
         if (lk.mode() == AccessMode::INVISIBLE_READ || lk.mode() == AccessMode::RESERVED_READ) {
             if (!lk.upgrade()) return false;
         }
@@ -677,7 +747,7 @@ public:
         std::sort(vec_.begin(), vec_.end());
         // map_ is invalidated here. Do not use it.
 #endif
-        for (ILock& lk : vec_) {
+        for (Lock& lk : vec_) {
             if (lk.mode() != AccessMode::WRITE) continue;
             if (!lk.protect()) return false;
         }
@@ -686,7 +756,7 @@ public:
         return true;
     }
     bool verifyAndUnlock() {
-        for (ILock& lk : vec_) {
+        for (Lock& lk : vec_) {
             if (lk.mode() == AccessMode::WRITE) continue;
             if (!lk.unchanged()) return false;
             // S2PL allow unlocking of read locks.
@@ -695,7 +765,7 @@ public:
         return true;
     }
     void updateAndUnlock() {
-        for (ILock& lk : vec_) {
+        for (Lock& lk : vec_) {
             if (lk.mode() != AccessMode::WRITE) continue;
             lk.update();
             __atomic_signal_fence(__ATOMIC_RELEASE); // for x86.
@@ -712,7 +782,7 @@ public:
 private:
     typename Vec::iterator findInVec(uintptr_t key) {
         // 4KiB scan in average.
-        const size_t threshold = 4096 * 2 / sizeof(ILock);
+        const size_t threshold = 4096 * 2 / sizeof(Lock);
         if (vec_.size() > threshold) {
             // create indexes.
             for (size_t i = map_.size(); i < vec_.size(); i++) {
@@ -729,7 +799,7 @@ private:
         }
         return std::find_if(
             vec_.begin(), vec_.end(),
-            [&](const ILock& lk) {
+            [&](const Lock& lk) {
                 return lk.getMutexId() == key;
             });
     }

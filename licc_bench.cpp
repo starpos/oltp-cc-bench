@@ -1,5 +1,6 @@
 #include <cstdio>
 #include "licc.hpp"
+#include "pqlock.hpp"
 #include "cmdline_option.hpp"
 #include "measure_util.hpp"
 #include "cpuid.hpp"
@@ -21,10 +22,14 @@ struct CmdLineOptionPlus : CmdLineOption
     }
 };
 
+//using PQLock = cybozu::lock::PQMcsLock3;
+using PQLock = cybozu::lock::PQNoneLock;
 
 using ILockData = cybozu::lock::ILockData;
-using ILock = cybozu::lock::ILock;
-using IMutex = cybozu::lock::IMutex;
+using ILock = cybozu::lock::ILock<PQLock>;
+using IMutex = cybozu::lock::IMutex<PQLock>;
+using ILockSet = cybozu::lock::ILockSet<PQLock>;
+
 
 enum class IMode : uint8_t {
     S = 0, X = 1, INVALID = 2,
@@ -117,7 +122,7 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
         getRecordIdx(rand, isLongTx, shortTxMode, longTxMode, muV.size(), realNrOp);
 #endif
 
-    cybozu::lock::ILockSet lockSet;
+    ILockSet lockSet;
 
     //std::unordered_map<size_t, size_t> retryMap;
     uint64_t tdiffTotal = 0;
@@ -193,7 +198,7 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 #if 0 // Backoff
             const size_t n = rand() % (1 << (retry + 10));
             for (size_t i = 0; i < n; i++) _mm_pause();
-#elif 1
+#elif 0
             nrAbort++;
             // Adaptive backoff.
             const uint64_t t1 = cybozu::time::rdtscp();
