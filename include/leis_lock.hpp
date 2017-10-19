@@ -15,7 +15,7 @@
 // XSLock with helper MCS lock
 #define USE_LEIS_MCS
 #undef USE_LEIS_SXQL
-#elif 1
+#elif 0
 // Shared eXclusive Queuing Lock (original)
 #include "sxql.hpp"
 #undef USE_LEIS_MCS
