@@ -21,6 +21,7 @@ struct Shared
     size_t nrWr;
     int shortTxMode;
     int longTxMode;
+    bool usesBackOff;
 };
 
 
@@ -70,6 +71,8 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
         }
 
         size_t firstRecIdx;
+        uint64_t t0;
+        if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
             // Try to run transaction.
@@ -99,10 +102,7 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
           abort:
             localSet.clear();
             res.incAbort(isLongTx);
-#if 0 // Backoff
-            const size_t n = rand() % (retry < 10 ? (1 << (retry + 10)) : 1 << 20);
-            for (size_t i = 0; i < n; i++) _mm_pause();
-#endif
+            if (shared.usesBackOff) backOff(t0, retry, rand);
         }
     }
     return res;
@@ -174,10 +174,15 @@ struct CmdLineOptionPlus : CmdLineOption
 {
     using base = CmdLineOption;
 
+    int usesBackOff; // 0 or 1.
+
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
+        appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
     }
     std::string str() const {
-        return cybozu::util::formatString("mode:tictoc ") + base::str();
+        return cybozu::util::formatString(
+            "mode:tictoc %s backoff:%d"
+            , base::str().c_str(), usesBackOff ? 1 : 0);
     }
 };
 
@@ -195,6 +200,7 @@ int main(int argc, char *argv[]) try
         shared.nrWr = opt.nrWr;
         shared.shortTxMode = opt.shortTxMode;
         shared.longTxMode = opt.longTxMode;
+        shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         for (size_t i = 0; i < opt.nrLoop; i++) {
             runExec(opt, shared, worker2);
         }
