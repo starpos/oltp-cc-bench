@@ -74,8 +74,12 @@ size_t worker(size_t idx, bool& start, bool& quit, std::vector<typename PQLock::
 
     while (!start) _mm_pause();
     while (!quit) {
+#if 0
         fillMuIdVecLoop(muIdV, rand, muV.size());
         std::sort(muIdV.begin(), muIdV.end());
+#else
+        muIdV[0] = rand() % muV.size();
+#endif
 
 #if 0
         const uint32_t txId = txIdGen.get();
@@ -172,7 +176,7 @@ void runExecT(size_t nrRes, size_t nrTh, size_t runSec, bool verbose, LockType l
         }
         total += cV[i];
     }
-    ::printf("mode:%s mutex:%zu  concurrency:%zu  ops:%.03f  total:%zu\n"
+    ::printf("mode:%s  mutex:%zu  concurrency:%zu  ops:%.03f  total:%zu\n"
              , getPQLockName(lkType), nrRes, nrTh, total / (double)runSec, total);
     ::fflush(::stdout);
 }
