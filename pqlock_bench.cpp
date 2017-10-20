@@ -1,4 +1,3 @@
-#include <immintrin.h>
 #include <unistd.h>
 #include <vector>
 #include "thread_util.hpp"
@@ -8,6 +7,7 @@
 #include "tx_util.hpp"
 #include "lock.hpp"
 #include "pqlock.hpp"
+#include "arch.hpp"
 
 
 enum class LockType : uint8_t
@@ -217,17 +217,20 @@ int main() try
 #if 1
     //for (LockType lkType : {LockType::PQSpin, LockType::PQPosix,
     //LockType::PQMcs1, LockType::PQMcs2, LockType::PQMcs3, LockType::PQ1993, LockType::PQ1997}) {
-    for (LockType lkType : {LockType::PQSpin, LockType::PQPosix,
-                LockType::PQMcs1, LockType::PQMcs2, LockType::PQMcs3, LockType::PQ1993}) {
+    //for (LockType lkType : {LockType::PQSpin, LockType::PQPosix,
+     //           LockType::PQMcs1, LockType::PQMcs2, LockType::PQMcs3, LockType::PQ1993}) {
         //for (LockType lkType : {LockType::PQMcs1, LockType::PQMcs2, LockType::PQMcs3}) {
-        //for (LockType lkType : {LockType::PQMcs3}) {
+       for (LockType lkType : {LockType::PQMcs1}) {
         //for (size_t nrRes : {1, 10, 100, 1000, 10000}) {
+        //for (size_t nrRes : {4}) {
         for (size_t nrRes : {1, 2, 4, 1024}) {
             //for (size_t nrTh : {1, 2, 4, 8, 16, 24, 32}) {
-            //for (size_t nrTh : {2}) {
+            //for (size_t nrTh : {8}) {
             //for (size_t nrTh = 1; nrTh <= 32; nrTh++) {
-            for (size_t nrTh : {1, 2, 4, 6, 8, 12, 16, 20, 24, 28, 32}) {
-                size_t nrLoop = 10;
+            //for (size_t nrTh : {1, 2, 4, 6, 8, 12, 16, 20, 24, 28, 32}) {
+            //for (size_t nrTh : {1, 2, 4, 8, 16}) {
+            for (size_t nrTh : {2, 4, 8, 16}) {
+                size_t nrLoop = 5;
                 for (size_t i = 0; i < nrLoop; i++) {
                     size_t periodSec = 10;
                     runExec(nrRes, nrTh, periodSec, false, lkType);

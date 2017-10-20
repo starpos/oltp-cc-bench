@@ -1,12 +1,12 @@
 #include <ctime>
 #include <vector>
 #include <chrono>
-#include <immintrin.h>
 #include "thread_util.hpp"
 #include "random.hpp"
 #include "tx_util.hpp"
 #include "measure_util.hpp"
 #include "cpuid.hpp"
+#include "arch.hpp"
 
 
 const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);

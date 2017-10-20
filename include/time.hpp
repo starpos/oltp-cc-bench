@@ -59,13 +59,25 @@ public:
     }
 };
 
-
+#ifdef __x86_64__
 uint64_t rdtscp()
 {
     uint32_t eax, edx, ecx;
     __asm__ volatile ("rdtscp" : "=a" (eax), "=d" (edx), "=c" (ecx));
     return (uint64_t)edx << 32 | eax;
 }
+#elif defined(__aarch64__)
+uint64_t rdtscp()
+{
+    // QQQQQ
+    return 0;
+}
+#else
+uint64_t rdtscp()
+{
+    throw std::runtime_error("rdtscp() is not supported.");
+}
+#endif
 
 }} // namespace cybozu::time
 

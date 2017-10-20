@@ -16,7 +16,7 @@
 #include "thread_util.hpp"
 #include "cybozu/exception.hpp"
 #include "time.hpp"
-
+#include "arch.hpp"
 
 constexpr size_t CACHE_LINE_SIZE = 64;
 

@@ -10,7 +10,6 @@
 #include <condition_variable>
 #include <cassert>
 #include <cstdio>
-#include <immintrin.h>
 #include <algorithm>
 #include <queue>
 #include <stdexcept>
@@ -20,6 +19,7 @@
 #include <vector>
 #include <unordered_map>
 #include "util.hpp"
+#include "arch.hpp"
 
 
 namespace cybozu {
@@ -157,11 +157,11 @@ private:
 public:
     McsSpinlock(Mutex *mutex) : mutex_(mutex) {
         assert(mutex_);
-        Node *prev = __atomic_exchange_n(&mutex_->tail, &node_, __ATOMIC_RELAXED);
+        Node *prev = __atomic_exchange_n(&mutex_->tail, &node_, __ATOMIC_ACQ_REL);
         if (prev) {
             node_.wait = true;
-            prev->next = &node_;
             __atomic_thread_fence(__ATOMIC_RELEASE);
+            prev->next = &node_;
             while (node_.wait) _mm_pause();
         }
     }
@@ -170,7 +170,7 @@ public:
             Node *node = &node_;
             if (__atomic_compare_exchange_n(
                     &mutex_->tail, &node, nullptr, false,
-                    __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
                 return;
             }
             while (!node_.next) _mm_pause();

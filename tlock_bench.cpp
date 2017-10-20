@@ -1,7 +1,6 @@
 #include <unordered_map>
 #include <iostream>
 #include <sstream>
-#include <immintrin.h>
 #include <unistd.h>
 #include "thread_util.hpp"
 #include "random.hpp"
@@ -12,6 +11,7 @@
 #include "lock.hpp"
 #include "trlock.hpp"
 #include "cmdline_option.hpp"
+#include "arch.hpp"
 
 
 using Spinlock = cybozu::lock::TtasSpinlockT<0>;

@@ -1,7 +1,7 @@
-#include <immintrin.h>
 #include "measure_util.hpp"
 #include "cmdline_option.hpp"
 #include "cpuid.hpp"
+#include "arch.hpp"
 
 
 const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);

@@ -1,10 +1,10 @@
 #include "thread_util.hpp"
 #include "random.hpp"
-#include <immintrin.h>
 #include <unistd.h>
 #include "cpuid.hpp"
 #include "measure_util.hpp"
 #include "lock.hpp"
+#include "arch.hpp"
 
 
 using Mutex = cybozu::lock::XSMutex;

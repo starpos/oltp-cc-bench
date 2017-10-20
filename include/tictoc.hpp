@@ -7,13 +7,13 @@
  * (C) 2016 Cybozu Labs, Inc.
  */
 #include <stdexcept>
-#include <immintrin.h>
 #include <utility>
 #include <vector>
 #include <algorithm>
 #include <cstring>
 #include <unordered_map>
 #include "lock.hpp"
+#include "arch.hpp"
 
 
 namespace cybozu {

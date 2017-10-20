@@ -4,11 +4,11 @@
  *
  * A improved version of ILockSet of trlock.hpp.
  */
-#include <xmmintrin.h>
 #include "constexpr_util.hpp"
 #include "allocator.hpp"
 #include "util.hpp"
 #include "pqlock.hpp"
+#include "arch.hpp"
 
 
 namespace cybozu {

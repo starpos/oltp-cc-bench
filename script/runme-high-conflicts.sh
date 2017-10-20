@@ -8,7 +8,7 @@ CXX=clang++-5.0
 do_expr()
 {
 for nrWr in 0 1 2 3 4 5 6 7 8 9 10; do
-  for th in 16; do
+  for th in 96; do
     nrMu=50
     nrOp=10
     period=10
@@ -24,9 +24,10 @@ for nrWr in 0 1 2 3 4 5 6 7 8 9 10; do
     #./tlock_bench -mode trlock-occ -th $th -mu $nrMu -p $period -loop $loop -nrop $nrOp -nrwr $nrWr -sm 5
     #./tlock_bench -mode trlock-hybrid -th $th -mu $nrMu -p $period -loop $loop -nrop $nrOp -nrwr $nrWr -sm 5
     #./tlock_bench -mode trlock-hybrid -th $th -mu $nrMu -p $period -loop $loop -pqlock 4 -nrop $nrOp -nrwr $nrWr -sm 5
-    #./licc_bench -mode licc-pcc -th $th -mu $nrMu -p $period -loop $loop -nrop $nrOp -nrwr $nrWr -sm 5
-    #./licc_bench -mode licc-occ -th $th -mu $nrMu -p $period -loop $loop -nrop $nrOp -nrwr $nrWr -sm 5
-    #./licc_bench -mode licc-hybrid -th $th -mu $nrMu -p $period -loop $loop -nrop $nrOp -nrwr $nrWr -sm 5
+    ./licc_bench -mode licc-pcc -th $th -mu $nrMu -p $period -loop $loop -nrop $nrOp -nrwr $nrWr -sm 5
+    ./licc_bench -mode licc-occ -th $th -mu $nrMu -p $period -loop $loop -nrop $nrOp -nrwr $nrWr -sm 5
+    ./licc_bench -mode licc-hybrid -th $th -mu $nrMu -p $period -loop $loop -nrop $nrOp -nrwr $nrWr -sm 5
+    ./licc_bench -mode licc-hybrid -th $th -mu $nrMu -p $period -loop $loop -nrop $nrOp -nrwr $nrWr -sm 5 -pqlock 7
   done
 done
 }

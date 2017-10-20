@@ -1,10 +1,10 @@
 #include <unistd.h>
-#include <immintrin.h>
 #include "thread_util.hpp"
 #include "random.hpp"
 #include "cpuid.hpp"
 #include "measure_util.hpp"
 #include "leis_lock.hpp"
+#include "arch.hpp"
 
 
 template <bool UseMap>

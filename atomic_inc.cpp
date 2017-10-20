@@ -1,8 +1,8 @@
 #include <cstdio>
 #include <chrono>
 #include <vector>
-#include <immintrin.h>
 #include "thread_util.hpp"
+#include "arch.hpp"
 
 template <typename T>
 void unused(T&)

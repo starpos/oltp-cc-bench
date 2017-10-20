@@ -1,9 +1,11 @@
 #include "thread_util.hpp"
 #include "measure_util.hpp"
 #include <vector>
-#include <immintrin.h>
+#ifdef __x86_64__
 #include "atomic_x86_64.hpp"
+#endif
 #include "cpuid.hpp"
+#include "arch.hpp"
 
 
 const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
@@ -51,6 +53,18 @@ void worker0(size_t id, size_t& success, size_t& failure, const bool &start, con
 #endif
 
 
+#ifndef __x86_64__
+template <size_t atomic_kind>
+void worker1(size_t id, size_t& success, size_t& failure, const bool &start, const bool &quit)
+{
+    unused(id);
+    unused(success);
+    unused(failure);
+    unused(start);
+    unused(quit);
+    throw std::runtime_error("x86_64 only");
+}
+#else
 template <size_t atomic_kind>
 void worker1(size_t id, size_t& success, size_t& failure, const bool &start, const bool &quit)
 {
@@ -80,6 +94,7 @@ void worker1(size_t id, size_t& success, size_t& failure, const bool &start, con
     success = success0;
     failure = failure0;
 }
+#endif
 
 
 template <typename Worker>

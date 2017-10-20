@@ -1,10 +1,10 @@
 #include "thread_util.hpp"
 #include "random.hpp"
-#include <immintrin.h>
 #include <unistd.h>
 #include "cpuid.hpp"
 #include "measure_util.hpp"
 #include "counting_network.hpp"
+#include "arch.hpp"
 
 
 const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);

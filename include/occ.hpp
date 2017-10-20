@@ -7,9 +7,9 @@
  * (C) 2016 Cybozu Labs, Inc.
  */
 #include <stdexcept>
-#include <immintrin.h>
 #include <unordered_map>
 #include "lock.hpp"
+#include "arch.hpp"
 
 #define USE_OCC_MCS
 //#undef USE_OCC_MCS

@@ -2,8 +2,8 @@
 /**
  * 2PL wait and die for deadlock prevension.
  */
-#include <immintrin.h>
 #include "lock_data.hpp"
+#include "arch.hpp"
 
 
 namespace cybozu {

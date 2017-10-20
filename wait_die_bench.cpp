@@ -1,9 +1,9 @@
 #include "thread_util.hpp"
 #include "random.hpp"
-#include <immintrin.h>
 #include <unistd.h>
 #include "cpuid.hpp"
 #include "measure_util.hpp"
+#include "arch.hpp"
 
 #include "wait_die.hpp"
 #include "tx_util.hpp"

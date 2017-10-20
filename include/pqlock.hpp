@@ -3,6 +3,7 @@
  * Priority-queuing locks.
  */
 #include "lock.hpp"
+#include "atomic_wrapper.hpp"
 
 namespace cybozu {
 namespace lock {
@@ -17,6 +18,7 @@ public:
     ~PQNoneLock() noexcept {}
     uint32_t getTopPriorityInWaitQueue() const { return UINT32_MAX; }
 };
+
 
 /**
  * This is priority-queuing lock as an extended MCS lock.
@@ -64,26 +66,29 @@ private:
         return next;
     }
     Node *remove(Node *node) {
-        Node *next = node->next;
-        node->next = nullptr;
+        Node *next = load(node->next);
+        store(node->next, (Node *)nullptr);
         return next;
     }
     void readd2(Node *first, Node *last) {
-        Node *prev = __atomic_exchange_n(&mutex_->tail, last, __ATOMIC_RELAXED);
+        Node *prev = exchange(mutex_->tail, last);
         assert(prev != nullptr);
-        prev->next = first;
-        __atomic_thread_fence(__ATOMIC_RELEASE);
+        store(prev->next, first);
     }
     void reorder() {
-        assert(node_.next != nullptr);
+        assert(load(node_.next) != nullptr);
         Node *minP, *p;
         // search item with minimum priority.
-        p = node_.next;
+        Node *tail = load(mutex_->tail);
+        p = load(node_.next);
         minP = p;
         size_t c1 = 0;
         size_t c2 = 0;
-        while (p->next) {
-            p = p->next;
+        while (p != tail) {
+            // We must avoid ABA problem:
+            // If the pointer is not installed, we must wait for the operation.
+            while (load(p->next) == nullptr) _mm_pause();
+            p = load(p->next);
             c2++;
             if (p->pri < minP->pri) {
                 minP = p;
@@ -91,7 +96,15 @@ private:
             }
         }
         // move privious items to the tail of the list.
-        p = node_.next;
+        // Example:
+        //                                                tail
+        // (locked)->(pri=5)->(pri=3)->(pri=1)->(pri=6)->(pri=4)-->null
+        //              0        1        2       3        4
+        //                               minP
+        // Here c1 = 2, c2 = 4. Two items before minP will be moved to the tail.
+        // After the operation, the list will be the following:
+        // (locked)->(pri=1)->(pri=6)->(pri=4)->...->(pri=5)->(pri=3)-->...
+        p = load(node_.next);
 #if 0
         while (p != minP) {
             p = readd(p);
@@ -102,61 +115,66 @@ private:
             v.clear();
             v.reserve(c1);
             while (p != minP) {
-	        v.push_back(p);
-	        p = remove(p);
-	    }
-	    //if (c1 != q.size()) { ::printf("c1 %zu q.size %zu\n", c1, q.size()); } // QQQ
+                v.push_back(p);
+                p = remove(p);
+            }
+            //if (c1 != q.size()) { ::printf("c1 %zu q.size %zu\n", c1, q.size()); } // QQQ
 #if 1
-	    std::sort(v.begin(), v.end(), [](const Node* a, const Node* b) { return a->pri < b->pri; } );
+            std::sort(v.begin(), v.end(), [](const Node* a, const Node* b) { return a->pri < b->pri; } );
 #endif
-	    if (!v.empty()) {
-	        std::vector<Node*>::iterator i, j;
-	        i = v.begin();
-	        j = i; ++j;
+            if (!v.empty()) {
+                std::vector<Node*>::iterator i, j;
+                i = v.begin();
+                j = i; ++j;
                 while (j != v.end()) {
-	            (*i)->next = *j;
-	            ++i;
-		    ++j;
-	        }
-	        readd2(v.front(), v.back());
-	    }
-	}
+                    store((*i)->next, *j);
+                    ++i; ++j;
+                }
+                readd2(v.front(), v.back());
+            }
+        }
 #endif
-        node_.next = minP;
+        store(node_.next, minP);
     }
 public:
-    PQMcsLock() : mutex_(nullptr), node_() {}
-    PQMcsLock(Mutex *mutex, uint32_t pri) : PQMcsLock() { lock(mutex, pri); }
-    ~PQMcsLock() noexcept { unlock(); }
+    PQMcsLock() : mutex_(nullptr), node_() {
+    }
+    PQMcsLock(Mutex *mutex, uint32_t pri) : PQMcsLock() {
+        lock(mutex, pri);
+    }
+    ~PQMcsLock() noexcept {
+        unlock();
+    }
     void lock(Mutex *mutex, uint32_t pri) {
         assert(!mutex_);
         node_.init();
         mutex_ = mutex;
         node_.pri = pri;
 
-        Node *prev = __atomic_exchange_n(&mutex_->tail, &node_, __ATOMIC_RELAXED);
+        Node *prev = exchange(mutex_->tail, &node_);
         if (prev) {
-            node_.wait = true;
-            prev->next = &node_;
-            __atomic_thread_fence(__ATOMIC_RELEASE);
-            while (node_.wait) _mm_pause();
+            store(node_.wait, true);
+            storeStoreMemoryBarrier();
+            store(prev->next, &node_);
+            while (load(node_.wait)) _mm_pause();
+            loadLoadMemoryBarrier();
         }
     }
     void unlock() noexcept {
         if (!mutex_) return;
 
-        if (!node_.next) {
+        if (!load(node_.next)) {
             Node *node = &node_;
-            if (__atomic_compare_exchange_n(
-                    &mutex_->tail, &node, nullptr, false,
-                    __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+            if (compareExchange(mutex_->tail, node, nullptr)) {
                 return;
             }
-            while (!node_.next) _mm_pause();
+            while (!load(node_.next)) _mm_pause();
         }
         //mutex_.next is not null.
+        loadLoadMemoryBarrier();
         reorder();
-        node_.next->wait = false;
+        storeStoreMemoryBarrier();
+        store(node_.next->wait, false);
 
         mutex_ = nullptr;
     }
@@ -645,32 +663,35 @@ public:
     void lock(Mutex *mutex, uint32_t order) {
         assert(mutex);
         mutex_ = mutex;
-        node_.order = order;
+        store(node_.order, order);
 
-        uintptr_t prevWithBit = __atomic_exchange_n(&mutex_->tailWithBit, uintptr_t(&node_), __ATOMIC_ACQ_REL);
+        uintptr_t prevWithBit = exchange(mutex_->tailWithBit, uintptr_t(&node_));
         const bool isManager = prevWithBit == 1; // prevWithBit & 0x1
         Node *prev = (Node *)(prevWithBit & ~0x1);
 
         if (prev != nullptr) {
-            node_.wait = true;
-            __atomic_thread_fence(__ATOMIC_RELEASE);
-            prev->next = &node_;
-            while (node_.wait) _mm_pause(); // local spin wait.
+            store(node_.wait, true);
+            storeStoreMemoryBarrier();
+            store(prev->next, &node_);
+            while (load(node_.wait)) _mm_pause(); // local spin wait.
+            loadLoadMemoryBarrier();
             // Now I hold the lock.
             return;
         }
         if (!isManager) {
-            node_.wait = true;
-            __atomic_thread_fence(__ATOMIC_RELEASE);
-            mutex_->head = &node_;
-            while (node_.wait) _mm_pause(); // local spin wait.
+            store(node_.wait, true);
+            storeStoreMemoryBarrier();
+            assert(load(mutex_->head) == nullptr);
+            store(mutex_->head, &node_);
+            while (load(node_.wait)) _mm_pause(); // local spin wait.
+            loadLoadMemoryBarrier();
             // Now I hold the lock.
             return;
         }
         // I'm manager in the initial procedure.
         assert(mutex_->head == nullptr);
         assert(mutex_->priQ.empty());
-        uintptr_t tailWithBit = __atomic_exchange_n(&mutex_->tailWithBit, 0, __ATOMIC_ACQ_REL);
+        uintptr_t tailWithBit = exchange(mutex_->tailWithBit, 0);
         assert((tailWithBit & ~0x1) != 0);
         Node *tail = (Node *)tailWithBit;
         Node *node = &node_; // head.
@@ -681,40 +702,43 @@ public:
             // Now I hold the lock.
             return;
         }
-        node_.wait = true;
-        __atomic_thread_fence(__ATOMIC_RELEASE);
-        node->wait = false; // notify
-        while (node_.wait) _mm_pause(); // local spin wait.
+        store(node_.wait, true);
+        storeStoreMemoryBarrier();
+        store(node->wait, false); // notify
+        while (load(node_.wait)) _mm_pause(); // local spin wait.
+        loadLoadMemoryBarrier();
         // Now I hold the lock.
     }
 
     void unlock() {
         assert(mutex_);
-        uintptr_t tailWithBit = __atomic_load_n(&mutex_->tailWithBit, __ATOMIC_ACQUIRE);
+        uintptr_t tailWithBit = load(mutex_->tailWithBit);
         while (tailWithBit == 0 && mutex_->priQ.empty()) {
             // There is no requester.
-            bool success = __atomic_compare_exchange_n(
-                &mutex_->tailWithBit, &tailWithBit, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
-            if (success) {
+            if (compareExchange(mutex_->tailWithBit, tailWithBit, 1)) {
                 // The manager can leave.
                 return;
             }
+            _mm_pause();
         }
-        Node *node, *tail;
         if (tailWithBit != 0) {
+            Node *node, *tail;
             extractFromQ(&node, &tail);
             moveQtoQ(node, tail);
         }
-        node = mutex_->priQ.top();
+        assert(!mutex_->priQ.empty());
+        Node *node = mutex_->priQ.top();
         mutex_->priQ.pop();
-        node->wait = false; // notify.
+        storeStoreMemoryBarrier();
+        store(node->wait, false); // notify.
+        node_.init();
     }
 
     void extractFromQ(Node **nodeP, Node **tailP) {
-        while (mutex_->head == nullptr) _mm_pause();
-        *nodeP = mutex_->head;
-        mutex_->head = nullptr;
-        uintptr_t tailWithBit = __atomic_exchange_n(&mutex_->tailWithBit, 0, __ATOMIC_ACQ_REL);
+        while (load(mutex_->head) == nullptr) _mm_pause();
+        *nodeP = load(mutex_->head);
+        store(mutex_->head, nullptr);
+        uintptr_t tailWithBit = exchange(mutex_->tailWithBit, 0);
         assert(tailWithBit > 1);
         *tailP = (Node *)tailWithBit;
     }
@@ -724,7 +748,7 @@ public:
      */
     uint32_t getTopPriorityInWaitQueue() {
         assert(mutex_);
-        uintptr_t tailWithBit = __atomic_load_n(&mutex_->tailWithBit, __ATOMIC_ACQUIRE);
+        uintptr_t tailWithBit = load(mutex_->tailWithBit);
         assert(tailWithBit != 1);
         if (tailWithBit != 0) {
             Node *node, *tail;
@@ -732,7 +756,7 @@ public:
             moveQtoQ(node, tail);
         }
         if (mutex_->priQ.empty()) return UINT32_MAX;
-        return mutex_->priQ.top()->order;
+        return load(mutex_->priQ.top()->order);
     }
 
 private:
@@ -753,9 +777,12 @@ private:
 
         for (;;) {
             mutex_->priQ.push(node);
-            if (node == tail) return;
-            while (node->next == nullptr) _mm_pause();
-            node = node->next;
+            if (node == tail) {
+                assert(load(tail->next) == nullptr);
+                return;
+            }
+            while (load(node->next) == nullptr) _mm_pause();
+            node = load(node->next);
         }
     }
 };

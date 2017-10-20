@@ -2,7 +2,7 @@
 /**
  * Shared eXclusive Queuing Lock.
  */
-#include <immintrin.h>
+#include "arch.hpp"
 #include <cstring>
 #include <cinttypes>
 #include "util.hpp"
