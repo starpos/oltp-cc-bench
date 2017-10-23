@@ -69,8 +69,10 @@ uint64_t rdtscp()
 #elif defined(__aarch64__)
 uint64_t rdtscp()
 {
-    // QQQQQ
-    return 0;
+    // Precision is about 10nsec.
+    uint64_t ts;
+    __asm__ volatile ("isb; mrs %0, cntvct_el0" : "=r" (ts));
+    return ts;
 }
 #else
 uint64_t rdtscp()
