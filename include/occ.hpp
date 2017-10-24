@@ -29,18 +29,12 @@ struct OccLockData
     uint32_t obj;
     static constexpr uint32_t mask = (0x1 << 31);
 
-    OccLockData() : obj(0) {}
-    OccLockData load() const {
-        uint32_t x = __atomic_load_n(&obj, __ATOMIC_RELAXED);
-        OccLockData *lockD = reinterpret_cast<OccLockData*>(&x);
-        return *lockD;
+    OccLockData() : obj(0) {
     }
-    bool compareAndSwap(const OccLockData& before, const OccLockData& after) {
-        return __atomic_compare_exchange(&obj, (uint32_t *)&before, (uint32_t *)&after, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+    OccLockData(uint32_t obj): obj(obj) {
     }
-    void set(const OccLockData& after) {
-        obj = after.obj;
-    }
+    operator uint32_t() const { return obj; }
+
     uint32_t getVersion() const {
         return obj & ~mask;
     }
@@ -75,10 +69,33 @@ struct OccMutex
 #ifdef MUTEX_ON_CACHELINE
     alignas(CACHE_LINE_SIZE)
 #endif
-    OccLockData lockD;
+    uint32_t obj;
 #ifdef USE_OCC_MCS
     cybozu::lock::McsSpinlock::Mutex mcsMutex;
 #endif
+
+    OccLockData load() const {
+        return __atomic_load_n(&obj, __ATOMIC_RELAXED);
+    }
+    OccLockData loadAcquire() const {
+        return __atomic_load_n(&obj, __ATOMIC_ACQUIRE);
+    }
+#if 0
+    void set(const OccLockData& after) {
+        obj = after.obj;
+    }
+#endif
+    void store(const OccLockData& after) {
+        __atomic_store_n(&obj, after.obj, __ATOMIC_RELAXED);
+    }
+    void storeRelease(const OccLockData& after) {
+        __atomic_store_n(&obj, after.obj, __ATOMIC_RELEASE);
+    }
+    bool compareAndSwap(OccLockData& before, const OccLockData& after) {
+        return __atomic_compare_exchange_n(
+            &obj, &before.obj, after.obj,
+            false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    }
 };
 
 class OccLock
@@ -109,12 +126,12 @@ public:
         if (mutex_) throw std::runtime_error("OccLock::lock: already locked");
         mutex_ = mutex;
 
-        lockD_ = mutex_->lockD.load();
+        lockD_ = mutex_->load();
         for (;;) {
             if (lockD_.isLocked()) waitFor();
             LockData lockD = lockD_;
             lockD.setLock();
-            if (mutex_->lockD.compareAndSwap(lockD_, lockD)) {
+            if (mutex_->compareAndSwap(lockD_, lockD)) {
                 lockD_ = lockD;
                 updated_ = false;
                 break;
@@ -133,19 +150,12 @@ public:
             throw std::runtime_error("OccLock::unlock: CAS failed. Something is wrong.");
         }
 #else
-        writeFence();
-        mutex_->lockD.set(lockD);
+        mutex_->storeRelease(lockD);
 #endif
         mutex_ = nullptr;
     }
     void update() {
         updated_ = true;
-    }
-    /**
-     * Call this just after update the resource.
-     */
-    void writeFence() const {
-        __atomic_thread_fence(__ATOMIC_RELEASE);
     }
     uintptr_t getMutexId() const {
         return uintptr_t(mutex_);
@@ -161,9 +171,13 @@ private:
         // In order so many threads not to spin on lockD value.
         cybozu::lock::McsSpinlock lk(&mutex_->mcsMutex);
 #endif
+        LockData lockD;
         for (;;) {
-            lockD_ = mutex_->lockD.load();
-            if (!lockD_.isLocked()) return;
+            lockD = mutex_->load();
+            if (!lockD.isLocked()) {
+                lockD_ = lockD;
+                return;
+            }
             _mm_pause();
         }
     }
@@ -189,7 +203,7 @@ public:
     void prepare(const Mutex *mutex) {
         mutex_ = mutex;
         for (;;) {
-            lockD_ = mutex_->lockD.load();
+            lockD_ = mutex_->loadAcquire();
             if (!lockD_.isLocked()) break;
             _mm_pause();
         }
@@ -205,12 +219,12 @@ public:
      */
     bool verifyAll() const {
         if (!mutex_) throw std::runtime_error("OccReader::verify: mutex_ is null");
-        const LockData lockD = mutex_->lockD.load();
+        const LockData lockD = mutex_->load();
         return !lockD.isLocked() && lockD_.getVersion() == lockD.getVersion();
     }
     bool verifyVersion() const {
         if (!mutex_) throw std::runtime_error("OccReader::verify: mutex_ is null");
-        const LockData lockD = mutex_->lockD.load();
+        const LockData lockD = mutex_->load();
         return lockD_.getVersion() == lockD.getVersion();
     }
     uintptr_t getMutexId() const {

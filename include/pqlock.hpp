@@ -57,12 +57,11 @@ private:
 
     Node *readd(Node *node) {
         // node must not be the tail item.
-        Node *next = node->next;
-        node->next = nullptr;
-        Node *prev = __atomic_exchange_n(&mutex_->tail, node, __ATOMIC_RELAXED);
+        Node *next = load(node->next);
+        store(node->next, nullptr);
+        Node *prev = exchange(mutex_->tail, node);
         assert(prev != nullptr);
-        prev->next = node;
-        __atomic_thread_fence(__ATOMIC_RELEASE);
+        store(prev->next, node);
         return next;
     }
     Node *remove(Node *node) {
@@ -154,10 +153,8 @@ public:
         Node *prev = exchange(mutex_->tail, &node_);
         if (prev) {
             store(node_.wait, true);
-            storeStoreMemoryBarrier();
-            store(prev->next, &node_);
-            while (load(node_.wait)) _mm_pause();
-            loadLoadMemoryBarrier();
+            storeRelease(prev->next, &node_);
+            while (loadAcquire(node_.wait)) _mm_pause();
         }
     }
     void unlock() noexcept {
@@ -168,13 +165,11 @@ public:
             if (compareExchange(mutex_->tail, node, nullptr)) {
                 return;
             }
-            while (!load(node_.next)) _mm_pause();
+            while (!loadAcquire(node_.next)) _mm_pause();
         }
         //mutex_.next is not null.
-        loadLoadMemoryBarrier();
         reorder();
-        storeStoreMemoryBarrier();
-        store(node_.next->wait, false);
+        storeRelease(node_.next->wait, false);
 
         mutex_ = nullptr;
     }
@@ -332,7 +327,8 @@ public:
 #ifndef NDEBUG
                 , dummyAlloc(0), dummyFree(0)
 #endif
-                {}
+        {
+        }
     };
 private:
     Mutex *mutex_; /* shared by all threads. */
@@ -365,45 +361,37 @@ public:
 
         mutex_ = mutex;
         node_.pri = pri;
-        atomicFetchAdd(&mutex_->nr, 1);
+        fetchAdd(mutex_->nr, 1);
         Node *tail = addToTail(&node_);
         if (!tail) {
             // Now lock is held.
-            __atomic_thread_fence(__ATOMIC_ACQUIRE);
-            node_.wait = false;
+            store(node_.wait, false);
             Node *dummy = getNewDummy();
-            //while (dummy->next) _mm_pause();
-            //dummy->next = HAZARD_PTR;
             addToTail(dummy);
-            //__atomic_thread_fence(__ATOMIC_ACQUIRE);
-            while (!node_.next) _mm_pause();
-            //dummy->next = nullptr;
+            while (!loadAcquire(node_.next)) _mm_pause();
             assert(mutex_->priQ.empty());
             moveListToPriQ(node_.next);
         } else {
-            //node_.wait = true;
-            //while (tail->next == HAZARD_PTR) _mm_pause();
-            while (node_.wait) _mm_pause();
+            while (loadAcquire(node_.wait)) _mm_pause();
             // Now lock is held.
-            __atomic_thread_fence(__ATOMIC_ACQUIRE);
         }
-        node_.next = nullptr;
     }
     void unlock() {
         if (!mutex_) return;
         assert(!node_.wait);
 
         Node *dummy = getDummy();
-        if (mutex_->priQ.empty() && !dummy->next) {
-            if (compareAndSwap(&mutex_->tail, &dummy, nullptr)) {
+        if (mutex_->priQ.empty() && load(mutex_->tail) == dummy) {
+            if (compareExchange(mutex_->tail, dummy, nullptr)) {
                 /*
                  * There is no thread having lock now.
                  *
                  * Do not check assert(mutex_->dummy.next == nullptr);
                  * Because the dummy node may be used by another thread that have new lock.
                  */
-                __atomic_thread_fence(__ATOMIC_RELEASE);
-                atomicFetchSub(&mutex_->nr, 1);
+                fetchSub(mutex_->nr, 1);
+                mutex_ = nullptr;
+                node_.init();
                 return;
             }
         }
@@ -416,19 +404,21 @@ public:
         mutex_->priQ.pop();
         //::printf("givelock\n"); // QQQ
         gcDummy();
-        __atomic_thread_fence(__ATOMIC_RELEASE);
-        p->wait = false; // Release lock and the thread on p will hold lock.
 
-        atomicFetchSub(&mutex_->nr, 1);
+        // Release lock and the thread on p will hold lock.
+        storeRelease(p->wait, false);
+
+        fetchSub(mutex_->nr, 1);
         mutex_ = nullptr;
+        node_.init();
     }
     uint32_t getSelfPriority() const { return node_.pri; }
     /**
      * You must call this thread with lock held.
      */
     uint32_t getTopPriorityInWaitQueue() {
-        assert(!node_.wait);
-        if (getDummy()->next) {
+        assert(!load(node_.wait));
+        if (load(getDummy()->next)) {
             Node *p = moveDummyToTail();
             if (p) moveListToPriQ(p);
         }
@@ -454,31 +444,20 @@ private:
          */
         Node *oldDummy = getDummy();
         Node *newDummy = getNewDummy();
-#if 0
-        __atomic_thread_fence(__ATOMIC_ACQUIRE);
-        while (newDummy->next) _mm_pause(); // QQQ
-        //newDummy->next = HAZARD_PTR;
-        newDummy->next = nullptr;
-#endif
-        //__atomic_thread_fence(__ATOMIC_RELEASE);
         addToTail(newDummy);
-        //__atomic_thread_fence(__ATOMIC_ACQUIRE);
 #if 1
-        while (!oldDummy->next) _mm_pause();
+        while (!load(oldDummy->next)) _mm_pause();
 #else
         waitForReachable(oldDummy, newDummy);
 #endif
-        Node *head = oldDummy->next;
-        oldDummy->next = nullptr;
-        //__atomic_thread_fence(__ATOMIC_RELEASE);
+        Node *head = load(oldDummy->next);
+        store(oldDummy->next, nullptr);
         return head;
     }
     Node *addToTail(Node *node) {
-        Node *prev = atomicSwap(&mutex_->tail, node);
+        Node *prev = exchange(mutex_->tail, node);
         if (prev) {
-            //while (prev->next == HAZARD_PTR) _mm_pause();
-            prev->next = node;
-            __atomic_thread_fence(__ATOMIC_RELEASE);
+            store(prev->next, node);
         }
         return prev;
     }
@@ -500,13 +479,13 @@ private:
     }
     Node *getNewDummy() {
         std::deque<std::unique_ptr<Node> >& pool = getNodePool();
-        size_t nr = atomicLoad(&mutex_->nr);
+        size_t nr = load(mutex_->nr);
         std::deque<std::unique_ptr<Node> >& d = mutex_->dummy;
         if (d.size() < nr) {
             if (pool.empty()) {
                 d.push_back(std::make_unique<Node>());
 #ifndef NDEBUG
-                atomicFetchAdd(&mutex_->dummyAlloc, 1);
+                fetchAdd(mutex_->dummyAlloc, 1);
 #endif
             } else {
                 d.push_back(std::move(pool.front()));
@@ -522,7 +501,7 @@ private:
     }
     void gcDummy() {
         std::deque<std::unique_ptr<Node> >& pool = getNodePool();
-        size_t nr = atomicLoad(&mutex_->nr);
+        size_t nr = load(mutex_->nr);
         std::deque<std::unique_ptr<Node> >& d = mutex_->dummy;
         if (d.size() > nr) {
             pool.push_front(std::move(d.front()));
@@ -530,7 +509,7 @@ private:
         }
         if (pool.size() > MAX_NODE_POOL_SIZE) {
 #ifndef NDEBUG
-            atomicFetchAdd(&mutex_->dummyFree, pool.size() - MAX_NODE_POOL_SIZE);
+            fetchAdd(mutex_->dummyFree, pool.size() - MAX_NODE_POOL_SIZE);
 #endif
             pool.resize(MAX_NODE_POOL_SIZE);
         }
@@ -540,8 +519,7 @@ private:
         while (!isDummy(p)) {
             mutex_->priQ.push(p);
             c++;
-            __atomic_thread_fence(__ATOMIC_ACQUIRE);
-            while (!p->next) _mm_pause();
+            while (!load(p->next)) _mm_pause();
             p = p->next;
         }
         return c;
@@ -550,32 +528,11 @@ private:
         const Node *p = first;
         size_t c = 0;
         while (p != last) {
-            __atomic_thread_fence(__ATOMIC_ACQUIRE);
-            while (!p->next) _mm_pause();
-            p = p->next;
+            while (!loadAcquire(p->next)) _mm_pause();
+            p = load(p->next);
             c++;
         }
         return c;
-    }
-    //static constexpr int AtomicMode = __ATOMIC_SEQ_CST;
-    static constexpr int AtomicMode = __ATOMIC_RELAXED;
-    template <typename T> static T atomicLoad(T* t) {
-        return __atomic_load_n(t, AtomicMode);
-    }
-    template <typename T, typename U> static void atomicStore(T* t, U v) {
-        __atomic_store_n(t, static_cast<T>(v), AtomicMode);
-    }
-    template <typename T, typename U> static bool compareAndSwap(T* t, T* before, U after) {
-        return __atomic_compare_exchange_n(t, before, static_cast<T>(after), false, AtomicMode, __ATOMIC_RELAXED);
-    }
-    template <typename T, typename U> static T atomicSwap(T* t, U v) {
-        return __atomic_exchange_n(t, v, AtomicMode);
-    }
-    template <typename T, typename U> static T atomicFetchAdd(T* t, U v) {
-        return __atomic_fetch_add(t, static_cast<T>(v), AtomicMode);
-    }
-    template <typename T, typename U> static T atomicFetchSub(T* t, U v) {
-        return __atomic_fetch_sub(t, static_cast<T>(v), AtomicMode);
     }
 };
 
@@ -671,20 +628,16 @@ public:
 
         if (prev != nullptr) {
             store(node_.wait, true);
-            storeStoreMemoryBarrier();
-            store(prev->next, &node_);
-            while (load(node_.wait)) _mm_pause(); // local spin wait.
-            loadLoadMemoryBarrier();
+            storeRelease(prev->next, &node_);
+            while (loadAcquire(node_.wait)) _mm_pause(); // local spin wait.
             // Now I hold the lock.
             return;
         }
         if (!isManager) {
             store(node_.wait, true);
-            storeStoreMemoryBarrier();
             assert(load(mutex_->head) == nullptr);
-            store(mutex_->head, &node_);
-            while (load(node_.wait)) _mm_pause(); // local spin wait.
-            loadLoadMemoryBarrier();
+            storeRelease(mutex_->head, &node_);
+            while (loadAcquire(node_.wait)) _mm_pause(); // local spin wait.
             // Now I hold the lock.
             return;
         }
@@ -703,10 +656,8 @@ public:
             return;
         }
         store(node_.wait, true);
-        storeStoreMemoryBarrier();
-        store(node->wait, false); // notify
-        while (load(node_.wait)) _mm_pause(); // local spin wait.
-        loadLoadMemoryBarrier();
+        storeRelease(node->wait, false); // notify
+        while (loadAcquire(node_.wait)) _mm_pause(); // local spin wait.
         // Now I hold the lock.
     }
 
@@ -729,8 +680,7 @@ public:
         assert(!mutex_->priQ.empty());
         Node *node = mutex_->priQ.top();
         mutex_->priQ.pop();
-        storeStoreMemoryBarrier();
-        store(node->wait, false); // notify.
+        storeRelease(node->wait, false); // notify.
         node_.init();
     }
 
@@ -925,7 +875,6 @@ std::unique_ptr<Req> allocReq()
     std::unique_ptr<Req> ret = std::move(pool.front());
     pool.pop_front();
     ret->init();
-    //__atomic_thread_fence(__ATOMIC_RELEASE);
     return ret;
 #else
     return std::make_unique<Req>();
@@ -956,14 +905,20 @@ struct Lock
 #endif
     Req *head;
     Req *tail;
-    size_t counter; // QQQ
-    Lock() : head(), tail(), counter(0) {
+#if 0 // debug
+    size_t counter;
+#endif
+    Lock() : head(), tail()
+#if 0
+           , counter(0)
+#else
+    {
+#endif
         Req *p = allocReq().release();
         p->myproc = nullptr;
         p->watcher = nullptr;
         p->isGranted = true;
         tail = p;
-        //__atomic_thread_fence(__ATOMIC_RELEASE);
         head = p;
     }
 };
@@ -971,31 +926,32 @@ struct Lock
 
 void lock1993(Lock& lk, Proc& proc)
 {
-    proc.myreq = allocReq().release();
-    proc.myreq->myproc = &proc;
+    store(proc.myreq, allocReq().release());
+    store(proc.myreq->myproc, &proc);
 #if 0
-    ::printf("%5u  req %p\n", proc.pri, proc.myreq); // QQQ
+    ::printf("%5u  req %p\n", proc.pri, proc.myreq);
 #endif
-    proc.watch = __atomic_exchange_n(&lk.tail, proc.myreq, __ATOMIC_RELEASE);
+    Req *tail = exchange(lk.tail, proc.myreq);
+    storeRelease(proc.watch, tail);
     assert(proc.watch);
     assert(!proc.watch->watcher);
-    proc.watch->watcher = &proc;
+    store(proc.watch->watcher, &proc);
 #if 0
-    ::printf("pri %u watch %p\n", proc.pri, proc.watch); // QQQ
+    ::printf("pri %u watch %p\n", proc.pri, proc.watch);
 #endif
-    while (!proc.watch->isGranted) _mm_pause();
+    while (!loadAcquire(proc.watch->isGranted)) _mm_pause();
+    // locked.
 
-    // QQQ
 #if 0
     __attribute__((unused)) size_t c
         = __atomic_fetch_add(&lk.counter, 1, __ATOMIC_RELAXED);
 #if 0
-    ::printf("%5u  locked %zu\n", proc.pri, c); // QQQ
+    ::printf("%5u  locked %zu\n", proc.pri, c);
     ::fflush(::stdout);
 #endif
     if (c != 0) {
         assert(false);
-    }; // QQQ
+    };
 #endif
 }
 
@@ -1007,19 +963,16 @@ void unlock1993(Lock& lk, Proc& proc)
     assert(proc.myreq->myproc == &proc);
     assert(proc.watch->watcher == &proc);
 
-    //__atomic_thread_fence(__ATOMIC_ACQUIRE);
-    proc.myreq->myproc = proc.watch->myproc;
-    //__atomic_thread_fence(__ATOMIC_RELEASE);
+    storeRelease(proc.myreq->myproc, proc.watch->myproc);
     if (proc.myreq->myproc != nullptr) {
-        proc.myreq->myproc->myreq = proc.myreq;
+        storeRelease(proc.myreq->myproc->myreq, proc.myreq);
     } else {
-        lk.head = proc.myreq;
+        storeRelease(lk.head, proc.myreq);
     }
-    //__atomic_thread_fence(__ATOMIC_ACQ_REL);
 
     // Search the list for the highest-priority waiter.
     uint32_t highpri = UINT32_MAX;
-    Req *req = lk.head;
+    Req *req = load(lk.head);
     Req *highreq = req;
 #if 0 // try to reach tail but slower.
     Req *tail = __atomic_load_n(&lk.tail, __ATOMIC_RELAXED);
@@ -1033,28 +986,28 @@ void unlock1993(Lock& lk, Proc& proc)
         req = currproc->myreq;
     }
 #else
-    Proc *currproc = req->watcher;
+    Proc *currproc = load(req->watcher);
     while (currproc != nullptr) {
         if (currproc->pri < highpri) {
             highpri = currproc->pri;
-            highreq = currproc->watch;
+            highreq = load(currproc->watch);
         }
-        currproc = currproc->myreq->watcher;
+        currproc = load(currproc->myreq->watcher);
     }
 #endif
 
     // Pass the lock to the highest-priority watcher.
-    //__atomic_thread_fence(__ATOMIC_RELEASE);
 #if 0
     __attribute__((unused)) size_t c
         = __atomic_sub_fetch(&lk.counter, 1, __ATOMIC_RELAXED);
 #endif
 #if 0
     ::printf("%5u  unlocked %zu  highpri %u  highreq %p\n"
-             , proc.pri, c, highpri, highreq); // QQQ
+             , proc.pri, c, highpri, highreq);
     ::fflush(::stdout);
 #endif
-    highreq->isGranted = true;
+    storeRelease(highreq->isGranted, true);
+    // The lock has been moved to the highreq watcher.
 
     freeReq(std::unique_ptr<Req>(proc.watch));
 }
@@ -1087,7 +1040,7 @@ public:
         lock1993::lock1993(*mutex_, proc_);
     }
     void unlock() noexcept {
-        assert(mutex_);
+        if (!mutex_) return;
         lock1993::unlock1993(*mutex_, proc_);
         mutex_ = nullptr;
     }
@@ -1095,13 +1048,13 @@ public:
         assert(mutex_);
         assert(proc_.watch->isGranted);
         uint32_t highpri = UINT32_MAX;
-        lock1993::Proc *currproc = mutex_->head->watcher;
+        lock1993::Proc *currproc = load(mutex_->head->watcher);
         while (currproc != nullptr) {
             if (currproc->pri < highpri && currproc != &proc_) {
                 highpri = currproc->pri;
             }
             //while (!currproc->myreq) _mm_pause();
-            currproc = currproc->myreq->watcher;
+            currproc = load(currproc->myreq->watcher);
         }
         return highpri;
     }

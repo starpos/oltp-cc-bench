@@ -220,7 +220,7 @@ int main() try
     //for (LockType lkType : {LockType::PQSpin, LockType::PQPosix,
      //           LockType::PQMcs1, LockType::PQMcs2, LockType::PQMcs3, LockType::PQ1993}) {
         //for (LockType lkType : {LockType::PQMcs1, LockType::PQMcs2, LockType::PQMcs3}) {
-       for (LockType lkType : {LockType::PQMcs1}) {
+       for (LockType lkType : {LockType::PQMcs3}) {
         //for (size_t nrRes : {1, 10, 100, 1000, 10000}) {
         //for (size_t nrRes : {4}) {
         for (size_t nrRes : {1, 2, 4, 1024}) {

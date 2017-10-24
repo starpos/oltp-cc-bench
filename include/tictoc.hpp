@@ -65,16 +65,30 @@ struct Mutex
         return tsw;
     }
 #endif
+#if 0
     TsWord atomicRead() const {
         return (TsWord)__atomic_load_n(&tsw.obj, __ATOMIC_RELAXED);
+    }
+#endif
+    TsWord load() const {
+        return (TsWord)__atomic_load_n(&tsw.obj, __ATOMIC_RELAXED);
+    }
+    TsWord loadAcquire() const {
+        return (TsWord)__atomic_load_n(&tsw.obj, __ATOMIC_ACQUIRE);
     }
     bool compareAndSwap(TsWord& expected, const TsWord desired) {
         return __atomic_compare_exchange_n(
             &tsw.obj, &expected.obj, desired.obj,
-            false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+            false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
     }
+#if 0
     void set(const TsWord& desired) {
-        tsw.obj = desired.obj;
+        //tsw.obj = desired.obj;
+        __atomic_store_n(&tsw.obj, desired.obj, __ATOMIC_RELAXED);
+    }
+#endif
+    void storeRelease(const TsWord& desired) {
+        __atomic_store_n(&tsw.obj, desired.obj, __ATOMIC_RELEASE);
     }
 };
 
@@ -104,7 +118,7 @@ public:
     }
     bool isReadSucceeded() {
         assert(mutex_);
-        const TsWord tsw = mutex_->atomicRead();
+        const TsWord tsw = mutex_->load();
         assert(!tsw_.lock);
         const bool ret = tsw_ == tsw;
         tsw_ = tsw;
@@ -116,7 +130,7 @@ public:
         spinForUnlocked();
     }
     bool validate(uint64_t commitTs, bool isInWriteSet) {
-        TsWord v1 = mutex_->atomicRead();
+        TsWord v1 = mutex_->loadAcquire();
         for (;;) {
             if (tsw_.wts != v1.wts || (v1.rts() <= commitTs && v1.lock && !isInWriteSet)) {
                 return false;
@@ -138,7 +152,7 @@ public:
 private:
     void spinForUnlocked() {
         for (;;) {
-            tsw_ = mutex_->atomicRead();
+            tsw_ = mutex_->loadAcquire();
             if (!tsw_.lock) break;
             _mm_pause();
         }
@@ -203,23 +217,23 @@ public:
     bool tryLock(Mutex *mutex) {
         assert(!mutex_);
         assert(mutex);
-        TsWord tsw0 = mutex->atomicRead();
+        TsWord tsw0 = mutex->load();  // loadConsume
         if (tsw0.lock) return false;
         TsWord tsw1 = tsw0;
         tsw1.lock = true;
-        if (!mutex_->compareAndSwap(tsw0, tsw1)) return false;
+        if (!mutex->compareAndSwap(tsw0, tsw1)) return false;
         mutex_ = mutex;
         tsw_ = tsw1;
         return true;
     }
     void lock(Mutex *mutex) {
         assert(!mutex_);
-        TsWord tsw0 = mutex->atomicRead();
+        TsWord tsw0 = mutex->load();  // loadConsume
         TsWord tsw1;
         for (;;) {
             while (tsw0.lock) {
                 _mm_pause();
-                tsw0 = mutex->atomicRead();
+                tsw0 = mutex->load(); // loadConsume
             }
             tsw1 = tsw0;
             tsw1.lock = true;
@@ -239,8 +253,7 @@ public:
         __attribute__((unused)) const bool ret = mutex_->compareAndSwap(tsw_, tsw0);
         assert(ret);
 #else
-        __atomic_thread_fence(__ATOMIC_RELEASE);
-        mutex_->set(tsw0);
+        mutex_->storeRelease(tsw0);
 #endif
         mutex_ = nullptr;
     }
@@ -253,7 +266,7 @@ public:
         __attribute__((unused)) const bool ret = mutex_->compareAndSwap(tsw_, tsw0);
         assert(ret);
 #else
-        mutex_->set(tsw0);
+        mutex_->storeRelease(tsw0);
 #endif
         mutex_ = nullptr;
     }
