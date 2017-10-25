@@ -918,18 +918,28 @@ struct Lock
 #else
     {
 #endif
+        // The memory for Req will be freed
+        // by another thread at being unlocked.
         Req *p = allocReq().release();
+
         p->myproc = nullptr;
         p->watcher = nullptr;
         p->isGranted = true;
         tail = p;
         head = p;
     }
+    ~Lock() noexcept {
+        // There must exist neither lock requestors nor holders.
+        assert(head == tail);
+        assert(head != nullptr);
+        freeReq(std::unique_ptr<Req>(head));
+    }
 };
 
 
 void lock1993(Lock& lk, Proc& proc)
 {
+    // This allocated memory will be freeed by another thread.
     store(proc.myreq, allocReq().release());
     store(proc.myreq->myproc, &proc);
 #if 0
@@ -1081,34 +1091,22 @@ struct PCtr
     union {
         uint128_t obj;
         struct {
-            Node *ptr; // 8 bytes;
-            bool dq:1;
+            // We assume little endian.
             uint64_t ctr:63;
+            bool dq:1;
+            Node *ptr; // 64bit.
         };
     };
-#if 0
-    alignas(sizeof(uint128_t))
-    Node *ptr; // 8 bytes;
-    bool dq:1;
-    uint64_t ctr:63;
-#endif
 
-    PCtr() : ptr(nullptr), dq(true), ctr(0) {}
+    PCtr() : ptr(nullptr), dq(true), ctr(0) {
+    }
     PCtr(uint128_t v) {
-        //::memcpy(this, &v, sizeof(*this));
         obj = v;
     }
     operator uint128_t() const {
-#if 0
-        uint128_t v;
-        ::memcpy(&v, this, sizeof(v));
-        return v;
-#else
         return obj;
-#endif
     }
 };
-
 
 static_assert(sizeof(PCtr) <= sizeof(uint128_t), "PCtr size proceeds uint128_t.");
 
