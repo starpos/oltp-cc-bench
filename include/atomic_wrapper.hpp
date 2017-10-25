@@ -48,10 +48,10 @@ void memoryBarrier() {
     __atomic_thread_fence(__ATOMIC_ACQ_REL);
 }
 
-void storeStoreMemoryBarrier() {
+void releaseMemoryBarrier() {
     __atomic_thread_fence(__ATOMIC_RELEASE);
 }
 
-void loadLoadMemoryBarrier() {
+void acquireMemoryBarrier() {
     __atomic_thread_fence(__ATOMIC_ACQUIRE);
 }

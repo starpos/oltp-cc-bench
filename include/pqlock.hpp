@@ -946,10 +946,10 @@ void lock1993(Lock& lk, Proc& proc)
     ::printf("%5u  req %p\n", proc.pri, proc.myreq);
 #endif
     Req *tail = exchange(lk.tail, proc.myreq, __ATOMIC_ACQ_REL);
-    storeRelease(proc.watch, tail);
+    store(proc.watch, tail);
     assert(proc.watch);
     assert(!proc.watch->watcher);
-    store(proc.watch->watcher, &proc);
+    storeRelease(proc.watch->watcher, &proc);
 #if 0
     ::printf("pri %u watch %p\n", proc.pri, proc.watch);
 #endif
@@ -977,7 +977,7 @@ void unlock1993(Lock& lk, Proc& proc)
     assert(proc.myreq->myproc == &proc);
     assert(proc.watch->watcher == &proc);
 
-    storeRelease(proc.myreq->myproc, proc.watch->myproc);
+    store(proc.myreq->myproc, proc.watch->myproc);
     if (proc.myreq->myproc != nullptr) {
         storeRelease(proc.myreq->myproc->myreq, proc.myreq);
     } else {
@@ -986,7 +986,7 @@ void unlock1993(Lock& lk, Proc& proc)
 
     // Search the list for the highest-priority waiter.
     uint32_t highpri = UINT32_MAX;
-    Req *req = load(lk.head);
+    Req *req = loadAcquire(lk.head);
     Req *highreq = req;
 #if 0 // try to reach tail but slower.
     Req *tail = __atomic_load_n(&lk.tail, __ATOMIC_RELAXED);
