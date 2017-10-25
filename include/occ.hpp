@@ -91,10 +91,13 @@ struct OccMutex
     void storeRelease(const OccLockData& after) {
         __atomic_store_n(&obj, after.obj, __ATOMIC_RELEASE);
     }
+    // This is used in the write-lock phase.
+    // Full fence is set at the last point of the phase.
+    // So we need not fence with CAS.
     bool compareAndSwap(OccLockData& before, const OccLockData& after) {
         return __atomic_compare_exchange_n(
             &obj, &before.obj, after.obj,
-            false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+            false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
     }
 };
 
@@ -145,13 +148,7 @@ public:
         assert(lockD.isLocked());
         if (updated_) lockD.incVersion();
         lockD.clearLock();
-#if 0
-        if (!mutex_->lockD.compareAndSwap(lockD_, lockD)) {
-            throw std::runtime_error("OccLock::unlock: CAS failed. Something is wrong.");
-        }
-#else
         mutex_->storeRelease(lockD);
-#endif
         mutex_ = nullptr;
     }
     void update() {

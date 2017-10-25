@@ -101,13 +101,10 @@ public:
         WaitDieData atomicRead() const {
             return __atomic_load_n(&wd.obj, __ATOMIC_RELAXED);
         }
-        bool compareAndSwap(WaitDieData& expected, WaitDieData desired) {
+        bool compareAndSwap(WaitDieData& expected, WaitDieData desired, int mode) {
             return __atomic_compare_exchange_n(
                 &wd.obj, &expected.obj, desired.obj,
-                false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
-        }
-        void set(WaitDieData desired) {
-            wd.obj = desired.obj;
+                false, mode, __ATOMIC_RELAXED);
         }
     };
 
@@ -145,7 +142,7 @@ public:
                 if (txId < wd0.txId) {
                     wd1.txId = txId;
                 }
-                if (mutex_->compareAndSwap(wd0, wd1)) {
+                if (mutex_->compareAndSwap(wd0, wd1, __ATOMIC_ACQUIRE)) {
 #if 0 // debug
                     ::printf("lock    %p %s\n", mutex, wd1.str().c_str());
 #endif
@@ -173,7 +170,7 @@ public:
             if (wd0.txId == txId_ && wd1.getLockState()->isUnlocked()) {
                 wd1.txId = MAX_TXID;
             }
-            if (mutex_->compareAndSwap(wd0, wd1)) {
+            if (mutex_->compareAndSwap(wd0, wd1, __ATOMIC_RELEASE)) {
 #if 0 // debug
                 ::printf("unlock  %p %s\n", mutex_, wd1.str().c_str());
 #endif
@@ -190,7 +187,7 @@ public:
             WaitDieData wd1 = wd0;
             wd1.getLockState()->clearAll();
             wd1.getLockState()->set(Mode::X);
-            if (mutex_->compareAndSwap(wd0, wd1)) {
+            if (mutex_->compareAndSwap(wd0, wd1, __ATOMIC_RELAXED)) {
                 mode_ = Mode::X;
 #if 0 // debug
                 ::printf("upgrade %p %s\n", mutex_, wd1.str().c_str());

@@ -23,13 +23,13 @@ void storeRelease(Int0& m, Int1 v) {
 }
 
 template <typename Int0, typename Int1>
-Int0 exchange(Int0& m, Int1 v) {
-    return __atomic_exchange_n(&m, v, __ATOMIC_ACQ_REL);
+Int0 exchange(Int0& m, Int1 v, int mode) {
+    return __atomic_exchange_n(&m, v, mode);
 }
 
 template <typename Int0, typename Int1>
-bool compareExchange(Int0& m, Int0& before, Int1 after) {
-    return __atomic_compare_exchange_n(&m, &before, after, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+bool compareExchange(Int0& m, Int0& before, Int1 after, int mode) {
+    return __atomic_compare_exchange_n(&m, &before, after, false, mode, __ATOMIC_RELAXED);
 }
 
 template <typename Int0, typename Int1>

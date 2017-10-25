@@ -59,7 +59,7 @@ private:
         // node must not be the tail item.
         Node *next = load(node->next);
         store(node->next, nullptr);
-        Node *prev = exchange(mutex_->tail, node);
+        Node *prev = exchange(mutex_->tail, node, __ATOMIC_RELAXED);
         assert(prev != nullptr);
         store(prev->next, node);
         return next;
@@ -70,7 +70,7 @@ private:
         return next;
     }
     void readd2(Node *first, Node *last) {
-        Node *prev = exchange(mutex_->tail, last);
+        Node *prev = exchange(mutex_->tail, last, __ATOMIC_RELEASE);
         assert(prev != nullptr);
         store(prev->next, first);
     }
@@ -150,7 +150,7 @@ public:
         mutex_ = mutex;
         node_.pri = pri;
 
-        Node *prev = exchange(mutex_->tail, &node_);
+        Node *prev = exchange(mutex_->tail, &node_, __ATOMIC_ACQUIRE);
         if (prev) {
             store(node_.wait, true);
             storeRelease(prev->next, &node_);
@@ -162,7 +162,8 @@ public:
 
         if (!load(node_.next)) {
             Node *node = &node_;
-            if (compareExchange(mutex_->tail, node, nullptr)) {
+            if (compareExchange(mutex_->tail, node, nullptr, __ATOMIC_RELEASE)) {
+                mutex_ = nullptr;
                 return;
             }
             while (!loadAcquire(node_.next)) _mm_pause();
@@ -362,12 +363,12 @@ public:
         mutex_ = mutex;
         node_.pri = pri;
         fetchAdd(mutex_->nr, 1);
-        Node *tail = addToTail(&node_);
+        Node *tail = addToTail(&node_, __ATOMIC_RELEASE);
         if (!tail) {
             // Now lock is held.
             store(node_.wait, false);
             Node *dummy = getNewDummy();
-            addToTail(dummy);
+            addToTail(dummy, __ATOMIC_RELEASE);
             while (!loadAcquire(node_.next)) _mm_pause();
             assert(mutex_->priQ.empty());
             moveListToPriQ(node_.next);
@@ -382,7 +383,7 @@ public:
 
         Node *dummy = getDummy();
         if (mutex_->priQ.empty() && load(mutex_->tail) == dummy) {
-            if (compareExchange(mutex_->tail, dummy, nullptr)) {
+            if (compareExchange(mutex_->tail, dummy, nullptr, __ATOMIC_ACQ_REL)) {
                 /*
                  * There is no thread having lock now.
                  *
@@ -444,18 +445,18 @@ private:
          */
         Node *oldDummy = getDummy();
         Node *newDummy = getNewDummy();
-        addToTail(newDummy);
+        addToTail(newDummy, __ATOMIC_RELEASE);
 #if 1
         while (!load(oldDummy->next)) _mm_pause();
 #else
         waitForReachable(oldDummy, newDummy);
 #endif
         Node *head = load(oldDummy->next);
-        store(oldDummy->next, nullptr);
+        storeRelease(oldDummy->next, nullptr);
         return head;
     }
-    Node *addToTail(Node *node) {
-        Node *prev = exchange(mutex_->tail, node);
+    Node *addToTail(Node *node, int mode) {
+        Node *prev = exchange(mutex_->tail, node, mode);
         if (prev) {
             store(prev->next, node);
         }
@@ -520,7 +521,7 @@ private:
             mutex_->priQ.push(p);
             c++;
             while (!load(p->next)) _mm_pause();
-            p = p->next;
+            p = load(p->next);
         }
         return c;
     }
@@ -622,7 +623,7 @@ public:
         mutex_ = mutex;
         store(node_.order, order);
 
-        uintptr_t prevWithBit = exchange(mutex_->tailWithBit, uintptr_t(&node_));
+        uintptr_t prevWithBit = exchange(mutex_->tailWithBit, uintptr_t(&node_), __ATOMIC_ACQ_REL);
         const bool isManager = prevWithBit == 1; // prevWithBit & 0x1
         Node *prev = (Node *)(prevWithBit & ~0x1);
 
@@ -644,7 +645,7 @@ public:
         // I'm manager in the initial procedure.
         assert(mutex_->head == nullptr);
         assert(mutex_->priQ.empty());
-        uintptr_t tailWithBit = exchange(mutex_->tailWithBit, 0);
+        uintptr_t tailWithBit = exchange(mutex_->tailWithBit, 0, __ATOMIC_ACQ_REL);
         assert((tailWithBit & ~0x1) != 0);
         Node *tail = (Node *)tailWithBit;
         Node *node = &node_; // head.
@@ -666,8 +667,10 @@ public:
         uintptr_t tailWithBit = load(mutex_->tailWithBit);
         while (tailWithBit == 0 && mutex_->priQ.empty()) {
             // There is no requester.
-            if (compareExchange(mutex_->tailWithBit, tailWithBit, 1)) {
+            if (compareExchange(mutex_->tailWithBit, tailWithBit, 1, __ATOMIC_ACQ_REL)) {
                 // The manager can leave.
+                mutex_ = nullptr;
+                node_.init();
                 return;
             }
             _mm_pause();
@@ -681,6 +684,7 @@ public:
         Node *node = mutex_->priQ.top();
         mutex_->priQ.pop();
         storeRelease(node->wait, false); // notify.
+        mutex_ = nullptr;
         node_.init();
     }
 
@@ -688,7 +692,7 @@ public:
         while (load(mutex_->head) == nullptr) _mm_pause();
         *nodeP = load(mutex_->head);
         store(mutex_->head, nullptr);
-        uintptr_t tailWithBit = exchange(mutex_->tailWithBit, 0);
+        uintptr_t tailWithBit = exchange(mutex_->tailWithBit, 0, __ATOMIC_ACQ_REL);
         assert(tailWithBit > 1);
         *tailP = (Node *)tailWithBit;
     }
@@ -931,7 +935,7 @@ void lock1993(Lock& lk, Proc& proc)
 #if 0
     ::printf("%5u  req %p\n", proc.pri, proc.myreq);
 #endif
-    Req *tail = exchange(lk.tail, proc.myreq);
+    Req *tail = exchange(lk.tail, proc.myreq, __ATOMIC_ACQ_REL);
     storeRelease(proc.watch, tail);
     assert(proc.watch);
     assert(!proc.watch->watcher);

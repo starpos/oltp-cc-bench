@@ -158,7 +158,7 @@ private:
 public:
     McsSpinlock(Mutex *mutex) : mutex_(mutex) {
         assert(mutex_);
-        Node *prev = exchange(mutex_->tail, &node_);
+        Node *prev = exchange(mutex_->tail, &node_, __ATOMIC_ACQ_REL);
         if (prev) {
             store(node_.wait, true);
             storeRelease(prev->next, &node_);
@@ -168,7 +168,7 @@ public:
     ~McsSpinlock() noexcept {
         if (!load(node_.next)) {
             Node *node = &node_;
-            if (compareExchange(mutex_->tail, node, nullptr)) {
+            if (compareExchange(mutex_->tail, node, nullptr, __ATOMIC_RELEASE)) {
                 return;
             }
             while (!load(node_.next)) _mm_pause();
@@ -331,11 +331,12 @@ private:
         __attribute__((unused)) int ret = __atomic_fetch_sub(&v_, 1, __ATOMIC_RELEASE);
         assert(ret > 0);
     }
+    // This is used for lock only.
     bool compareAndSwap(int& before, int after) {
-        return __atomic_compare_exchange_n(&v_, &before, after, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+        return __atomic_compare_exchange_n(&v_, &before, after, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
     }
     int atomicLoad() const {
-        return __atomic_load_n(&v_, __ATOMIC_ACQUIRE);
+        return __atomic_load_n(&v_, __ATOMIC_RELAXED);
     }
 };
 

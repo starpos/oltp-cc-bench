@@ -76,10 +76,13 @@ struct Mutex
     TsWord loadAcquire() const {
         return (TsWord)__atomic_load_n(&tsw.obj, __ATOMIC_ACQUIRE);
     }
+    // This is used in the write-lock phase.
+    // Full fence is set at the last point of the phase.
+    // So we need not fence with CAS.
     bool compareAndSwap(TsWord& expected, const TsWord desired) {
         return __atomic_compare_exchange_n(
             &tsw.obj, &expected.obj, desired.obj,
-            false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+            false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
     }
 #if 0
     void set(const TsWord& desired) {
@@ -249,12 +252,7 @@ public:
         tsw0.lock = 0;
         tsw0.wts = commitTs;
         tsw0.delta = 0;
-#if 0
-        __attribute__((unused)) const bool ret = mutex_->compareAndSwap(tsw_, tsw0);
-        assert(ret);
-#else
         mutex_->storeRelease(tsw0);
-#endif
         mutex_ = nullptr;
     }
     void unlock() {
@@ -262,12 +260,7 @@ public:
         TsWord tsw0 = tsw_;
         assert(tsw0.lock);
         tsw0.lock = 0;
-#if 0
-        __attribute__((unused)) const bool ret = mutex_->compareAndSwap(tsw_, tsw0);
-        assert(ret);
-#else
         mutex_->storeRelease(tsw0);
-#endif
         mutex_ = nullptr;
     }
 private:
@@ -303,6 +296,7 @@ bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags)
         ls.emplace_back(w.mutex);
     }
 
+    // Serialization point.
     __atomic_thread_fence(__ATOMIC_ACQ_REL);
 
     // Calculate isInWriteSet for all the readers.

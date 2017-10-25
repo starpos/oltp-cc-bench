@@ -11,7 +11,7 @@
 #include <vector>
 #include "lock.hpp"
 
-#if 0
+#if 1
 // XSLock with helper MCS lock
 #define USE_LEIS_MCS
 #undef USE_LEIS_SXQL
@@ -41,22 +41,24 @@ struct MutexWithMcs
     MutexWithMcs() : obj(0), mcsMu() {
     }
 
-    bool compareAndSwap(int& before, int after) {
-        return __atomic_compare_exchange_n(&obj, &before, after, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    // This is used for lock or upgrade.
+    bool compareAndSwap(int& before, int after, int mode = __ATOMIC_ACQUIRE) {
+        return __atomic_compare_exchange_n(
+            &obj, &before, after, false, mode, __ATOMIC_RELAXED);
     }
+
     int atomicLoad() const {
         return __atomic_load_n(&obj, __ATOMIC_ACQUIRE);
     }
-    void store(int after) {
-        obj = after;
-        __atomic_thread_fence(__ATOMIC_RELEASE);
-    }
+
+    // These are used for unlock.
     int atomicFetchAdd(int value) {
         return __atomic_fetch_add(&obj, value, __ATOMIC_RELEASE);
     }
     int atomicFetchSub(int value) {
         return __atomic_fetch_sub(&obj, value, __ATOMIC_RELEASE);
     }
+
     std::string str() const {
         return cybozu::util::formatString("MutexWithMcs(%d)", obj);
     }
@@ -172,7 +174,7 @@ public:
 
         int v = mutex_->atomicLoad();
         while (v == 1) {
-            if (mutex_->compareAndSwap(v, -1)) {
+            if (mutex_->compareAndSwap(v, -1, __ATOMIC_RELAXED)) {
                 mode_ = Mode::X;
                 return true;
             }
@@ -191,7 +193,6 @@ public:
         if (mode_ == Mode::X) {
             int ret = mutex_->atomicFetchAdd(1);
             unusedVar(ret);
-            //mutex_->store(0);
             assert(ret == -1);
         } else {
             assert(mode_ == Mode::S);

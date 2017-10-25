@@ -143,10 +143,11 @@ struct IMutex
         }
 #endif
     }
-    bool compareAndSwap(ILockData &before, const ILockData& after) {
+    bool compareAndSwap(ILockData &before, const ILockData& after,
+                        int mode0 = __ATOMIC_ACQ_REL, int mode1 = __ATOMIC_ACQUIRE) {
 #if 1
         return __atomic_compare_exchange(
-            &obj, (uint64_t *)&before, (uint64_t *)&after, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+            &obj, (uint64_t *)&before, (uint64_t *)&after, false, mode0, mode1);
 #else // debug code.
         ILockData before0 = before;
         bool ret = __atomic_compare_exchange(
@@ -166,6 +167,16 @@ struct IMutex
         return ret;
 #endif
     }
+    bool compareAndSwapBegin(ILockData &before, const ILockData& after) {
+        return compareAndSwap(before, after, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+    }
+    bool compareAndSwapMid(ILockData &before, const ILockData& after) {
+        return compareAndSwap(before, after, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+    }
+    bool compareAndSwapEnd(ILockData &before, const ILockData& after) {
+        return compareAndSwap(before, after, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+    }
+    
     ILockData atomicLoad(int mode = __ATOMIC_RELAXED) const {
 #if 1
         return __atomic_load_n(&obj, mode);
@@ -338,7 +349,7 @@ public:
 #endif
                 continue;
             }
-            if (mutex_->compareAndSwap(ld0, ld1)) {
+            if (mutex_->compareAndSwapBegin(ld0, ld1)) {
                 changed = true;
                 ld0 = ld1;
                 st0 = st1;
@@ -375,7 +386,7 @@ public:
             if (ld0 == ld1) {
                 changed = true;
                 st0 = st1;
-            } else if (mutex_->compareAndSwap(ld0, ld1)) {
+            } else if (mutex_->compareAndSwapBegin(ld0, ld1)) {
                 changed = true;
                 ld0 = ld1;
                 st0 = st1;
@@ -412,7 +423,7 @@ public:
 #endif
                 continue;
             }
-            if (mutex_->compareAndSwap(ld0, ld1)) {
+            if (mutex_->compareAndSwapBegin(ld0, ld1)) {
                 changed = true;
                 ld0 = ld1;
                 st0 = st1;
@@ -450,7 +461,7 @@ public:
             if (ld0 == ld1) {
                 changed = true;
                 st0 = st1;
-            } else if (mutex_->compareAndSwap(ld0, ld1)) {
+            } else if (mutex_->compareAndSwapBegin(ld0, ld1)) {
                 changed = true;
                 ld0 = ld1;
                 st0 = st1;
@@ -476,7 +487,7 @@ public:
             ILockData ld1;
             ILockState st1;
             if (!prepareProtect(ld0, st0, ld1, st1)) return false;
-            if (mutex_->compareAndSwap(ld0, ld1)) {
+            if (mutex_->compareAndSwapMid(ld0, ld1)) {
                 st0 = st1;
                 break;
             }
@@ -493,7 +504,7 @@ public:
             ILockData ld1;
             ILockState st1;
             bool doCas = prepareUnlock(ld0, st0, ld1, st1);
-            if (doCas && !mutex_->compareAndSwap(ld0, ld1)) continue;
+            if (doCas && !mutex_->compareAndSwapEnd(ld0, ld1)) continue;
             st0 = st1;
             break;
         }
@@ -503,7 +514,7 @@ public:
 
     bool unchanged() {
         assert(mutex_);
-        const ILockData ld = mutex_->atomicLoad(__ATOMIC_ACQUIRE); // with read fence.
+        const ILockData ld = mutex_->atomicLoad();
         return !ld.protected_ && state_.uVer == ld.uVer;
     }
     void update() {
@@ -710,6 +721,7 @@ public:
         for (;;) {
             lk.waitForInvisibleRead();
             // read shared version.
+            __atomic_thread_fence(__ATOMIC_ACQUIRE);
             if (lk.unchanged()) break;
         }
     }
@@ -722,6 +734,7 @@ public:
             lk.readReserve();
             for (;;) {
                 // read shared version.
+                __atomic_thread_fence(__ATOMIC_ACQUIRE);
                 if (lk.unchanged()) return true;
                 lk.unlockAndReadReserve();
             }
@@ -766,7 +779,7 @@ public:
             if (!lk.protect()) return false;
         }
         // Here is serialization point.
-        __atomic_signal_fence(__ATOMIC_ACQ_REL); // for x86.
+        __atomic_thread_fence(__ATOMIC_ACQ_REL);
         return true;
     }
     bool verifyAndUnlock() {
@@ -782,7 +795,6 @@ public:
         for (Lock& lk : vec_) {
             if (lk.mode() != AccessMode::WRITE) continue;
             lk.update();
-            __atomic_signal_fence(__ATOMIC_RELEASE); // for x86.
             lk.unlock();
         }
         clear();
