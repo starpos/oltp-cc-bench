@@ -1075,6 +1075,12 @@ public:
 };
 
 
+/**
+ * CAUSION:
+ * Currently PQLock1997 does not work correctly.
+ * It has memory reuse problem.
+ * In addition, this code is tested only x86_64, not on ARMv8.
+ */
 namespace lock1997 {
 
 
@@ -1084,9 +1090,9 @@ struct Node;
 struct PCtr
 {
     /**
-     * 127-64: Next ptr 64bit
+     * 0-62  : Counter 63bit
      * 63    : Dq flag 1bit
-     * 62-0  : Counter 63bit
+     * 64-127: Next ptr 64bit
      */
     union {
         uint128_t obj;
@@ -1098,7 +1104,7 @@ struct PCtr
         };
     };
 
-    PCtr() : ptr(nullptr), dq(true), ctr(0) {
+    PCtr() : ctr(0), dq(true), ptr(nullptr) {
     }
     PCtr(uint128_t v) {
         obj = v;
@@ -1106,60 +1112,39 @@ struct PCtr
     operator uint128_t() const {
         return obj;
     }
+
+    void init(Node *node = nullptr) {
+        PCtr v0 = load();
+        for (;;) {
+            PCtr v1 = v0;
+            v1.ctr++;
+            v1.dq = true;
+            v1.ptr = node;
+            if (compareExchange(obj, v0.obj, v1.obj, __ATOMIC_RELAXED)) {
+                return;
+            }
+        }
+    }
+
+    void setDq(bool dq0) {
+        PCtr v0 = load();
+        for (;;) {
+            PCtr v1 = v0;
+            v1.ctr++;
+            v1.dq = dq0;
+            if (compareExchange(obj, v0.obj, v1.obj, __ATOMIC_RELAXED)) {
+                return;
+            }
+        }
+    }
+
+    PCtr load() const {
+        return ::load(obj);
+    }
 };
 
 static_assert(sizeof(PCtr) <= sizeof(uint128_t), "PCtr size proceeds uint128_t.");
 
-
-PCtr atomicRead(const PCtr& pctr)
-{
-    return __atomic_load_n(&pctr.obj, __ATOMIC_ACQUIRE);
-}
-
-
-bool compareAndSwap(PCtr& pctr, PCtr& expected, PCtr desired)
-{
-    return __atomic_compare_exchange_n(
-        &pctr.obj, &expected.obj, desired.obj,
-        false, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
-}
-
-void atomicInit(PCtr& pctr)
-{
-    bool failed = true;
-    PCtr pctr0 = pctr;
-    while (failed) {
-        PCtr pctr1 = pctr0;
-        pctr1.ptr = nullptr;
-        pctr1.dq = true;
-        pctr1.ctr++; // DO NOT RESET ctr.
-        failed = !__atomic_compare_exchange_n(
-            &pctr.obj, &pctr0.obj, pctr1.obj,
-            false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
-    }
-}
-
-void init(PCtr& pctr)
-{
-    pctr.ptr = nullptr;
-    pctr.dq = true;
-    pctr.ctr++;
-}
-
-
-void atomicSetDq(PCtr& pctr, bool v)
-{
-    bool failed = true;
-    PCtr pctr0 = pctr;
-    while (failed) {
-        PCtr pctr1 = pctr0;
-        pctr1.dq = v;
-        pctr1.ctr++; // QQQ
-        failed = !__atomic_compare_exchange_n(
-            &pctr.obj, &pctr0.obj, pctr1.obj,
-            false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
-    }
-}
 
 
 struct Node
@@ -1172,7 +1157,7 @@ struct Node
     bool isLocked; // You will get lock when this becomes false.
 
     void init(uint32_t pri0) {
-        atomicInit(next);
+        next.init();
         pri = pri0;
         isLocked = false;
     }
@@ -1187,7 +1172,7 @@ struct Mutex
 #endif
     PCtr next;
 
-    Mutex() : next() { atomicInit(next); }
+    Mutex() : next() { next.init(); }
 
 #if 0
     // Do not reuse cached nodes (with counter) for another mutex.
@@ -1254,8 +1239,7 @@ void lock(Mutex& mutex, PCtr& self, uint32_t pri)
 {
     Node *node = mutex.allocNode().release();
     node->init(pri);
-    atomicInit(self);
-    self.ptr = node;
+    self.init(node);
     __atomic_thread_fence(__ATOMIC_RELEASE);
 
     bool succeeded = false;
@@ -1263,19 +1247,15 @@ void lock(Mutex& mutex, PCtr& self, uint32_t pri)
 
     do {
         PCtr prev;
-        PCtr next = atomicRead(mutex.next);
+        PCtr next = load(mutex.next.obj);
         while (next.ptr == nullptr) {
             self.ctr = next.ctr + 1;
             self.dq = false;
-            if (compareAndSwap(mutex.next, next, self)) {
+            if (compareExchange(mutex.next.obj, next.obj, self.obj, __ATOMIC_RELAXED)) {
                 self.ptr->isLocked = false;
                 self.ptr->pri = 0; // max priority.
                 __atomic_thread_fence(__ATOMIC_RELEASE);
-#if 0
-                self.ptr->next.dq = false;
-#else
-                atomicSetDq(self.ptr->next, false);
-#endif
+                self.ptr->next.setDq(false);
                 succeeded = true;
                 break;
             }
@@ -1288,7 +1268,7 @@ void lock(Mutex& mutex, PCtr& self, uint32_t pri)
         size_t c = 0;
         do {
             prev = next;
-            next = atomicRead(prev.ptr->next);
+            next = load(prev.ptr->next.obj);
             if (next.dq || prev.ptr->pri > self.ptr->pri) {
                 failed = true;
                 c++;
@@ -1300,12 +1280,8 @@ void lock(Mutex& mutex, PCtr& self, uint32_t pri)
                 self.ctr = next.ctr + 1;
                 assert(!next.dq);
                 self.dq = false;
-                if (compareAndSwap(prev.ptr->next, next, self)) {
-#if 0
-                    self.ptr->next.dq = false;
-#else
-                    atomicSetDq(self.ptr->next, false);
-#endif
+                if (compareExchange(prev.ptr->next.obj, next.obj, self.obj, __ATOMIC_RELAXED)) {
+                    self.ptr->next.setDq(false);
                     __atomic_thread_fence(__ATOMIC_ACQ_REL);
                     while (self.ptr->isLocked) _mm_pause();
                     succeeded = true;
@@ -1339,12 +1315,8 @@ static thread_local PCtr pctrV_[10];
 
 void unlock(Mutex& mutex, PCtr& self)
 {
-#if 0
-    self.ptr->next.dq = true;
-#else
-    atomicSetDq(self.ptr->next, true);
-#endif
-    assert(self.ptr == atomicRead(mutex.next).ptr);
+    self.ptr->next.setDq(true);
+    assert(self.ptr == load(mutex.next).ptr);
     __atomic_thread_fence(__ATOMIC_RELEASE);
 
 
@@ -1366,16 +1338,16 @@ void unlock(Mutex& mutex, PCtr& self)
     mutex.next = self.ptr->next;
 #else
 #if 1
-    PCtr p0 = atomicRead(mutex.next);
+    PCtr p0 = load(mutex.next.obj);
 #else
     PCtr p0 = mutex.next;
 #endif
     PCtr p1;
     for (;;) {
-        p1 = atomicRead(self.ptr->next);
+        p1 = load(self.ptr->next.obj);
         p1.ctr = p0.ctr + 1;
         p1.dq = p0.dq;
-        if (compareAndSwap(mutex.next, p0, p1)) break;
+        if (compareExchange(mutex.next.obj, p0.obj, p1.obj, __ATOMIC_RELAXED)) break;
     }
 #endif
 
@@ -1383,10 +1355,10 @@ void unlock(Mutex& mutex, PCtr& self)
         Node *node = p1.ptr;
 
 #if 1
-        while (atomicRead(node->next).dq) _mm_pause();
+        while (node->next.load().dq) _mm_pause();
         //while (node->next.dq) _mm_pause();
 #endif
-        assert(atomicRead(mutex.next).ptr == node); // QQQ
+        assert(mutex.next.load().ptr == node); // QQQ
 
         node->pri = 0; // max priority.
         __atomic_thread_fence(__ATOMIC_RELEASE);
@@ -1439,7 +1411,7 @@ public:
         assert(self_.ptr);
         assert(mutex_->next.ptr == self_.ptr);
         assert(!self_.ptr->isLocked);
-        PCtr next = atomicRead(self_.ptr->next);
+        PCtr next = self_.ptr->next.load();
         if (next.ptr == nullptr) {
             return UINT32_MAX;
         } else {
