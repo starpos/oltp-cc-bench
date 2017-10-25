@@ -70,7 +70,7 @@ private:
         return next;
     }
     void readd2(Node *first, Node *last) {
-        Node *prev = exchange(mutex_->tail, last, __ATOMIC_RELEASE);
+        Node *prev = exchange(mutex_->tail, last, __ATOMIC_ACQ_REL);
         assert(prev != nullptr);
         store(prev->next, first);
     }
@@ -150,7 +150,7 @@ public:
         mutex_ = mutex;
         node_.pri = pri;
 
-        Node *prev = exchange(mutex_->tail, &node_, __ATOMIC_ACQUIRE);
+        Node *prev = exchange(mutex_->tail, &node_, __ATOMIC_ACQ_REL);
         if (prev) {
             store(node_.wait, true);
             storeRelease(prev->next, &node_);
@@ -1000,7 +1000,7 @@ void unlock1993(Lock& lk, Proc& proc)
         req = currproc->myreq;
     }
 #else
-    Proc *currproc = load(req->watcher);
+    Proc *currproc = loadAcquire(req->watcher);
     while (currproc != nullptr) {
         if (currproc->pri < highpri) {
             highpri = currproc->pri;
