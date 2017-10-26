@@ -7,19 +7,13 @@
 #include "arch.hpp"
 
 
-template <bool UseMap>
-using LeisLockSet  = cybozu::lock::LeisLockSet<UseMap>;
-
-// Mutex and Node must be the same among LeisLockSet<0> and LeisLockSet(1).
-using Mutex = LeisLockSet<0>::Mutex;
-using Mode = LeisLockSet<0>::Mode;
-
 const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
 
 
+template <typename LeisLockType>
 struct Shared
 {
-    std::vector<Mutex> muV;
+    std::vector<typename LeisLockType::Mutex> muV;
     size_t longTxSize;
     size_t nrOp;
     size_t nrWr;
@@ -27,9 +21,13 @@ struct Shared
     int longTxMode;
 };
 
-template <bool UseMap>
-Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+
+template <bool UseMap, typename LeisLockType>
+Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared<LeisLockType>& shared)
 {
+    using Mutex = typename LeisLockType::Mutex;
+    using Mode = typename Mutex::Mode;
+
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
@@ -43,7 +41,7 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
 
     Result res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
-    LeisLockSet<UseMap> llSet;
+    cybozu::lock::LeisLockSet<UseMap, LeisLockType> llSet;
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
 
     // USE_MIX_TX
@@ -184,16 +182,66 @@ struct CmdLineOptionPlus : CmdLineOption
     using base = CmdLineOption;
 
     int useVector;
+    int leisLockType;
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&useVector, 0, "vector", "[0 or 1]: use vector instead of map.");
+        appendOpt(&leisLockType, 0, "lock", "[id]: leis lock type (0:spin, 1:withmcs, 2:sxql)");
     }
     std::string str() const {
-        return cybozu::util::formatString("mode:leis ") +
-            base::str() +
-            cybozu::util::formatString(" vector:%d", useVector != 0);
+        return cybozu::util::formatString(
+            "mode:leis %s vector:%d lockType:%d"
+            , base::str().c_str(), useVector != 0, leisLockType);
     }
 };
+
+
+enum LockLockTypeType
+{
+    USE_LEIS_SPIN = 0,
+    USE_LEIS_WITHMCS = 1,
+    USE_LEIS_SXQL = 2,
+};
+
+
+
+template <typename Lock>
+void dispatch1(const CmdLineOptionPlus& opt)
+{
+    Shared<Lock> shared;
+    shared.muV.resize(opt.getNrMu());
+    shared.longTxSize = opt.longTxSize;
+    shared.nrOp = opt.nrOp;
+    shared.nrWr = opt.nrWr;
+    shared.shortTxMode = opt.shortTxMode;
+    shared.longTxMode = opt.longTxMode;
+
+    for (size_t i = 0; i < opt.nrLoop; i++) {
+        if (opt.useVector != 0) {
+            runExec(opt, shared, worker<0, Lock>);
+        } else {
+            runExec(opt, shared, worker<1, Lock>);
+        }
+    }
+}
+
+
+void dispatch0(const CmdLineOptionPlus& opt)
+{
+    switch (opt.leisLockType) {
+    case USE_LEIS_SPIN:
+        dispatch1<cybozu::lock::XSLock>(opt);
+        break;
+    case USE_LEIS_WITHMCS:
+        dispatch1<cybozu::lock::LockWithMcs>(opt);
+        break;
+    case USE_LEIS_SXQL:
+        dispatch1<cybozu::lock::SXQLock>(opt);
+        break;
+    default:
+        throw cybozu::Exception("bad leisLockType") << opt.leisLockType;
+    }
+}
 
 
 int main(int argc, char *argv[]) try
@@ -201,24 +249,11 @@ int main(int argc, char *argv[]) try
     CmdLineOptionPlus opt("leis_lock_bench: benchmark with leis lock.");
     opt.parse(argc, argv);
 
-    if (opt.workload == "custom") {
-        Shared shared;
-        shared.muV.resize(opt.getNrMu());
-        shared.longTxSize = opt.longTxSize;
-        shared.nrOp = opt.nrOp;
-        shared.nrWr = opt.nrWr;
-        shared.shortTxMode = opt.shortTxMode;
-        shared.longTxMode = opt.longTxMode;
-        for (size_t i = 0; i < opt.nrLoop; i++) {
-            if (opt.useVector != 0) {
-                runExec(opt, shared, worker<0>);
-            } else {
-                runExec(opt, shared, worker<1>);
-            }
-        }
-    } else {
+    if (opt.workload != "custom") {
         throw cybozu::Exception("bad workload.") << opt.workload;
     }
+    dispatch0(opt);
+
 } catch (std::exception& e) {
     ::fprintf(::stderr, "exeption: %s\n", e.what());
 } catch (...) {

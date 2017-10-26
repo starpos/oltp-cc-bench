@@ -10,20 +10,7 @@
 #include <map>
 #include <vector>
 #include "lock.hpp"
-
-#if 1
-// XSLock with helper MCS lock
-#define USE_LEIS_MCS
-#undef USE_LEIS_SXQL
-#elif 0
-// Shared eXclusive Queuing Lock (original)
 #include "sxql.hpp"
-#undef USE_LEIS_MCS
-#define USE_LEIS_SXQL
-#else
-// Normal XSLock
-#endif
-
 
 
 namespace cybozu {
@@ -250,33 +237,31 @@ private:
  *   Otherwise, you must rollback transaction's change, then call recover(),
  *   then restart your transaction (some locks are kept).
  *   In the end of your transaction, call unlock() to release all locks.
+ *
+ * UseMap should be 0 or 1.
+ * If 0, std::map will be used.
+ * If 1, std::vector and sort will be used.
+ *
+ * Lock: XSLock, LockWithMcs, or SXQLock.
+ *   XSLock is normal shared-exclusive lock.
+ *   LockWithMcs is XSLock with a helper MCS lock.
+ *   SXQLock is a shared eXclusive Queuing lock (original).
  */
-template <bool UseMap>
+template <bool UseMap, typename Lock>
 class LeisLockSet
 {
 };
 
 
 /*
- * Use std::map.
+ * Using std::map.
  */
-template <>
-class LeisLockSet<1>
+template <typename Lock>
+class LeisLockSet<1, Lock>
 {
 public:
-#ifdef USE_LEIS_MCS
-    using Lock = LockWithMcs;
-    using Mutex = Lock::Mutex;
-    using Mode = Mutex::Mode;
-#elif defined(USE_LEIS_SXQL)
-    using Lock = SXQLock;
-    using Mutex = Lock::Mutex;
-    using Mode = Mutex::Mode;
-#else
-    using Lock = XSLock;
-    using Mutex = Lock::Mutex;
-    using Mode = Mutex::Mode;
-#endif
+    using Mutex = typename Lock::Mutex;
+    using Mode = typename Mutex::Mode;
 
 private:
     using Map = std::map<Mutex*, Lock>;
@@ -288,7 +273,7 @@ private:
     // Temporary variables for lock() and recover().
     Mutex *mutex_;
     Mode mode_;
-    Map::iterator bgn_; // begin of M.
+    typename Map::iterator bgn_; // begin of M.
 
 public:
     LeisLockSet() = default;
@@ -296,7 +281,7 @@ public:
         unlock();
     }
     bool lock(Mutex *mutex, Mode mode) {
-        Map::iterator it = map_.lower_bound(mutex);
+        typename Map::iterator it = map_.lower_bound(mutex);
         if (it == map_.end()) {
             // M is empty.
             map_.emplace(mutex, Lock(mutex, mode)); // blocking
@@ -329,7 +314,7 @@ public:
     void recover() {
         // release locks in M.
         assert(tmp_.empty());
-        Map::iterator it = bgn_;
+        typename Map::iterator it = bgn_;
         while (it != map_.end()) {
             Lock& lk = it->second;
             tmp_.push_back(lk.isShared());
@@ -368,7 +353,7 @@ public:
         map_.clear(); // automatically unlocked in their destructor.
 #else
         // debug code.
-        Map::iterator it = map_.begin();
+        typename Map::iterator it = map_.begin();
         while (it != map_.end()) {
             Mutex *mu = it->first;
             it = map_.erase(it);
@@ -384,7 +369,7 @@ public:
 
     void printLockV(const char *prefix) const {
         ::printf("%p %s BEGIN\n", this, prefix);
-        for (const Map::value_type& pair : map_) {
+        for (const typename Map::value_type& pair : map_) {
             const Lock& lk = pair.second;
             ::printf("%p %s mutex:%p %s\n"
                      , this, prefix, lk.mutex(), lk.mutex()->str().c_str());
@@ -395,25 +380,14 @@ public:
 
 
 /*
- * Use std::vector and sort.
+ * Using std::vector and sort.
  */
-template <>
-class LeisLockSet<0>
+template <typename Lock>
+class LeisLockSet<0, Lock>
 {
 public:
-#ifdef USE_LEIS_MCS
-    using Lock = LockWithMcs;
-    using Mutex = Lock::Mutex;
-    using Mode = Mutex::Mode;
-#elif defined(USE_LEIS_SXQL)
-    using Lock = SXQLock;
-    using Mutex = Lock::Mutex;
-    using Mode = Mutex::Mode;
-#else
-    using Lock = XSLock;
-    using Mutex = Lock::Mutex;
-    using Mode = Mutex::Mode;
-#endif
+    using Mutex = typename Lock::Mutex;
+    using Mode = typename Mutex::Mode;
 
 private:
     using LockV = std::vector<Lock>;
@@ -440,7 +414,7 @@ public:
             }
             return true;
         }
-        LockV::iterator it = find(mutex);
+        typename LockV::iterator it = find(mutex);
         if (it != lockV_.end()) {
             Lock& lk = *it;
             if (mode == Mode::X && lk.isShared()) {
@@ -479,7 +453,7 @@ public:
                 return a.getMutexId() < b.getMutexId();
             });
         Mutex *mutexCmp = (Mutex *)tmpMutexV_[0];
-        LockV::iterator it = lower_bound(mutexCmp, lockV_.end());
+        typename LockV::iterator it = lower_bound(mutexCmp, lockV_.end());
         assert(it != lockV_.end());
 
         // Release locks.
@@ -532,13 +506,13 @@ public:
         return lockV_.size();
     }
 private:
-    LockV::iterator find(Mutex *mutex) {
+    typename LockV::iterator find(Mutex *mutex) {
         const uintptr_t key = uintptr_t(mutex);
 #if 1
         // Binary search in sorted area.
-        LockV::iterator end = lockV_.begin();
+        typename LockV::iterator end = lockV_.begin();
         std::advance(end, nrSorted_);
-        LockV::iterator it = lower_bound(mutex, end);
+        typename LockV::iterator it = lower_bound(mutex, end);
         if (it != end && it->getMutexId() == key) {
             // found.
             return it;
@@ -567,7 +541,7 @@ public:
         }
         ::printf("%p %s END\n", this, prefix);
     }
-    LockV::iterator lower_bound(Mutex *mutex, LockV::iterator end) {
+    typename LockV::iterator lower_bound(Mutex *mutex, typename LockV::iterator end) {
         Lock lkcmp;
         lkcmp.setMutex(mutex);
         return std::lower_bound(
