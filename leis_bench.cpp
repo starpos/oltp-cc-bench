@@ -67,7 +67,7 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
     while (!start) _mm_pause();
     size_t count = 0; unused(count);
     while (!quit) {
-        if (isLongTx && shortTxMode == USE_MIX_TX) {
+        if (!isLongTx && shortTxMode == USE_MIX_TX) {
             fillModeVec(isWriteV, rand, nrWr, tmpV2);
         }
 
