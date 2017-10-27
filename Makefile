@@ -1,7 +1,7 @@
 CXX = g++
 CXX_KIND = $(shell $(CXX) --version |head -n1 |cut -d ' ' -f 1)
 CXX_VERSION_GE_7 = $(shell test `$(CXX) -dumpversion |cut -d '.' -f 1` -ge 7 && echo true || echo false)
-ARCH = $(shell uname -p)
+ARCH = $(shell uname -m)
 
 ifeq ($(DEBUG),1)
     CFLAGS = -O0 -g -DDEBUG
