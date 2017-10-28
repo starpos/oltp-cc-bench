@@ -71,9 +71,11 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
 
         size_t firstRecIdx;
         assert(llSet.empty());
+        auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
             bool abort = false;
+            rand.setState(randState); // Retries will reproduce the same access pattern.
             for (size_t i = 0; i < realNrOp; i++) {
 #if 0
                 Mode mode = getMode(i);

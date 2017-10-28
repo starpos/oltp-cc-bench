@@ -94,10 +94,12 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
         size_t firstRecIdx;
         uint64_t t0;
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
+        auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
             assert(lockSet.empty());
             bool abort = false;
+            rand.setState(randState);
             for (size_t i = 0; i < realNrOp; i++) {
 #if 0
                 Mode mode = getMode(i);

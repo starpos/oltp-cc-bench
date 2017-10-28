@@ -154,9 +154,18 @@ public:
  */
 class Xoroshiro128Plus
 {
-    uint64_t s_[2];
 public:
+    struct State {
+        uint64_t s[2];
+        const uint64_t& operator[](size_t i) const { return s[i]; }
+        uint64_t& operator[](size_t i) { return s[i]; }
+    };
     using ResultType = uint64_t;
+
+private:
+    State s_;
+
+public:
     explicit Xoroshiro128Plus(uint64_t seed) {
         s_[0] = seed;
         s_[1] = SplitMix64(seed)();
@@ -173,6 +182,8 @@ public:
     void fill(void *data, size_t size) {
         fillRandom<uint64_t>(*this, data, size);
     }
+    State getState() const { return s_; }
+    void setState(State s) { s_ = s; }
 private:
     uint64_t rotl(const uint64_t x, int k) {
         return (x << k) | (x >> (64 - k));

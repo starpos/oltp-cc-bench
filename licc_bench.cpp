@@ -168,9 +168,11 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
         if (shared.usesBackOff) {
             t0 = cybozu::time::rdtscp();
         }
+        auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
             assert(lockSet.isEmpty());
+            rand.setState(randState);
             //::printf("begin\n"); // QQQQQ
             for (size_t i = 0; i < realNrOp; i++) {
                 //::printf("op %zu\n", i); // debug code
