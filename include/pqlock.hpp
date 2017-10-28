@@ -1304,7 +1304,7 @@ void lock(Mutex& mutex, PCtr& self, uint32_t pri)
         } while (!succeeded && !failed);
     } while (!succeeded);
 
-    assert(!atomicRead(self.ptr->next).dq);
+    assert(!self.ptr->next.dq);
 }
 
 
@@ -1316,7 +1316,7 @@ static thread_local PCtr pctrV_[10];
 void unlock(Mutex& mutex, PCtr& self)
 {
     self.ptr->next.setDq(true);
-    assert(self.ptr == load(mutex.next).ptr);
+    assert(self.ptr == mutex.next.ptr);
     __atomic_thread_fence(__ATOMIC_RELEASE);
 
 
