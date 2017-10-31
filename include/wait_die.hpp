@@ -137,6 +137,12 @@ public:
         WaitDieData wd0 = mutex_->atomicRead();
         for (;;) {
             if (wd0.getLockState()->canSet(mode_)) {
+#ifndef NDEBUG
+                if (wd0.getLockState()->isUnlocked()) {
+                    assert(wd0.txId == MAX_TXID);
+                }
+#endif
+
                 WaitDieData wd1 = wd0;
                 wd1.getLockState()->set(mode_);
                 if (txId < wd0.txId) {
@@ -167,7 +173,7 @@ public:
             WaitDieData wd1 = wd0;
             assert(wd1.getLockState()->canClear(mode_));
             wd1.getLockState()->clear(mode_);
-            if (wd0.txId == txId_ && wd1.getLockState()->isUnlocked()) {
+            if (wd1.getLockState()->isUnlocked()) {
                 wd1.txId = MAX_TXID;
             }
             if (mutex_->compareAndSwap(wd0, wd1, __ATOMIC_RELEASE)) {
