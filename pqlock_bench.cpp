@@ -212,27 +212,42 @@ void runExec(size_t nrRes, size_t nrTh, size_t runSec, bool verbose, LockType lk
 }
 
 
+void put_parameters(LockType lkType, size_t nrRes, size_t nrTh, FILE *fp = ::stderr)
+{
+    ::fprintf(fp, "lkType:%s nrRes:%zu nrTh:%zu\n", getPQLockName(lkType), nrRes, nrTh);
+    ::fflush(fp);
+}
+
+
 int main() try
 {
 #if 1
-    //for (LockType lkType : {LockType::PQSpin, LockType::PQPosix,
-    //LockType::PQMcs1, LockType::PQMcs2, LockType::PQMcs3, LockType::PQ1993, LockType::PQ1997}) {
-    //for (LockType lkType : {LockType::PQSpin, LockType::PQPosix,
-     //           LockType::PQMcs1, LockType::PQMcs2, LockType::PQMcs3, LockType::PQ1993}) {
-        //for (LockType lkType : {LockType::PQMcs1, LockType::PQMcs2, LockType::PQMcs3}) {
-       for (LockType lkType : {LockType::PQMcs3}) {
-        //for (size_t nrRes : {1, 10, 100, 1000, 10000}) {
-        //for (size_t nrRes : {4}) {
-        for (size_t nrRes : {1, 2, 4, 1024}) {
-            //for (size_t nrTh : {1, 2, 4, 8, 16, 24, 32}) {
-            //for (size_t nrTh : {8}) {
-            //for (size_t nrTh = 1; nrTh <= 32; nrTh++) {
-            //for (size_t nrTh : {1, 2, 4, 6, 8, 12, 16, 20, 24, 28, 32}) {
-            //for (size_t nrTh : {1, 2, 4, 8, 16}) {
-            for (size_t nrTh : {2, 4, 8, 16}) {
-                size_t nrLoop = 5;
+    const std::vector<LockType> lkTypeV = {
+        //LockType::PQSpin, LockType::PQPosix, LockType::PQMcs1, LockType::PQMcs2, LockType::PQMcs3, LockType::PQ1993, LockType::PQ1997,
+        LockType::PQMcs3,
+    };
+    const std::vector<size_t> nrResV = {
+        //1, 10, 100, 1000, 10000,
+        1, 2, 4, 1024,
+        //1, 2, 4, 16, 64, 256, 1024,
+        //2, 4, 16,
+        //1, 2, 4, 8, 16, 24, 32,
+    };
+    const std::vector<size_t> nrThV = {
+        //1, 2, 4, 6, 8, 12, 16, 20, 24, 28, 32,
+        //1, 2, 4, 8, 16,
+        //1, 2, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96,
+        //1, 2, 4, 8, 12, 16, 24, 32, 40,
+        96,
+    };
+    const size_t nrLoop = 1;
+    const size_t periodSec = 10;
+
+    for (LockType lkType : lkTypeV) {
+        for (size_t nrRes : nrResV) {
+            for (size_t nrTh : nrThV) {
+                put_parameters(lkType, nrRes, nrTh);
                 for (size_t i = 0; i < nrLoop; i++) {
-                    size_t periodSec = 10;
                     runExec(nrRes, nrTh, periodSec, false, lkType);
                 }
             }
