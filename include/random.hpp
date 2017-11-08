@@ -159,6 +159,9 @@ public:
         uint64_t s[2];
         const uint64_t& operator[](size_t i) const { return s[i]; }
         uint64_t& operator[](size_t i) { return s[i]; }
+        void operator+=(uint64_t v) {
+            s[0] += v;
+        }
     };
     using ResultType = uint64_t;
 
