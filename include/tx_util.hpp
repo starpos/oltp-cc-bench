@@ -9,6 +9,7 @@
 
 #include "constexpr_util.hpp"
 #include "cybozu/exception.hpp"
+#include "thread_util.hpp"
 
 
 /**
@@ -243,5 +244,94 @@ public:
         assert(priId_.value != 0);
         assert(priId_.value != GetMaxValue(bits));
         return priId_.value;
+    }
+};
+
+
+class EpochGenerator
+{
+    bool quit_;
+    size_t intervalMs_;
+    uint64_t epoch_;
+    cybozu::thread::ThreadRunner runner_;
+
+public:
+    EpochGenerator() {
+        storeRelease(quit_, false);
+        storeRelease(epoch_, 0);
+        intervalMs_ = 1;
+
+        runner_.set([this]() { worker(); });
+        runner_.start();
+    }
+    ~EpochGenerator() noexcept {
+        storeRelease(quit_, true);
+        runner_.joinNoThrow();
+    }
+
+    void setIntervalMs(size_t intervalMs) {
+        if (intervalMs == 0 || intervalMs > 10000) {
+            throw cybozu::Exception("invalid inrtervalMs") << intervalMs;
+        }
+        intervalMs_ = intervalMs;
+    }
+
+    uint64_t get() const {
+        return loadAcquire(epoch_);
+    }
+
+private:
+    void worker() {
+        while (!loadAcquire(quit_)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs_));
+            fetchAdd(epoch_, 1, __ATOMIC_RELEASE);
+        }
+    }
+};
+
+
+template <size_t WorkerIdBits = 10, size_t OrderIdBits = 2>
+class EpochTxIdGenerator
+{
+    size_t workerId_;
+    EpochGenerator& epochGen_;
+    size_t boostOffset_;
+    size_t orderId_;
+
+    static constexpr size_t TotalBits = sizeof(TxId) * 8;
+
+    union U {
+        TxId txId;
+        struct {
+            // lower bits (assuming little endian)
+            TxId workerId:WorkerIdBits;
+            TxId epochId:(TotalBits - WorkerIdBits - OrderIdBits);
+            TxId orderId:OrderIdBits;
+        };
+    };
+
+public:
+    EpochTxIdGenerator(size_t workerId, EpochGenerator& epochGen)
+        : workerId_(workerId), epochGen_(epochGen), boostOffset_(0), orderId_(-1) {
+        if (workerId >= (1UL << WorkerIdBits)) {
+            throw cybozu::Exception("EpochTxIdGenerator:too large workerId") << workerId;
+        }
+    }
+
+    TxId get() {
+        U u;
+        u.workerId = workerId_;
+        u.epochId = epochGen_.get();
+        u.epochId -= std::min<size_t>(u.epochId, boostOffset_);
+        u.orderId = orderId_;
+        return u.txId;
+    }
+
+    void boost(size_t offset) {
+        boostOffset_ = offset;
+    }
+
+    void setOrderId(size_t orderId) {
+        orderId_ = orderId;
     }
 };

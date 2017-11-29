@@ -18,6 +18,7 @@
 #include "time.hpp"
 #include "arch.hpp"
 
+
 constexpr size_t CACHE_LINE_SIZE = 64;
 
 
@@ -175,6 +176,9 @@ public:
         --counts_;
         return ret;
     }
+    void reset() {
+        counts_ = 0;
+    }
 };
 
 
@@ -298,8 +302,8 @@ struct Result
 };
 
 
-template <typename SharedData, typename Worker>
-void runExec(const CmdLineOption& opt, SharedData& shared, Worker&& worker)
+template <typename SharedData, typename Worker, typename Result>
+void runExec(const CmdLineOption& opt, SharedData& shared, Worker&& worker, Result& res)
 {
     const size_t nrTh = opt.nrTh;
 
@@ -326,7 +330,6 @@ void runExec(const CmdLineOption& opt, SharedData& shared, Worker&& worker)
     }
     quit = true;
     thS.join();
-    Result res;
     for (size_t i = 0; i < nrTh; i++) {
         if (opt.verbose) {
             ::printf("worker %zu  %s\n", i, resV[i].str().c_str());

@@ -14,6 +14,8 @@ using Mode = Lock::Mode;
 
 const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
 
+EpochGenerator epochGen_;
+
 
 struct Shared
 {
@@ -29,6 +31,7 @@ struct Shared
     SimpleTxIdGenerator simpleTxIdGen;
 
     Shared() : globalTxIdGen(5, 10) {}
+    //Shared() : globalTxIdGen(7, 5) {}
 };
 
 
@@ -134,6 +137,170 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 }
 
 
+struct Result2
+{
+    struct Data {
+        size_t txSize;
+
+        size_t nrCommit;
+        size_t nrAbort;
+
+        Data() : nrCommit(0), nrAbort(0) {
+        }
+
+        void operator+=(const Data& rhs) {
+            nrCommit += rhs.nrCommit;
+            nrAbort += rhs.nrAbort;
+        }
+    };
+
+    using Umap = std::unordered_map<size_t, Data>;
+    Umap umap_;  // key: txSize
+
+    void incCommit(size_t txSize) {
+        umap_[txSize].nrCommit++;
+    }
+
+    void incAbort(size_t txSize) {
+        umap_[txSize].nrAbort++;
+    }
+
+    void addRetryCount(size_t txSize, size_t nrRetry) {
+        unused(txSize);
+        unused(nrRetry);
+        // not implemented yet.
+    }
+
+    size_t nrCommit() const {
+        size_t total = 0;
+        for (const Umap::value_type &p : umap_) {
+            total += p.second.nrCommit;
+        }
+        return total;
+    }
+
+    void operator+=(const Result2& res) {
+        for (const Umap::value_type &p : res.umap_) {
+            umap_[p.first] += p.second;
+        }
+    }
+
+    std::string str() const {
+        std::vector<Data> v;
+        v.reserve(umap_.size());
+        for (const Umap::value_type &p : umap_) {
+            v.push_back(p.second);
+            v.back().txSize = p.first;
+        }
+        std::sort(v.begin(), v.end(), [](const Data &a, const Data &b) {
+                return a.txSize < b.txSize;
+            });
+
+        std::stringstream ss;
+        for (const Data& d : v) {
+            ss << " " << "nrCommit_" << d.txSize << ":" << d.nrCommit;
+            ss << " " << "nrAbort_" << d.txSize << ":" << d.nrAbort;
+        }
+        return ss.str();
+    }
+};
+
+
+/**
+ * Long transactions with several transaction sizes.
+ */
+Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+{
+    unused(shouldQuit);
+    cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
+
+    std::vector<Mutex>& muV = shared.muV;
+
+    const size_t txSize = [&]() -> size_t {
+        if (idx == 0) {
+            return std::max<size_t>(muV.size() / 2, 10);
+        } else if (idx <= 5) {
+            return std::max<size_t>(muV.size() / 10, 10);
+        } else {
+            return 10;
+        }
+    }();
+
+    Result2 res;
+    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    cybozu::wait_die::LockSet lockSet;
+    std::vector<size_t> tmpV; // for fillMuIdVecArray.
+
+#if 0
+    TxIdGenerator localTxIdGen(&shared.globalTxIdGen);
+#else
+    EpochTxIdGenerator<8, 2> epochTxIdGen(idx + 1, epochGen_);
+#if 1
+    if (idx == 0) {
+        epochTxIdGen.setOrderId(0);
+    } else if (idx <= 5) {
+        epochTxIdGen.setOrderId(1);
+    } else {
+        epochTxIdGen.setOrderId(3);
+    }
+#endif
+#if 0
+    if (idx == 0) {
+        epochTxIdGen.boost(20);
+    } else if (idx <= 5) {
+        epochTxIdGen.boost(10);
+    }
+#endif
+#endif
+
+    BoolRandom<decltype(rand)> boolRand(rand);
+
+    const size_t realNrOp = txSize;
+
+    while (!start) _mm_pause();
+    size_t count = 0; unused(count);
+    while (!quit) {
+#if 0
+        const uint64_t txId = localTxIdGen.get();
+#else
+        const uint64_t txId = epochTxIdGen.get();
+#endif
+        lockSet.setTxId(txId);
+        uint64_t t0;
+        if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
+        auto randState = rand.getState();
+        for (size_t retry = 0;; retry++) {
+            if (quit) break; // to quit under starvation.
+            assert(lockSet.empty());
+            bool abort = false;
+            rand.setState(randState);
+            boolRand.reset();
+            for (size_t i = 0; i < realNrOp; i++) {
+                Mode mode = boolRand() ? Mode::X : Mode::S;
+                const size_t key = rand() % muV.size();
+                Mutex& mutex = muV[key];
+                if (!lockSet.lock(mutex, mode)) {
+                    abort = true;
+                    break;
+                }
+            }
+            if (abort) {
+                lockSet.clear();
+                res.incAbort(txSize);
+                if (shared.usesBackOff) backOff(t0, retry, rand);
+                continue;
+            }
+
+            res.incCommit(txSize);
+            lockSet.clear();
+            res.addRetryCount(txSize, retry);
+            break; // retry is not required.
+        }
+    }
+    return res;
+}
+
+
 void runTest()
 {
 #if 0
@@ -210,22 +377,25 @@ struct CmdLineOptionPlus : CmdLineOption
     }
 };
 
+
 void dispatch1(CmdLineOptionPlus& opt, Shared& shared)
 {
+    Result res;
     switch (opt.txIdGenType) {
     case SCALABLE_TXID_GEN:
-        runExec(opt, shared, worker2<SCALABLE_TXID_GEN>);
+        runExec(opt, shared, worker2<SCALABLE_TXID_GEN>, res);
         break;
     case BULK_TXID_GEN:
-        runExec(opt, shared, worker2<BULK_TXID_GEN>);
+        runExec(opt, shared, worker2<BULK_TXID_GEN>, res);
         break;
     case SIMPLE_TXID_GEN:
-        runExec(opt, shared, worker2<SIMPLE_TXID_GEN>);
+        runExec(opt, shared, worker2<SIMPLE_TXID_GEN>, res);
         break;
     default:
         throw cybozu::Exception("bad txIdGenType") << opt.txIdGenType;
     }
 }
+
 
 int main(int argc, char *argv[]) try
 {
@@ -243,6 +413,13 @@ int main(int argc, char *argv[]) try
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         for (size_t i = 0; i < opt.nrLoop; i++) {
             dispatch1(opt, shared);
+        }
+    } else if (opt.workload == "custom3") {
+        Shared shared;
+        shared.muV.resize(opt.getNrMu());
+        for (size_t i = 0; i < opt.nrLoop; i++) {
+            Result2 res;
+            runExec(opt, shared, worker3, res);
         }
     } else {
         throw cybozu::Exception("bad workload.") << opt.workload;
