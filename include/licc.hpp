@@ -27,14 +27,14 @@ constexpr size_t CACHE_LINE_SIZE = 64;
  * because this code does not consider epoch_id overflow or synchronization.
  * Use an instance in each thread independently.
  */
-class EpochGenerator
+class SimpleEpochGenerator
 {
 private:
     uint32_t epochId:22;
     uint32_t counter:10;
 
 public:
-    EpochGenerator() : epochId(0), counter(0) {}
+    SimpleEpochGenerator() : epochId(0), counter(0) {}
 
     uint32_t get() {
         if (++counter == 0) ++epochId;
@@ -176,7 +176,7 @@ struct IMutex
     bool compareAndSwapEnd(ILockData &before, const ILockData& after) {
         return compareAndSwap(before, after, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
     }
-    
+
     ILockData atomicLoad(int mode = __ATOMIC_RELAXED) const {
 #if 1
         return __atomic_load_n(&obj, mode);

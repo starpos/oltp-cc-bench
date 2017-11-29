@@ -137,75 +137,6 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 }
 
 
-struct Result2
-{
-    struct Data {
-        size_t txSize;
-
-        size_t nrCommit;
-        size_t nrAbort;
-
-        Data() : nrCommit(0), nrAbort(0) {
-        }
-
-        void operator+=(const Data& rhs) {
-            nrCommit += rhs.nrCommit;
-            nrAbort += rhs.nrAbort;
-        }
-    };
-
-    using Umap = std::unordered_map<size_t, Data>;
-    Umap umap_;  // key: txSize
-
-    void incCommit(size_t txSize) {
-        umap_[txSize].nrCommit++;
-    }
-
-    void incAbort(size_t txSize) {
-        umap_[txSize].nrAbort++;
-    }
-
-    void addRetryCount(size_t txSize, size_t nrRetry) {
-        unused(txSize);
-        unused(nrRetry);
-        // not implemented yet.
-    }
-
-    size_t nrCommit() const {
-        size_t total = 0;
-        for (const Umap::value_type &p : umap_) {
-            total += p.second.nrCommit;
-        }
-        return total;
-    }
-
-    void operator+=(const Result2& res) {
-        for (const Umap::value_type &p : res.umap_) {
-            umap_[p.first] += p.second;
-        }
-    }
-
-    std::string str() const {
-        std::vector<Data> v;
-        v.reserve(umap_.size());
-        for (const Umap::value_type &p : umap_) {
-            v.push_back(p.second);
-            v.back().txSize = p.first;
-        }
-        std::sort(v.begin(), v.end(), [](const Data &a, const Data &b) {
-                return a.txSize < b.txSize;
-            });
-
-        std::stringstream ss;
-        for (const Data& d : v) {
-            ss << " " << "nrCommit_" << d.txSize << ":" << d.nrCommit;
-            ss << " " << "nrAbort_" << d.txSize << ":" << d.nrAbort;
-        }
-        return ss.str();
-    }
-};
-
-
 /**
  * Long transactions with several transaction sizes.
  */
@@ -235,7 +166,7 @@ Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     TxIdGenerator localTxIdGen(&shared.globalTxIdGen);
 #else
     EpochTxIdGenerator<8, 2> epochTxIdGen(idx + 1, epochGen_);
-#if 1
+#if 0
     if (idx == 0) {
         epochTxIdGen.setOrderId(0);
     } else if (idx <= 5) {
@@ -246,9 +177,9 @@ Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 #endif
 #if 0
     if (idx == 0) {
-        epochTxIdGen.boost(20);
+        epochTxIdGen.boost(1000);
     } else if (idx <= 5) {
-        epochTxIdGen.boost(10);
+        epochTxIdGen.boost(100);
     }
 #endif
 #endif

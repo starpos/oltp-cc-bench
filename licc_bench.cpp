@@ -5,6 +5,7 @@
 #include "measure_util.hpp"
 #include "cpuid.hpp"
 #include "time.hpp"
+#include "tx_util.hpp"
 #include <algorithm>
 
 
@@ -45,6 +46,8 @@ struct ILockTypes
 
 
 const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
+
+EpochGenerator epochGen_;
 
 enum class ReadMode : uint8_t { PCC, OCC, HYBRID };
 
@@ -114,7 +117,6 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 
     Result res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
-    std::vector<size_t> muIdV(nrOp);
     BoolRandom<decltype(rand)> boolRand(rand);
     std::vector<bool> isWriteV;
     std::vector<size_t> tmpV; // for fillModeVec
@@ -127,7 +129,7 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     cybozu::lock::OrdIdGen ordIdGen;
     assert(idx < cybozu::lock::MAX_WORKER_ID);
     ordIdGen.workerId = idx;
-    cybozu::lock::EpochGenerator epochGen;
+    cybozu::lock::SimpleEpochGenerator epochGen;
 
 #if 0
     GetModeFunc<decltype(rand), IMode>
@@ -269,6 +271,114 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 
 
 template <typename PQLock>
+Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
+{
+    using IMutex = typename ILockTypes<PQLock>::IMutex;
+    using ILockSet = typename ILockTypes<PQLock>::ILockSet;
+
+    unused(shouldQuit);
+    cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
+
+    std::vector<IMutex>& muV = shared.muV;
+    const ReadMode rmode = shared.rmode;
+
+    const size_t txSize = [&]() -> size_t {
+        if (idx == 0) {
+            return std::max<size_t>(muV.size() / 2, 10);
+        } else if (idx <= 5) {
+            return std::max<size_t>(muV.size() / 10, 10);
+        } else {
+            return 10;
+        }
+    }();
+
+    const bool isLongTx = txSize > 10;
+
+    Result2 res;
+    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    BoolRandom<decltype(rand)> boolRand(rand);
+    const size_t realNrOp = txSize;
+
+#if 0
+    cybozu::lock::OrdIdGen ordIdGen;
+    assert(idx + 1 < cybozu::lock::MAX_WORKER_ID);
+    ordIdGen.workerId = idx + 1;
+    cybozu::lock::SimpleEpochGenerator epochGen;
+#else
+    EpochTxIdGenerator<8, 2> epochTxIdGen(idx + 1, epochGen_);
+#if 0
+    if (idx == 0) {
+        epochTxIdGen.setOrderId(0);
+    } else if (idx <= 5) {
+        epochTxIdGen.setOrderId(1);
+    } else {
+        epochTxIdGen.setOrderId(3);
+    }
+#endif
+#if 0
+    if (idx == 0) {
+        epochTxIdGen.boost(1000);
+    } else if (idx <= 5) {
+        epochTxIdGen.boost(100);
+    }
+#endif
+#endif
+
+    ILockSet lockSet;
+
+    while (!start) _mm_pause();
+    while (!quit) {
+#if 0
+        ordIdGen.epochId = epochGen.get();
+        const uint32_t ordId = ordIdGen.ordId;
+#else
+        const uint32_t ordId = epochTxIdGen.get();
+#endif
+
+        lockSet.init(ordId);
+        uint64_t t0;
+        if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
+        auto randState = rand.getState();
+        for (size_t retry = 0;; retry++) {
+            if (quit) break; // to quit under starvation.
+            assert(lockSet.isEmpty());
+            rand.setState(randState);
+            boolRand.reset();
+            for (size_t i = 0; i < realNrOp; i++) {
+                IMode mode = boolRand() ? IMode::X : IMode::S;
+                size_t key = rand() % muV.size();
+                IMutex& mutex = muV[key];
+                if (mode == IMode::S) {
+                    const bool tryInvisibleRead =
+                        (rmode == ReadMode::OCC) ||
+                        (rmode == ReadMode::HYBRID && !isLongTx && retry == 0);
+                    if (tryInvisibleRead) {
+                        lockSet.invisibleRead(mutex);
+                    } else {
+                        if (!lockSet.reservedRead(mutex)) goto abort;
+                    }
+                } else {
+                    assert(mode == IMode::X);
+                    if (!lockSet.write(mutex)) goto abort;
+                }
+            }
+            if (!lockSet.protectAll()) goto abort;
+            if (!lockSet.verifyAndUnlock()) goto abort;
+            lockSet.updateAndUnlock();
+            res.incCommit(txSize);
+            res.addRetryCount(txSize, retry);
+            break;
+          abort:
+            res.incAbort(txSize);
+            lockSet.clear();
+            if (shared.usesBackOff) backOff(t0, retry, rand);
+        }
+    }
+    return res;
+}
+
+
+template <typename PQLock>
 void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
 {
     shared.muV.resize(opt.getNrMu());
@@ -289,7 +399,13 @@ void dispatch1(CmdLineOptionPlus& opt)
     setShared<PQLock>(opt, shared);
 
     for (size_t i = 0; i < opt.nrLoop; i++) {
-        runExec(opt, shared, worker0<PQLock>);
+        if (opt.workload == "custom") {
+            Result res;
+            runExec(opt, shared, worker0<PQLock>, res);
+        } else if (opt.workload == "custom3") {
+            Result2 res;
+            runExec(opt, shared, worker1<PQLock>, res);
+        }
     }
 }
 
