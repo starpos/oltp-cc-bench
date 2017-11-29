@@ -10,6 +10,7 @@
 #include "constexpr_util.hpp"
 #include "cybozu/exception.hpp"
 #include "thread_util.hpp"
+#include "atomic_wrapper.hpp"
 
 
 /**

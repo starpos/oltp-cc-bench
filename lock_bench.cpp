@@ -28,11 +28,11 @@ const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
 
 
 
-Result lockWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, std::vector<Mutex>& muV, size_t longTxSize, size_t nrOp, size_t nrWr)
+Result1 lockWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, std::vector<Mutex>& muV, size_t longTxSize, size_t nrOp, size_t nrWr)
 {
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
-    Result res;
+    Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     std::vector<size_t> muIdV(nrOp);
     std::vector<Lock> lockV;
@@ -112,11 +112,11 @@ Result lockWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQ
 }
 
 
-Result noWaitWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, std::vector<Mutex>& muV, size_t longTxSize, size_t nrOp, size_t nrWr)
+Result1 noWaitWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, std::vector<Mutex>& muV, size_t longTxSize, size_t nrOp, size_t nrWr)
 {
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
-    Result res;
+    Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     std::vector<size_t> muIdV(nrOp);
     std::vector<Lock> lockV;
@@ -216,7 +216,7 @@ void runExec(size_t nrMutex, size_t nrTh, size_t runSec, bool verbose, bool noWa
     bool shouldQuit = false;
 
     cybozu::thread::ThreadRunnerSet thS;
-    std::vector<Result> resV(nrTh);
+    std::vector<Result1> resV(nrTh);
     for (size_t i = 0; i < nrTh; i++) {
         thS.add([&,i]() {
                 if (noWait) {
@@ -237,7 +237,7 @@ void runExec(size_t nrMutex, size_t nrTh, size_t runSec, bool verbose, bool noWa
     }
     quit = true;
     thS.join();
-    Result res;
+    Result1 res;
     for (size_t i = 0; i < nrTh; i++) {
         if (verbose) {
             ::printf("worker %zu  %s", i, resV[i].str().c_str());

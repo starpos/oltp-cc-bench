@@ -99,7 +99,7 @@ struct ILockShared
 
 
 template <typename PQLock>
-Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
+Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
 {
     using IMutex = typename ILockTypes<PQLock>::IMutex;
     using ILockSet = typename ILockTypes<PQLock>::ILockSet;
@@ -115,7 +115,7 @@ Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     const int shortTxMode = shared.shortTxMode;
     const int longTxMode = shared.longTxMode;
 
-    Result res;
+    Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     BoolRandom<decltype(rand)> boolRand(rand);
     std::vector<bool> isWriteV;
@@ -400,7 +400,7 @@ void dispatch1(CmdLineOptionPlus& opt)
 
     for (size_t i = 0; i < opt.nrLoop; i++) {
         if (opt.workload == "custom") {
-            Result res;
+            Result1 res;
             runExec(opt, shared, worker0<PQLock>, res);
         } else if (opt.workload == "custom3") {
             Result2 res;

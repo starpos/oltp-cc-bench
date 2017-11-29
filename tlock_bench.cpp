@@ -293,7 +293,7 @@ struct TLockShared
 
 
 template <int txIdGenType, typename PQLock>
-Result tWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, TLockShared<PQLock>& shared)
+Result1 tWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, TLockShared<PQLock>& shared)
 {
     using Mutex = typename TLockTypes<PQLock>::Mutex;
     using TLock = typename TLockTypes<PQLock>::TLock;
@@ -317,7 +317,7 @@ Result tWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     priIdGen.init(idx + 1);
     TxIdGenerator localTxIdGen(&shared.globalTxIdGen);
 
-    Result res;
+    Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     std::vector<size_t> muIdV(nrOp);
     std::vector<TLock> writeLocks;
@@ -577,7 +577,7 @@ Result tWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
 
 
 template <typename TxIdGen, typename TLockTypes>
-Result readWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, std::vector<typename TLockTypes::Mutex>& muV, TxIdGen& txIdGen, ReadMode rmode, __attribute__((unused)) TxInfo& txInfo)
+Result1 readWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, std::vector<typename TLockTypes::Mutex>& muV, TxIdGen& txIdGen, ReadMode rmode, __attribute__((unused)) TxInfo& txInfo)
 {
     using TLock = typename TLockTypes::TLock;
     using TLockReader = typename TLockTypes::TLockReader;
@@ -587,7 +587,7 @@ Result readWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQ
     unused(shouldQuit);
 
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
-    Result res;
+    Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     std::vector<size_t> muIdV(4);
     std::vector<TLock> writeLocks;
@@ -665,7 +665,7 @@ Result readWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQ
 }
 
 template <typename TxIdGen, typename TLockTypes>
-Result contentionWorker(size_t idx, const bool& start, const bool& quit, std::vector<typename TLockTypes::Mutex>& muV, TxIdGen& txIdGen, ReadMode rmode, size_t nrOp, size_t nrWr)
+Result1 contentionWorker(size_t idx, const bool& start, const bool& quit, std::vector<typename TLockTypes::Mutex>& muV, TxIdGen& txIdGen, ReadMode rmode, size_t nrOp, size_t nrWr)
 {
     using Mutex = typename TLockTypes::Mutex;
     using TLock = typename TLockTypes::TLock;
@@ -674,7 +674,7 @@ Result contentionWorker(size_t idx, const bool& start, const bool& quit, std::ve
 
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
     const bool isLongTx = false;
-    Result res;
+    Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     assert(nrWr <= nrOp);
 
@@ -836,7 +836,7 @@ struct ILockShared
  * Using ILock.
  */
 template <int txIdGenType, typename PQLock>
-Result iWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
+Result1 iWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
 {
     using IMutex = typename ILockTypes<PQLock>::IMutex;
     using ILock = typename ILockTypes<PQLock>::ILock;
@@ -858,7 +858,7 @@ Result iWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     const int shortTxMode = shared.shortTxMode;
     const int longTxMode = shared.longTxMode;
 
-    Result res;
+    Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     std::vector<size_t> muIdV(nrOp);
     std::vector<ILock> writeLocks;
@@ -1052,7 +1052,7 @@ Result iWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
  * Using ILock.
  */
 template <int txIdGenType, typename PQLock>
-Result iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
+Result1 iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
 {
     using IMutex = typename ILockTypes<PQLock>::IMutex;
     using IMode = typename ILockTypes<PQLock>::IMode;
@@ -1072,7 +1072,7 @@ Result iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     const int shortTxMode = shared.shortTxMode;
     const int longTxMode = shared.longTxMode;
 
-    Result res;
+    Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
 
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
@@ -1358,10 +1358,11 @@ template <typename PQLock, int txIdGenType, typename Shared>
 struct Dispatch3<PQLock, 0, txIdGenType, Shared>
 {
     static void run(CmdLineOptionPlus& opt, Shared& shared) {
+        Result1 res;
 #if 0
-        runExec(opt, shared, iWorker<txIdGenType, PQLock>);
+        runExec(opt, shared, iWorker<txIdGenType, PQLock>, res);
 #else
-        runExec(opt, shared, iWorker2<txIdGenType, PQLock>);
+        runExec(opt, shared, iWorker2<txIdGenType, PQLock>, res);
 #endif
     }
 };
@@ -1370,7 +1371,8 @@ template <typename PQLock, int txIdGenType, typename Shared>
 struct Dispatch3<PQLock, 1, txIdGenType, Shared>
 {
     static void run(CmdLineOptionPlus& opt, Shared& shared) {
-        runExec(opt, shared, tWorker<txIdGenType, PQLock>);
+        Result1 res;
+        runExec(opt, shared, tWorker<txIdGenType, PQLock>, res);
     }
 };
 

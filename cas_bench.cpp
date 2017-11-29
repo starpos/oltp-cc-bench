@@ -18,14 +18,14 @@ struct Shared
 };
 
 
-Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
     while (!start) _mm_pause();
     size_t c = 0;
-    Result res;
+    Result1 res;
     uint64_t v1, v2;
     uint64_t *obj;
 
@@ -75,7 +75,8 @@ int main(int argc, char *argv[]) try
     } else {
         shared.vec.resize(1);
     }
-    runExec(opt, shared, worker);
+    Result1 res;
+    runExec(opt, shared, worker, res);
 
 } catch (std::exception& e) {
     ::fprintf(::stderr, "exeption: %s\n", e.what());

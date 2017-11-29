@@ -237,13 +237,13 @@ struct RetryCounts
 };
 
 
-struct Result
+struct Result1
 {
     RetryCounts rcS;
     RetryCounts rcL;
     size_t value[6];
-    Result() : rcS(), rcL(), value() {}
-    void operator+=(const Result& rhs) {
+    Result1() : rcS(), rcL(), value() {}
+    void operator+=(const Result1& rhs) {
         rcS.merge(rhs.rcS);
         rcL.merge(rhs.rcL);
         for (size_t i = 0; i < 6; i++) {
@@ -268,7 +268,7 @@ struct Result
 #endif
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const Result& res) {
+    friend std::ostream& operator<<(std::ostream& os, const Result1& res) {
         const bool verbose = false; // QQQ
 #if 0
         os << cybozu::util::formatString(

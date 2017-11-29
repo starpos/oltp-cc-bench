@@ -29,7 +29,7 @@ struct Shared
 enum class Mode : bool { S = false, X = true, };
 
 
-Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
@@ -41,7 +41,7 @@ Result worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     const int shortTxMode = shared.shortTxMode;
     const int longTxMode = shared.longTxMode;
 
-    Result res;
+    Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
 
     cybozu::occ::LockSet lockSet;
@@ -205,7 +205,8 @@ int main(int argc, char *argv[]) try
         shared.longTxMode = opt.longTxMode;
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         for (size_t i = 0; i < opt.nrLoop; i++) {
-            runExec(opt, shared, worker2);
+            Result1 res;
+            runExec(opt, shared, worker2, res);
         }
     } else {
         throw cybozu::Exception("bad workload.") << opt.workload;

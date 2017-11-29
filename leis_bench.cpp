@@ -23,7 +23,7 @@ struct Shared
 
 
 template <bool UseMap, typename LeisLockType>
-Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared<LeisLockType>& shared)
+Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared<LeisLockType>& shared)
 {
     using Mutex = typename LeisLockType::Mutex;
     using Mode = typename Mutex::Mode;
@@ -38,8 +38,7 @@ Result worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit,
     const int shortTxMode = shared.shortTxMode;
     const int longTxMode = shared.longTxMode;
 
-
-    Result res;
+    Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     cybozu::lock::LeisLockSet<UseMap, LeisLockType> llSet;
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
@@ -219,10 +218,11 @@ void dispatch1(const CmdLineOptionPlus& opt)
     shared.longTxMode = opt.longTxMode;
 
     for (size_t i = 0; i < opt.nrLoop; i++) {
+        Result1 res;
         if (opt.useVector != 0) {
-            runExec(opt, shared, worker<0, Lock>);
+            runExec(opt, shared, worker<0, Lock>, res);
         } else {
-            runExec(opt, shared, worker<1, Lock>);
+            runExec(opt, shared, worker<1, Lock>, res);
         }
     }
 }

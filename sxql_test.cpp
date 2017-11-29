@@ -16,14 +16,14 @@ struct Shared
 };
 
 
-Result worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
     std::vector<SXQLock::Mutex>& muV = shared.muV;
 
-    Result res;
+    Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
 
     while (!start) _mm_pause();
@@ -61,7 +61,8 @@ int main(int argc, char *argv[]) try
     Shared shared;
     shared.muV.resize(1);
     for (size_t i = 0; i < opt.nrLoop; i++) {
-        runExec(opt, shared, worker0);
+        Result1 res;
+        runExec(opt, shared, worker0, res);
     }
 
 } catch (std::exception& e) {
