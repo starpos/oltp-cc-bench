@@ -26,6 +26,7 @@ struct Shared
     int shortTxMode;
     int longTxMode;
     bool usesBackOff;
+    size_t writePct;
 
     GlobalTxIdGenerator globalTxIdGen;
     SimpleTxIdGenerator simpleTxIdGen;
@@ -160,7 +161,6 @@ Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     Result2 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     cybozu::wait_die::LockSet lockSet;
-    std::vector<size_t> tmpV; // for fillMuIdVecArray.
 
 #if 0
     TxIdGenerator localTxIdGen(&shared.globalTxIdGen);
@@ -207,7 +207,11 @@ Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQui
             rand.setState(randState);
             boolRand.reset();
             for (size_t i = 0; i < realNrOp; i++) {
-                Mode mode = boolRand() ? Mode::X : Mode::S;
+#if 0
+                const Mode mode = boolRand() ? Mode::X : Mode::S;
+#else
+                const Mode mode = rand() % 100 < shared.writePct ? Mode::X : Mode::S;
+#endif
                 const size_t key = rand() % muV.size();
                 Mutex& mutex = muV[key];
                 if (!lockSet.lock(mutex, mode)) {
@@ -296,15 +300,17 @@ struct CmdLineOptionPlus : CmdLineOption
 
     int txIdGenType;
     int usesBackOff; // 0 or 1.
+    size_t writePct;
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&txIdGenType, 0, "txid-gen", "[id]: txid gen method (0:sclable, 1:bulk, 2:simple)");
         appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
+        appendOpt(&writePct, 50, "writepct", "[pct]: write percentage (0 to 100) for custom3 workload.");
     }
     std::string str() const {
         return cybozu::util::formatString(
-            "mode:wait-die %s txidGenType:%d backoff:%d"
-            , base::str().c_str(), txIdGenType, usesBackOff ? 1 : 0);
+            "mode:wait-die %s txidGenType:%d backoff:%d writePct:%zu"
+            , base::str().c_str(), txIdGenType, usesBackOff ? 1 : 0, writePct);
     }
 };
 
@@ -348,6 +354,8 @@ int main(int argc, char *argv[]) try
     } else if (opt.workload == "custom3") {
         Shared shared;
         shared.muV.resize(opt.getNrMu());
+        shared.usesBackOff = opt.usesBackOff ? 1 : 0;
+        shared.writePct = opt.writePct;
         for (size_t i = 0; i < opt.nrLoop; i++) {
             Result2 res;
             runExec(opt, shared, worker3, res);

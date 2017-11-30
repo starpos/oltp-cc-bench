@@ -16,16 +16,18 @@ struct CmdLineOptionPlus : CmdLineOption
     std::string modeStr;
     int pqLockType;
     int usesBackOff; // 0 or 1.
+    size_t writePct; // 0 to 100.
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&modeStr, "licc-hybrid", "mode", "[mode]: specify mode in licc-pcc, licc-occ, licc-hybrid.");
         appendOpt(&pqLockType, 0, "pqlock", "[id]: pqlock type (0:none, 1:pqspin, 3:pqmcs1, 4:pqmcs2, 5:pq1993, 6:pq1997, 7:pqmcs3)");
         appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
+        appendOpt(&writePct, 50, "writepct", "[pct]: write percentage (0 to 100) for custom3 workload");
     }
     std::string str() const {
         return cybozu::util::formatString(
-            "mode:%s %s pqLockType:%d backoff:%d"
-            , modeStr.c_str(), base::str().c_str(), pqLockType, usesBackOff ? 1 : 0);
+            "mode:%s %s pqLockType:%d backoff:%d writePct:%zu"
+            , modeStr.c_str(), base::str().c_str(), pqLockType, usesBackOff ? 1 : 0, writePct);
     }
 };
 
@@ -95,6 +97,7 @@ struct ILockShared
     int shortTxMode;
     int longTxMode;
     bool usesBackOff;
+    size_t writePct;
 };
 
 
@@ -345,7 +348,11 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
             rand.setState(randState);
             boolRand.reset();
             for (size_t i = 0; i < realNrOp; i++) {
+#if 0
                 IMode mode = boolRand() ? IMode::X : IMode::S;
+#else
+                IMode mode = rand() % 100 < shared.writePct ? IMode::X : IMode::S;
+#endif
                 size_t key = rand() % muV.size();
                 IMutex& mutex = muV[key];
                 if (mode == IMode::S) {
@@ -389,6 +396,7 @@ void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
     shared.shortTxMode = opt.shortTxMode;
     shared.longTxMode = opt.longTxMode;
     shared.usesBackOff = opt.usesBackOff != 0;
+    shared.writePct = opt.writePct;
 }
 
 
