@@ -350,6 +350,7 @@ int main(int argc, char *argv[]) try
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         for (size_t i = 0; i < opt.nrLoop; i++) {
             dispatch1(opt, shared);
+            epochGen_.reset();
         }
     } else if (opt.workload == "custom3") {
         Shared shared;
@@ -359,6 +360,7 @@ int main(int argc, char *argv[]) try
         for (size_t i = 0; i < opt.nrLoop; i++) {
             Result2 res;
             runExec(opt, shared, worker3, res);
+            epochGen_.reset();
         }
     } else {
         throw cybozu::Exception("bad workload.") << opt.workload;

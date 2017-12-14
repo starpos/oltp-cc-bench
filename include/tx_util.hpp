@@ -281,6 +281,10 @@ public:
         return loadAcquire(epoch_);
     }
 
+    void reset() {
+        storeRelease(epoch_, 0);
+    }
+
 private:
     void worker() {
         while (!loadAcquire(quit_)) {

@@ -414,6 +414,7 @@ void dispatch1(CmdLineOptionPlus& opt)
             Result2 res;
             runExec(opt, shared, worker1<PQLock>, res);
         }
+        epochGen_.reset();
     }
 }
 
