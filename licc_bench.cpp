@@ -129,10 +129,14 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         isWriteV.resize(nrOp);
     }
 
+#if 0
     cybozu::lock::OrdIdGen ordIdGen;
     assert(idx < cybozu::lock::MAX_WORKER_ID);
     ordIdGen.workerId = idx;
     cybozu::lock::SimpleEpochGenerator epochGen;
+#else
+    EpochTxIdGenerator<8, 2> epochTxIdGen(idx + 1, epochGen_);
+#endif
 
 #if 0
     GetModeFunc<decltype(rand), IMode>
@@ -162,8 +166,12 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
             fillModeVec(isWriteV, rand, nrWr, tmpV);
         }
 
+#if 0
         ordIdGen.epochId = epochGen.get();
         const uint32_t ordId = ordIdGen.ordId;
+#else
+        const uint32_t ordId = epochTxIdGen.get();
+#endif
 
         lockSet.init(ordId);
         //::printf("Tx begin\n"); // debug code

@@ -433,6 +433,7 @@ enum TxIdGenType
     SCALABLE_TXID_GEN = 0,
     BULK_TXID_GEN = 1,
     SIMPLE_TXID_GEN = 2,
+    EPOCH_TXID_GEN = 3,
 };
 
 

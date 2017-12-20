@@ -57,6 +57,7 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     PriorityIdGenerator<12> priIdGen;
     priIdGen.init(idx + 1);
     TxIdGenerator localTxIdGen(&shared.globalTxIdGen);
+    EpochTxIdGenerator<8, 2> epochTxIdGen(idx + 1, epochGen_);
 
     // USE_MIX_TX
     std::vector<bool> isWriteV(nrOp);
@@ -91,6 +92,8 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
             txId = localTxIdGen.get();
         } else if (txIdGenType == SIMPLE_TXID_GEN) {
             txId = shared.simpleTxIdGen.get();
+	} else if (txIdGenType == EPOCH_TXID_GEN) {
+            txId = epochTxIdGen.get();
         } else {
             throw cybozu::Exception("bad txIdGenType") << txIdGenType;
         }
@@ -303,7 +306,7 @@ struct CmdLineOptionPlus : CmdLineOption
     size_t writePct;
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
-        appendOpt(&txIdGenType, 0, "txid-gen", "[id]: txid gen method (0:sclable, 1:bulk, 2:simple)");
+        appendOpt(&txIdGenType, 3, "txid-gen", "[id]: txid gen method (0:sclable, 1:bulk, 2:simple, 3:epoch(default))");
         appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
         appendOpt(&writePct, 50, "writepct", "[pct]: write percentage (0 to 100) for custom3 workload.");
     }
@@ -328,6 +331,9 @@ void dispatch1(CmdLineOptionPlus& opt, Shared& shared)
     case SIMPLE_TXID_GEN:
         runExec(opt, shared, worker2<SIMPLE_TXID_GEN>, res);
         break;
+    case EPOCH_TXID_GEN:
+	runExec(opt, shared, worker2<EPOCH_TXID_GEN>, res);
+	break;
     default:
         throw cybozu::Exception("bad txIdGenType") << opt.txIdGenType;
     }
