@@ -50,7 +50,7 @@ const uint8_t MAX_READERS = GetMaxValue(7);
 
 // This is for benchmark. The practical version supports wrap-around behavior.
 const uint32_t MIN_EPOCH_ID = 0;
-const uint32_t READABLE_EPOCHS = MAX_EPOCH_ID - MIN_EPOCH_ID;
+const uint32_t RESERVABLE_EPOCHS = MAX_EPOCH_ID - MIN_EPOCH_ID;
 
 
 
@@ -540,7 +540,7 @@ private:
 
         bool c0 = ld0.ordId == MAX_ORD_ID && ld0.readers == 0; // not reserved.
         bool c1 = 0 < ld0.readers && ld0.readers < MAX_READERS; // can be shared.
-        bool c2 = epochId_ < MIN_EPOCH_ID + READABLE_EPOCHS; // for wait-free property.
+        bool c2 = epochId_ < MIN_EPOCH_ID + RESERVABLE_EPOCHS; // for wait-free property.
         if ((c0 || c1) && c2) {
             // reserve
             ld1.readers++;
@@ -586,7 +586,9 @@ private:
             return true;
         }
 #else
-        if ((ld0.ordId == MAX_ORD_ID && ld0.readers == 0) || ordId_ < ld0.ordId) {
+        bool c0 = ld0.ordId == MAX_ORD_ID && ld0.readers == 0;
+        bool c1 = epochId_ < MIN_EPOCH_ID + RESERVABLE_EPOCHS; // for wait-free property.
+        if ((c0 && c1) || ordId_ < ld0.ordId) {
             ld1.readers = 0;
             ld1.ordId = ordId_;
             st1.uVer = ld0.uVer;
