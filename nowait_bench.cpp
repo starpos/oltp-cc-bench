@@ -11,7 +11,7 @@ using Mutex = cybozu::lock::XSMutex;
 using Lock = cybozu::lock::XSLock;
 using Mode = Mutex::Mode;
 
-const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
+std::vector<uint> CpuId_;
 
 
 struct Shared
@@ -203,6 +203,7 @@ int main(int argc, char *argv[]) try
 {
     CmdLineOptionPlus opt("nowait_bench: benchmark with nowait lock.");
     opt.parse(argc, argv);
+    setCpuAffinityModeVec(opt.amode, CpuId_);
 
     if (opt.workload == "custom") {
         Shared shared;

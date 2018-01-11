@@ -47,7 +47,7 @@ struct ILockTypes
 };
 
 
-const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
+std::vector<uint> CpuId_;
 
 EpochGenerator epochGen_;
 
@@ -479,6 +479,7 @@ int main(int argc, char *argv[]) try
 {
     CmdLineOptionPlus opt("licc_bench: benchmark with licc lock.");
     opt.parse(argc, argv);
+    setCpuAffinityModeVec(opt.amode, CpuId_);
     dispatch0(opt);
 
 } catch (std::exception& e) {

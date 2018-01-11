@@ -11,7 +11,7 @@
 
 using Mutex = cybozu::occ::OccLock::Mutex;
 
-const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
+std::vector<uint> CpuId_;
 
 
 struct Shared
@@ -194,6 +194,7 @@ int main(int argc, char *argv[]) try
 {
     CmdLineOptionPlus opt("occ_bench: benchmark with silo-occ.");
     opt.parse(argc, argv);
+    setCpuAffinityModeVec(opt.amode, CpuId_);
 
     if (opt.workload == "custom") {
         Shared shared;

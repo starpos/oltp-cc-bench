@@ -7,7 +7,7 @@
 #include "arch.hpp"
 
 
-const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
+std::vector<uint> CpuId_;
 
 
 template <typename LeisLockType>
@@ -250,6 +250,7 @@ int main(int argc, char *argv[]) try
 {
     CmdLineOptionPlus opt("leis_lock_bench: benchmark with leis lock.");
     opt.parse(argc, argv);
+    setCpuAffinityModeVec(opt.amode, CpuId_);
 
     if (opt.workload != "custom") {
         throw cybozu::Exception("bad workload.") << opt.workload;

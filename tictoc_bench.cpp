@@ -10,8 +10,7 @@
 
 using Mutex = cybozu::tictoc::Mutex;
 
-const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
-
+std::vector<uint> CpuId_;
 
 struct Shared
 {
@@ -193,6 +192,7 @@ int main(int argc, char *argv[]) try
 {
     CmdLineOptionPlus opt("tictoc_bench: benchmark with tictoc.");
     opt.parse(argc, argv);
+    setCpuAffinityModeVec(opt.amode, CpuId_);
 
     if (opt.workload == "custom") {
         Shared shared;

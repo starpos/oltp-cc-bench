@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <list>
 #include "process.hpp"
 
 
@@ -94,17 +95,22 @@ std::vector<CpuTopology> getCpuTopologies()
 }
 
 
-enum class CpuAffinityMode : uint8_t { NONE, NODE, CORE, THREAD, };
+enum class CpuAffinityMode : uint8_t { NONE, NODE, CORE, THREAD, CUSTOM1, };
+
+
+const std::pair<CpuAffinityMode, const char*> affinityModeTable_[] =
+{
+    {CpuAffinityMode::NONE, "NONE"},
+    {CpuAffinityMode::NODE, "NODE"},
+    {CpuAffinityMode::CORE, "CORE"},
+    {CpuAffinityMode::THREAD, "THREAD"},
+    {CpuAffinityMode::CUSTOM1, "CUSTOM1"},
+};
 
 
 std::string cpuAffinityModeToStr(CpuAffinityMode amode)
 {
-    const std::pair<CpuAffinityMode, const char*> table[] = {
-        {CpuAffinityMode::NONE, "NONE"},
-        {CpuAffinityMode::NODE, "NODE"},
-        {CpuAffinityMode::CORE, "CORE"},
-        {CpuAffinityMode::THREAD, "THREAD"},
-    };
+    const auto& table = affinityModeTable_;
     const size_t nr = sizeof(table) / sizeof(table[0]);
     for (size_t i = 0; i < nr; i++) {
         if (amode == table[i].first) return table[i].second;
@@ -113,9 +119,85 @@ std::string cpuAffinityModeToStr(CpuAffinityMode amode)
 }
 
 
+CpuAffinityMode parseCpuAffinityMode(const std::string& amodeStr)
+{
+    const auto& table = affinityModeTable_;
+    const size_t nr = sizeof(table) / sizeof(table[0]);
+    for (size_t i = 0; i < nr; i++) {
+        if (amodeStr == table[i].second) return table[i].first;
+    }
+    throw std::runtime_error("parseCpuAffinityMode: mode not found");
+}
+
+
+/**
+ * Shuffle input CpuTopologies.
+ *
+ * Input list: (0, a), (0, b), (0, c), (1, d), (1, f), (1, g)
+ * Output list: (0, a), (1, d), (0, b), (1, f), (0, c), (1, g)
+ *
+ * Usage:
+ * (1) push phase
+ *     call push() several imes.
+ * (2) pop phase
+ *     call initPop() once, then,
+ *     call pop() while empty() returns false.
+ */
+template <typename Key>
+class Shuffler
+{
+    using Map = std::map<Key, std::list<CpuTopology> >;
+    Map m_;
+
+    typename Map::iterator it_;
+
+public:
+    Shuffler() : m_() {
+    }
+    void push(Key key, const CpuTopology& t) {
+        m_[key].push_back(t);
+    }
+
+    void initPop() {
+        it_ = m_.begin();
+        if (it_ == m_.end()) throw std::runtime_error("Shuffler: no data");
+    }
+    CpuTopology pop() {
+        while (it_ != m_.end() && it_->second.empty()) it_ = m_.erase(it_);
+        if (it_ == m_.end()) throw std::runtime_error("Shuffler: no data");
+        assert(!it_.empty());
+        CpuTopology ret = it_->second.front();
+        it_->second.pop_front();
+        ++it_;
+        if (it_ == m_.end()) it_ = m_.begin();
+        return ret;
+    }
+    bool empty() const {
+        for (const typename Map::value_type &p : m_) {
+            if (!p.second.empty()) return false;
+        }
+        return true;
+    }
+};
+
+
 std::vector<uint> getCpuIdList(CpuAffinityMode amode)
 {
     std::vector<CpuTopology> topo = getCpuTopologies();
+    std::vector<uint> ret;
+    ret.reserve(topo.size());
+
+    if (amode == CpuAffinityMode::CUSTOM1) {
+        /*
+         * Prefers inter-socket communication.
+         */
+        Shuffler<uint> s;
+        for (const CpuTopology& t : topo) s.push(t.socket, t);
+        s.initPop();
+        while (!s.empty()) ret.push_back(s.pop().id);
+        return ret;
+    }
+
     std::function<bool (const CpuTopology&, const CpuTopology&)> less;
     if (amode == CpuAffinityMode::NODE) {
         less = [](const CpuTopology& a, const CpuTopology& b) {
@@ -135,9 +217,15 @@ std::vector<uint> getCpuIdList(CpuAffinityMode amode)
         };
     }
     std::sort(topo.begin(), topo.end(), less);
-    std::vector<uint> ret(topo.size());
-    for (size_t i = 0; i < topo.size(); i++) {
-        ret[i] = topo[i].id;
+    for (const CpuTopology& t : topo) {
+        ret.push_back(t.id);
     }
     return ret;
+}
+
+
+void setCpuAffinityModeVec(const std::string& amodeStr, std::vector<uint>& cpuId)
+{
+    const CpuAffinityMode amode = parseCpuAffinityMode(amodeStr);
+    cpuId = getCpuIdList(amode);
 }

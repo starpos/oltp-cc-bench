@@ -12,7 +12,7 @@ using Lock = cybozu::wait_die::WaitDieLock;
 using Mutex = Lock::Mutex;
 using Mode = Lock::Mode;
 
-const std::vector<uint> CpuId_ = getCpuIdList(CpuAffinityMode::CORE);
+std::vector<uint> CpuId_;
 
 EpochGenerator epochGen_;
 
@@ -344,6 +344,7 @@ int main(int argc, char *argv[]) try
 {
     CmdLineOptionPlus opt("wait_die_bench: benchmark with wait-die lock.");
     opt.parse(argc, argv);
+    setCpuAffinityModeVec(opt.amode, CpuId_);
 
     if (opt.workload == "custom") {
         Shared shared;
