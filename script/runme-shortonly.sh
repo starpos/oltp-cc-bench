@@ -10,25 +10,29 @@ for th in 1 2 3 4 8 12 16 20 24 32 40 48 56 64 72 80 88 96; do
 #for th in 3 4 8 12 16 20 24 32 40 48 56 64 72 80 88 96; do
 #for th in 3; do
 #for th in 32; do
+for amode in CUSTOM1 CORE; do
   nrMuPerTh=4000
   workload=custom
   period=10
   loop=10
+  #amode=CORE
+  #amode=CUSTOM1
 
-  ./nowait_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop
-  ./leis_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -vector 0
-  ./leis_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -vector 1
-  ./occ_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop
-  ./tictoc_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop
-  ./wait_die_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop
-  ./licc_bench -mode licc-pcc -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop
-  ./licc_bench -mode licc-occ -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop
-  ./licc_bench -mode licc-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop
-  ./licc_bench -mode licc-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -pqlock 7
+  ./nowait_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode
+  ./leis_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -vector 0 -amode $amode
+  ./leis_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -vector 1 -amode $amode
+  ./occ_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode
+  ./tictoc_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode
+  ./wait_die_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode
+  ./licc_bench -mode licc-pcc -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode
+  ./licc_bench -mode licc-occ -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode
+  ./licc_bench -mode licc-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode
+  ./licc_bench -mode licc-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -pqlock 7 -amode $amode
 
   #./tlock_bench -mode trlock -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop
   #./tlock_bench -mode trlock-occ -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop
   #./tlock_bench -mode trlock-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop
   #./tlock_bench -mode trlock-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -pqlock 4
-done | tee -a short-only.log
+done
+done | tee -a short-only.log.20180105a
 
