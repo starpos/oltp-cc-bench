@@ -17,17 +17,20 @@ struct CmdLineOptionPlus : CmdLineOption
     int pqLockType;
     int usesBackOff; // 0 or 1.
     size_t writePct; // 0 to 100.
+    int usesRMW; // 0 or 1.
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&modeStr, "licc-hybrid", "mode", "[mode]: specify mode in licc-pcc, licc-occ, licc-hybrid.");
         appendOpt(&pqLockType, 0, "pqlock", "[id]: pqlock type (0:none, 1:pqspin, 3:pqmcs1, 4:pqmcs2, 5:pq1993, 6:pq1997, 7:pqmcs3)");
         appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
+        appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write 0:w 1:rmw (default: 1)");
         appendOpt(&writePct, 50, "writepct", "[pct]: write percentage (0 to 100) for custom3 workload");
     }
     std::string str() const {
         return cybozu::util::formatString(
-            "mode:%s %s pqLockType:%d backoff:%d writePct:%zu"
-            , modeStr.c_str(), base::str().c_str(), pqLockType, usesBackOff ? 1 : 0, writePct);
+            "mode:%s %s pqLockType:%d backoff:%d writePct:%zu rmw:%d"
+            , modeStr.c_str(), base::str().c_str(), pqLockType
+            , usesBackOff ? 1 : 0, writePct, usesRMW ? 1 : 0);
     }
 };
 
@@ -98,6 +101,7 @@ struct ILockShared
     int longTxMode;
     bool usesBackOff;
     size_t writePct;
+    bool usesRMW;
 };
 
 
@@ -117,6 +121,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     const size_t nrWr = shared.nrWr;
     const int shortTxMode = shared.shortTxMode;
     const int longTxMode = shared.longTxMode;
+    const bool usesRMW = shared.usesRMW;
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
@@ -217,10 +222,15 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                     }
                 } else {
                     assert(mode == IMode::X);
-                    if (!lockSet.write(mutex)) goto abort;
+                    if (usesRMW) {
+                        if (!lockSet.readForUpdate(mutex)) goto abort;
+                    } else {
+                        if (!lockSet.write(mutex)) goto abort;
+                    }
                 }
             }
             //::printf("try protect %zu\n", retry); // debug code
+            lockSet.blindWriteReserveAll();
             if (!lockSet.protectAll()) goto abort;
             if (!lockSet.verifyAndUnlock()) goto abort;
             lockSet.updateAndUnlock();
@@ -374,9 +384,14 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                     }
                 } else {
                     assert(mode == IMode::X);
-                    if (!lockSet.write(mutex)) goto abort;
+                    if (shared.usesRMW) {
+                        if (!lockSet.readForUpdate(mutex)) goto abort;
+                    } else {
+                        if (!lockSet.write(mutex)) goto abort;
+                    }
                 }
             }
+            lockSet.blindWriteReserveAll();
             if (!lockSet.protectAll()) goto abort;
             if (!lockSet.verifyAndUnlock()) goto abort;
             lockSet.updateAndUnlock();
@@ -405,6 +420,7 @@ void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
     shared.longTxMode = opt.longTxMode;
     shared.usesBackOff = opt.usesBackOff != 0;
     shared.writePct = opt.writePct;
+    shared.usesRMW = opt.usesRMW != 0;
 }
 
 

@@ -23,6 +23,7 @@ struct Shared
     int shortTxMode;
     int longTxMode;
     bool usesBackOff;
+    bool usesRMW;
 };
 
 
@@ -92,7 +93,9 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                 const size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode,
                                                 muV.size(), realNrOp, i, firstRecIdx);
                 Mutex& mutex = muV[key];
-                lockSet.read(mutex);
+                if (shared.usesRMW || !isWrite) {
+                    lockSet.read(mutex);
+                }
                 if (isWrite) {
                     lockSet.write(mutex);
                 }
@@ -178,14 +181,16 @@ struct CmdLineOptionPlus : CmdLineOption
     using base = CmdLineOption;
 
     int usesBackOff; // 0 or 1.
+    int usesRMW; // 0 or 1.
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
+        appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write 0:w 1:rmw (default: 1)");
     }
     std::string str() const {
         return cybozu::util::formatString(
-            "mode:silo-occ %s backoff:%d"
-            , base::str().c_str(), usesBackOff ? 1 : 0);
+            "mode:silo-occ %s backoff:%d rmw:%d"
+            , base::str().c_str(), usesBackOff ? 1 : 0, usesRMW ? 1 : 0);
     }
 };
 
@@ -205,6 +210,7 @@ int main(int argc, char *argv[]) try
         shared.shortTxMode = opt.shortTxMode;
         shared.longTxMode = opt.longTxMode;
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
+        shared.usesRMW = opt.usesRMW ? 1 : 0;
         for (size_t i = 0; i < opt.nrLoop; i++) {
             Result1 res;
             runExec(opt, shared, worker2, res);

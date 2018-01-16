@@ -51,6 +51,7 @@ const uint8_t MAX_READERS = GetMaxValue(7);
 // This is for benchmark. The practical version supports wrap-around behavior.
 const uint32_t MIN_EPOCH_ID = 0;
 const uint32_t RESERVABLE_EPOCHS = MAX_EPOCH_ID - MIN_EPOCH_ID;
+//const uint32_t RESERVABLE_EPOCHS = 10;
 
 
 
@@ -62,18 +63,6 @@ union OrdIdGen
         uint32_t workerId:10; // MAX_WORKER_ID is reserved.
         uint32_t epochId:22;
     };
-};
-
-
-uint32_t genOrdId(uint32_t workerId, uint32_t epochId)
-{
-    assert(workerId < MAX_WORKER_ID);
-    assert(epochId <= MAX_EPOCH_ID);
-
-    OrdIdGen gen;
-    gen.workerId = workerId;
-    gen.epochId = epochId;
-    return gen.ordId;
 };
 
 
@@ -200,11 +189,23 @@ struct IMutex
 };
 
 
+/**
+ * State transition:
+ *   EMPTY --> INVISIBLE_READ or RESERVED_READ or BLIND_WRITE or (WRITE)
+ *   INVISIBLE_READ --> RESERVED_READ or WRITE or EMPTY
+ *   RESERVED_READ --> WRITE or EMPTY
+ *   WRITE --> EMPTY
+ *   BLIND_WRITE --> WRITE or EMPTY
+ */
 enum class AccessMode : uint8_t
 {
-    EMPTY = 0, INVISIBLE_READ = 1, RESERVED_READ = 2, WRITE = 3, MAX = 4,
+    EMPTY = 0,
+    INVISIBLE_READ = 1,
+    RESERVED_READ = 2,
+    WRITE = 3,
+    BLIND_WRITE = 4,
+    MAX = 5,
 };
-
 
 
 struct ILockState
@@ -303,14 +304,14 @@ private:
                 }
                 ld0 = mutex_->atomicLoad();
                 bool canReserve;
-                if constexpr (type == PREPARE_READ) {
-                    canReserve = prepareReadReserveOrIntercept(ld0, st0, ld1, st1);
-                } else if constexpr (type == PREPARE_UNLOCK_READ) {
-                    canReserve = prepareUnlockAndReadReserveOrIntercept(ld0, st0, ld1, st1);
-                } else if constexpr (type == PREPARE_WRITE) {
-                    canReserve = prepareWriteReserveOrIntercept(ld0, st0, ld1, st1);
-                } else if constexpr (type == PREPARE_UNLOCK_WRITE) {
-                    canReserve = prepareUnlockAndWriteReserveOrIntercept(ld0, st0, ld1, st1);
+                if (type == PREPARE_READ) {
+                    canReserve = prepareReadReserveOrIntercept<0>(ld0, st0, ld1, st1);
+                } else if (type == PREPARE_UNLOCK_READ) {
+                    canReserve = prepareUnlockAndReadReserveOrIntercept<1>(ld0, st0, ld1, st1);
+                } else if (type == PREPARE_WRITE) {
+                    canReserve = prepareWriteReserveOrIntercept<0>(ld0, st0, ld1, st1);
+                } else if (type == PREPARE_UNLOCK_WRITE) {
+                    canReserve = prepareUnlockAndWriteReserveOrIntercept<1>(ld0, st0, ld1, st1);
                 }
                 static_assert(type < PREPARE_MAX, "type is not supported.");
                 if (canReserve) {
@@ -321,156 +322,132 @@ private:
         }
     }
 public:
-
-    void readReserve() {
+    /*
+     * State change: EMPTY --> RESERVED_READ.
+     */
+    void readAndReadReserve() {
         ILockData ld0 = mutex_->atomicLoad();
         ILockState st0 = state_;
         assert(st0.mode == AccessMode::EMPTY);
-        bool changed = false;
         for (;;) {
-            if (changed && ld0.readers > 0 && ld0.iVer == st0.iVer) {
-                // self-reserved.
-                if (!ld0.protected_) break;
-                ld0 = mutex_->atomicLoad();
-                _mm_pause();
-                continue;
-            }
-            // Consider the case that mode is reserved but intercpeted after that.
-            changed = false;
-            st0.mode = AccessMode::EMPTY;
             ILockData ld1;
             ILockState st1;
-            if (!prepareReadReserveOrIntercept(ld0, st0, ld1, st1)) {
-#if 1
+            if (!prepareReadReserveOrIntercept<0>(ld0, st0, ld1, st1)) {
                 waitFor<PREPARE_READ>(ld0);
-#else
-                ld0 = mutex_->atomicLoad();
-                _mm_pause();
-#endif
+                continue;
+            }
+            __atomic_thread_fence(__ATOMIC_ACQUIRE);
+            // read shared memory.
+            if (mutex_->compareAndSwapBegin(ld0, ld1)) {
+                state_ = st1;
+                return;
+            }
+            // continue;
+        }
+    }
+    /*
+     * This is called for read-modify-write.
+     * This is more efficient than readAndReserveRead() and then upgrade().
+     *
+     * State change: EMPTY --> READ_MODIYF_WRITE.
+     */
+    void readAndWriteReserve() {
+        ILockData ld0 = mutex_->atomicLoad();
+        ILockState st0 = state_;
+        assert(st0.mode == AccessMode::EMPTY);
+        for (;;) {
+            ILockData ld1;
+            ILockState st1;
+            if (!prepareWriteReserveOrIntercept<0>(ld0, st0, ld1, st1)) {
+                waitFor<PREPARE_WRITE>(ld0);
+                continue;
+            }
+            __atomic_thread_fence(__ATOMIC_ACQUIRE);
+            // read shared memory.
+            if (mutex_->compareAndSwapBegin(ld0, ld1)) {
+                state_ = st1;
+                return;
+            }
+            // continue;
+        }
+    }
+    /*
+     * Just change the internal state.
+     * Reservation and protection will be deferred.
+     * blindWriteReserve() will be called at the pre-commit phase
+     * in blindWriteReserveAll().
+     */
+    void blindWrite() {
+        assert(st0.mode == AccessMode::EMPTY);
+        state_.mode = AccessMode::BLIND_WRITE;
+    }
+
+    /*
+     * State change: BLIND_WRITE --> WRITE.
+     * This is called by the blindWriteReserveAll().
+     */
+    void blindWriteReserve() {
+        ILockData ld0 = mutex_->atomicLoad();
+        ILockState st0 = state_;
+        assert(st0.mode == AccessMode::BLIND_WRITE);
+        for (;;) {
+            ILockData ld1;
+            ILockState st1;
+            if (!prepareWriteReserveOrIntercept<0>(ld0, st0, ld1, st1)) {
+                waitFor<PREPARE_WRITE>(ld0);
                 continue;
             }
             if (mutex_->compareAndSwapBegin(ld0, ld1)) {
-                changed = true;
-                ld0 = ld1;
-                st0 = st1;
+                state_ = st1;
+                return;
             }
+            // continue;
         }
-        assert(st0.mode == AccessMode::RESERVED_READ);
-        state_ = st0;
     }
+    /**
+     * This is called only when the state change INVISIBLE_READ --> RESERVED_READ.
+     * You need not wait for unprotected here.
+     */
     void unlockAndReadReserve() {
         ILockData ld0 = mutex_->atomicLoad();
         ILockState st0 = state_;
-        assert(st0.mode == AccessMode::RESERVED_READ || st0.mode == AccessMode::WRITE);
-        bool changed = false;
+        assert(st0.mode == AccessMode::INVISIBLE_READ);
         for (;;) {
-            if (changed && ld0.readers > 0 && ld0.iVer == st0.iVer) {
-                // self-reserved.
-                if (!ld0.protected_) break;
-                ld0 = mutex_->atomicLoad();
-                _mm_pause();
-                continue;
-            }
-            changed = false;
             ILockData ld1;
             ILockState st1;
-            if (!prepareUnlockAndReadReserveOrIntercept(ld0, st0, ld1, st1)) {
-#if 1
+            if (!prepareUnlockAndReadReserveOrIntercept<1>(ld0, st0, ld1, st1)) {
                 waitFor<PREPARE_UNLOCK_READ>(ld0);
-#else
-                ld0 = mutex_->atomicLoad();
-                _mm_pause();
-#endif
                 continue;
             }
-            if (ld0 == ld1) {
-                changed = true;
-                st0 = st1;
-            } else if (mutex_->compareAndSwapBegin(ld0, ld1)) {
-                changed = true;
-                ld0 = ld1;
-                st0 = st1;
+            if (mutex_->compareAndSwapMid(ld0, ld1)) {
+                state_ = st0;
+                return;
             }
+            // continue;
         }
-        assert(st0.mode == AccessMode::RESERVED_READ);
-        state_ = st0;
-        //::printf("unlockAndReadReserve %p %s\n", this, state_.str().c_str()); // debug code
     }
-    void writeReserve() {
-        ILockData ld0 = mutex_->atomicLoad();
-        ILockState st0 = state_;
-        assert(st0.mode == AccessMode::EMPTY);
-        bool changed = false;
-        for (;;) {
-            if (changed && ld0.ordId == ordId_) {
-                // self-reserved
-                if (!ld0.protected_) break;
-                ld0 = mutex_->atomicLoad();
-                _mm_pause();
-                continue;
-            }
-            // Consider the case that mode is reserved but intercpeted after that.
-            changed = false;
-            st0.mode = AccessMode::EMPTY;
-            ILockData ld1;
-            ILockState st1;
-            if (!prepareWriteReserveOrIntercept(ld0, st0, ld1, st1)) {
-#if 1
-                waitFor<PREPARE_WRITE>(ld0);
-#else
-                ld0 = mutex_->atomicLoad();
-                _mm_pause();
-#endif
-                continue;
-            }
-            if (mutex_->compareAndSwapBegin(ld0, ld1)) {
-                changed = true;
-                ld0 = ld1;
-                st0 = st1;
-            }
-        }
-        assert(st0.mode == AccessMode::WRITE);
-        state_ = st0;
-        //::printf("writeReserve %p %s\n", this, state_.str().c_str()); // debug code
-    }
+
+    /**
+     * You need not wait for unprotected here.
+     */
     void unlockAndWriteReserve() {
         ILockData ld0 = mutex_->atomicLoad();
         ILockState st0 = state_;
         assert(st0.mode != AccessMode::EMPTY);
-        bool changed = false;
         for (;;) {
-            if (changed && ld0.ordId == ordId_) {
-                // self-reserved.
-                if (!ld0.protected_) break;
-                ld0 = mutex_->atomicLoad();
-                _mm_pause();
-                continue;
-            }
-            changed = false;
             ILockData ld1;
             ILockState st1;
-            if (!prepareUnlockAndWriteReserveOrIntercept(ld0, st0, ld1, st1)) {
-#if 1
+            if (!prepareUnlockAndWriteReserveOrIntercept<1>(ld0, st0, ld1, st1)) {
                 waitFor<PREPARE_UNLOCK_WRITE>(ld0);
-#else
-                ld0 = mutex_->atomicLoad();
-                _mm_pause();
-#endif
                 continue;
             }
-            if (ld0 == ld1) {
-                changed = true;
-                st0 = st1;
-            } else if (mutex_->compareAndSwapBegin(ld0, ld1)) {
-                changed = true;
-                ld0 = ld1;
-                st0 = st1;
+            if (mutex_->compareAndSwapMid(ld0, ld1)) {
+                state_ = st1;
+                return;
             }
         }
-        assert(st0.mode == AccessMode::WRITE);
-        state_ = st0;
-        // ::printf("unlockAndWriteReserve %p %s\n", this, state_.str().c_str()); // debug code
     }
+
     bool upgrade() {
         assert(state_.mode == AccessMode::INVISIBLE_READ || state_.mode == AccessMode::RESERVED_READ);
         const ILockData ld0 = mutex_->atomicLoad();
@@ -488,12 +465,10 @@ public:
             ILockState st1;
             if (!prepareProtect(ld0, st0, ld1, st1)) return false;
             if (mutex_->compareAndSwapMid(ld0, ld1)) {
-                st0 = st1;
-                break;
+                state_ = st1;
+                return true;
             }
         }
-        state_ = st0;
-        return true;
     }
 
     void unlock() {
@@ -505,11 +480,9 @@ public:
             ILockState st1;
             bool doCas = prepareUnlock(ld0, st0, ld1, st1);
             if (doCas && !mutex_->compareAndSwapEnd(ld0, ld1)) continue;
-            st0 = st1;
-            break;
+            state_ = st1;
+            return; // mutex_ is not cleared.
         }
-        state_ = st0;
-        // mutex_ is not cleared.
     }
 
     bool unchanged() {
@@ -530,9 +503,12 @@ private:
      * RETURN:
      *   true: reserve or intercept is capable.
      */
+    template <bool allowProtected>
     bool prepareReadReserveOrIntercept(
         const ILockData& ld0, const ILockState& st0, ILockData& ld1, ILockState& st1) {
         //::printf("prepareReadReserveOrIntercept\n"); // debug code
+        if (!allowProtected && ld0.protected_) return false;
+
         ld1 = ld0;
         st1 = st0;
         assert(st0.mode == AccessMode::EMPTY);
@@ -564,9 +540,11 @@ private:
      * RETURN:
      *   true: reserve or intercept is capable.
      */
+    template <bool allowProtected>
     bool prepareWriteReserveOrIntercept(
         const ILockData& ld0, const ILockState& st0, ILockData& ld1, ILockState& st1) {
         //::printf("prepareWriteReserveOrIntercept\n"); // debug code
+        if (!allowProtected && ld0.protected_) return false;
         ld1 = ld0;
         st1 = st0;
         assert(st0.mode == AccessMode::EMPTY);
@@ -609,7 +587,8 @@ private:
             return false;
         }
         st1.mode = AccessMode::EMPTY;
-        if (st0.mode == AccessMode::INVISIBLE_READ) {
+        if (st0.mode == AccessMode::INVISIBLE_READ ||
+            st0.mode == AccessMode::BLIND_WRITE) {
             return false;
         }
         if (st0.mode == AccessMode::RESERVED_READ) {
@@ -644,19 +623,21 @@ private:
         }
         return false; // Intercepted so CAS is not required.
     }
+    template <bool allowProtected>
     bool prepareUnlockAndReadReserveOrIntercept(
         const ILockData& ld0, const ILockState& st0, ILockData& ld1, ILockState& st1) {
         ILockData ld2;
         ILockState st2;
         prepareUnlock(ld0, st0, ld2, st2);
-        return prepareReadReserveOrIntercept(ld2, st2, ld1, st1);
+        return prepareReadReserveOrIntercept<allowProtected>(ld2, st2, ld1, st1);
     }
+    template <bool allowProtected>
     bool prepareUnlockAndWriteReserveOrIntercept(
         const ILockData& ld0, const ILockState& st0, ILockData& ld1, ILockState& st1) {
         ILockData ld2;
         ILockState st2;
         prepareUnlock(ld0, st0, ld2, st2);
-        return prepareWriteReserveOrIntercept(ld2, st2, ld1, st1);
+        return prepareWriteReserveOrIntercept<allowProtected>(ld2, st2, ld1, st1);
     }
     bool prepareProtect(
         const ILockData& ld0, const ILockState& st0, ILockData& ld1, ILockState& st1) {
@@ -668,9 +649,11 @@ private:
         }
         if (ordId_ < ld0.ordId) {
             // Intercepted but we can re-intercept.
-            bool ret = prepareUnlockAndWriteReserveOrIntercept(ld0, st0, ld1, st1);
-            unusedVar(ret);
-            assert(ret);
+            if (!prepareUnlockAndWriteReserveOrIntercept<0>(ld0, st0, ld1, st1)) {
+                // protected by other transaction.
+                // We can not wait for other threads in pre-commit phase.
+                return false;
+            }
         } else {
             // Reserved.
             ld1 = ld0;
@@ -710,6 +693,11 @@ public:
     void init(uint32_t ordId) {
         ordId_ = ordId;
     }
+    /**
+     * This is invisible read which does not modify the mutex so
+     * it can be executed with low overhead.
+     * However, this function does not preserve progress guarantee.
+     */
     void invisibleRead(Mutex& mutex) {
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it = findInVec(key);
@@ -724,22 +712,21 @@ public:
             lk.waitForInvisibleRead();
             // read shared version.
             __atomic_thread_fence(__ATOMIC_ACQUIRE);
-            if (lk.unchanged()) break;
+            if (lk.unchanged()) return;
         }
     }
+    /**
+     * You should use this function to read records
+     * to preserve progress guarantee.
+     */
     bool reservedRead(Mutex& mutex) {
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
             vec_.emplace_back(mutex, ordId_);
             Lock& lk = vec_.back();
-            lk.readReserve();
-            for (;;) {
-                // read shared version.
-                __atomic_thread_fence(__ATOMIC_ACQUIRE);
-                if (lk.unchanged()) return true;
-                lk.unlockAndReadReserve();
-            }
+            lk.readAndReadReserve();
+            return true;
         }
         Lock& lk = *it0;
         if (lk.mode() == AccessMode::INVISIBLE_READ) {
@@ -750,17 +737,16 @@ public:
         // read local version.
         return true;
     }
-    bool blindWrite(Mutex& mutex) {
-        // TODO: a bit optimization is capable for blind write.
-        return write(mutex);
-    }
+    /**
+     * You should use this function to write records.
+     */
     bool write(Mutex& mutex) {
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
             vec_.emplace_back(mutex, ordId_);
             Lock& lk = vec_.back();
-            lk.writeReserve();
+            lk.blindWrite();
             // write local version.
             return true;
         }
@@ -771,14 +757,58 @@ public:
         // write local version.
         return true;
     }
+    /*
+     * You call this to read modify write in a transaction.
+     * If you know the transaction will call reservedRead() then
+     * write() which will call upgrade() internally,
+     * it is more efficient to call readForUpdate() first.
+     *
+     * (1) reservedRead(),  write(), write(), ...
+     * (2) readForUpdate(), write(), write(), ...
+     *
+     * (2) is more efficient than (1).
+     */
+    bool readForUpdate(Mutex& mutex) {
+        const uintptr_t key = uintptr_t(&mutex);
+        typename Vec::iterator it0 = findInVec(key);
+        if (it0 == vec_.end()) {
+            vec_.emplace_back(mutex, ordId_);
+            Lock& lk = vec_.back();
+            lk.readAndWriteReserve();
+            return true;
+        }
+        Lock& lk = *it0;
+        if (lk.mode() == AccessMode::INVISIBLE_READ || lk.mode() == AccessMode::RESERVED_READ) {
+            if (!lk.upgrade()) return false;
+        }
+        return true;
+    }
+
+    /*
+     * Pre-commit phase:
+     * You must call blindWriteReserveAll(), protectAll(), verifyAndUnlock(), updateAndUnlock()
+     * in sequence.
+     * The point between protectAll() and verifyAndUnlock() is the serialization point.
+     * The point between verifyAndUnlock() and updateAndUnlock() is the strictness point.
+     */
+
+    void blindWriteReserveAll() {
+        for (Lock& lk : vec_) {
+            if (lk.mode() == AccessMode::BLIND_WRITE) {
+                lk.blindWriteReserve();
+            }
+        }
+    }
     bool protectAll() {
 #if 0
         std::sort(vec_.begin(), vec_.end());
         // map_ is invalidated here. Do not use it.
 #endif
         for (Lock& lk : vec_) {
-            if (lk.mode() != AccessMode::WRITE) continue;
-            if (!lk.protect()) return false;
+            assert(lk.mode() != AccessMode::BLIND_WRITE);
+            if (lk.mode() == AccessMode::WRITE) {
+                if (!lk.protect()) return false;
+            }
         }
         // Here is serialization point.
         __atomic_thread_fence(__ATOMIC_ACQ_REL);
@@ -786,18 +816,22 @@ public:
     }
     bool verifyAndUnlock() {
         for (Lock& lk : vec_) {
-            if (lk.mode() == AccessMode::WRITE) continue;
-            if (!lk.unchanged()) return false;
-            // S2PL allow unlocking of read locks.
-            lk.unlock();
+            if (lk.mode() == AccessMode::INVISIBLE_READ ||
+                lk.mode() == AccessMode::RESERVED_READ) {
+                if (!lk.unchanged()) return false;
+                // S2PL allow unlocking of read locks.
+                lk.unlock();
+            }
         }
         return true;
     }
     void updateAndUnlock() {
         for (Lock& lk : vec_) {
-            if (lk.mode() != AccessMode::WRITE) continue;
-            lk.update();
-            lk.unlock();
+            assert(lk.mode() != AccessMode::BLIND_WRITE);
+            if (lk.mode() == AccessMode::WRITE) {
+                lk.update();
+                lk.unlock();
+            }
         }
         clear();
     }
