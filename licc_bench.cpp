@@ -102,6 +102,7 @@ struct ILockShared
     bool usesBackOff;
     size_t writePct;
     bool usesRMW;
+    size_t nrTh4LongTx;
 };
 
 
@@ -128,7 +129,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     BoolRandom<decltype(rand)> boolRand(rand);
     std::vector<bool> isWriteV;
     std::vector<size_t> tmpV; // for fillModeVec
-    const bool isLongTx = longTxSize != 0 && idx == 0;
+    const bool isLongTx = longTxSize != 0 && idx < shared.nrTh4LongTx;
     const size_t realNrOp = isLongTx ? longTxSize : nrOp;
     if (!isLongTx && shortTxMode == USE_MIX_TX) {
         isWriteV.resize(nrOp);
@@ -291,6 +292,9 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 }
 
 
+/**
+ * This worker is for short-long-long workload.
+ */
 template <typename PQLock>
 Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
 {
@@ -421,6 +425,7 @@ void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
     shared.usesBackOff = opt.usesBackOff != 0;
     shared.writePct = opt.writePct;
     shared.usesRMW = opt.usesRMW != 0;
+    shared.nrTh4LongTx = opt.nrTh4LongTx;
 }
 
 
@@ -437,6 +442,8 @@ void dispatch1(CmdLineOptionPlus& opt)
         } else if (opt.workload == "custom3") {
             Result2 res;
             runExec(opt, shared, worker1<PQLock>, res);
+        } else {
+            throw cybozu::Exception("dispatch1 unknown workload") << opt.workload;
         }
         epochGen_.reset();
     }

@@ -19,6 +19,7 @@ struct Shared
     size_t nrWr;
     int shortTxMode;
     int longTxMode;
+    size_t nrTh4LongTx;
 };
 
 
@@ -50,7 +51,7 @@ Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     // USE_LONG_TX_2
     BoolRandom<decltype(rand)> boolRand(rand);
 
-    const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
+    const bool isLongTx = longTxSize != 0 && idx < shared.nrTh4LongTx; // starvation setting.
     const size_t realNrOp = isLongTx ? longTxSize : nrOp;
     if (!isLongTx && shortTxMode == USE_MIX_TX) {
         isWriteV.resize(nrOp);
@@ -186,8 +187,8 @@ struct CmdLineOptionPlus : CmdLineOption
     int leisLockType;
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
-        appendOpt(&useVector, 0, "vector", "[0 or 1]: use vector instead of map.");
-        appendOpt(&leisLockType, 0, "lock", "[id]: leis lock type (0:spin, 1:withmcs, 2:sxql)");
+        appendOpt(&useVector, 0, "vector", "[0 or 1]: use vector instead of map. (default:0)");
+        appendOpt(&leisLockType, 0, "lock", "[id]: leis lock type (0:spin, 1:withmcs, 2:sxql, default:0)");
     }
     std::string str() const {
         return cybozu::util::formatString(
@@ -216,6 +217,7 @@ void dispatch1(const CmdLineOptionPlus& opt)
     shared.nrWr = opt.nrWr;
     shared.shortTxMode = opt.shortTxMode;
     shared.longTxMode = opt.longTxMode;
+    shared.nrTh4LongTx = opt.nrTh4LongTx;
 
     for (size_t i = 0; i < opt.nrLoop; i++) {
         Result1 res;

@@ -15,6 +15,7 @@ struct CmdLineOption : cybozu::Option
     size_t nrMu;  // total number of mutexes. (used if nrMuPerTh is 0)
     std::string workload; // workload name.
     size_t longTxSize; // long transaction size. (0 means no long tx exists.)
+    size_t nrTh4LongTx; // number of threads running long transaction (0 means no long tx exists.)
     size_t nrOp; // Number of total operations of short transactions.
     size_t nrWr; // Number of write operations of short transactions.
     int shortTxMode; // Short transaction mode. See enum TxMode.
@@ -33,12 +34,15 @@ struct CmdLineOption : cybozu::Option
         appendOpt(&nrMu, 0, "mu", "[num]: total number of mutexes (use this for other workloads).");
         appendOpt(&workload, "custom", "w", "[workload]: workload type in 'custom', 'custom-t' etc.");
         appendOpt(&longTxSize, 0, "long-tx-size", "[size]: long tx size for shortlong workload. 0 means no long tx.");
+        appendOpt(&nrTh4LongTx, 1, "th-long", "[size]: number of worker threads running long tx . 0 means no long tx.");
         appendOpt(&nrOp, 4, "nrop", "[num]: number of operations of short transactions (default:4).");
         appendOpt(&nrWr, 2, "nrwr", "[num]: number of write operations of short transactions (default:2).");
         appendOpt(&shortTxMode, 0, "sm", "[id]: short Tx mode "
                   "(0:last-writes, 1:first-writes, 2:read-only, 3:write-only, 4:half-and-half, 5:mix, "
-                  "6:last-writes-hc, 7:first-writes-hc)");
-        appendOpt(&longTxMode, 0, "lm", "[id]: long Tx mode (0:last-writes, 1:first-writes, 2:read-only, 4:half-and-half)");
+                  "6:last-writes-hc, 7:first-writes-hc, 8:last-write-same, 9:first-write-same)");
+        appendOpt(&longTxMode, 0, "lm", "[id]: long Tx mode "
+                  "(0:last-writes, 1:first-writes, 2:read-only, 4:half-and-half, "
+                  "8:last-write-same, 9:first-write-same)");
         appendOpt(&amode, "CORE", "amode", "[MODE]: thread affinity mode (CORE, CUSTOM1, ...)");
         appendBoolOpt(&verbose, "v", ": puts verbose messages.");
         appendHelp("h", ": put this message.");
@@ -66,6 +70,9 @@ struct CmdLineOption : cybozu::Option
         if (nrOp < nrWr) {
             throw cybozu::Exception(NAME) << "nrOp must be >= nrWr.";
         }
+        if (nrTh4LongTx > nrTh) {
+            throw cybozu::Exception(NAME) << "nrTh4LongTx must be <= nrTh.";
+        }
     }
     size_t getNrMuPerTh() const {
         return nrMuPerTh > 0 ? nrMuPerTh : nrMu / nrTh;
@@ -76,10 +83,10 @@ struct CmdLineOption : cybozu::Option
     virtual std::string str() const {
         return cybozu::util::formatString(
             "concurrency:%zu workload:%s nrMutex:%zu nrMuPerTh:%zu "
-            "sec:%zu longTxSize:%zu nrOp:%zu nrWr:%zu shortTxMode:%d longTxMode:%d "
+            "sec:%zu longTxSize:%zu nrTh4LongTx:%zu nrOp:%zu nrWr:%zu shortTxMode:%d longTxMode:%d "
             "amode:%s"
             , nrTh, workload.c_str(), getNrMu(), getNrMuPerTh()
-            , runSec, longTxSize, nrOp, nrWr, shortTxMode, longTxMode
+            , runSec, longTxSize, nrTh4LongTx, nrOp, nrWr, shortTxMode, longTxMode
             , amode.c_str());
     }
 };

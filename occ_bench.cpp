@@ -24,6 +24,7 @@ struct Shared
     int longTxMode;
     bool usesBackOff;
     bool usesRMW;
+    size_t nrTh4LongTx;
 };
 
 
@@ -56,7 +57,7 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     // USE_LONG_TX_2
     BoolRandom<decltype(rand)> boolRand(rand);
 
-    const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
+    const bool isLongTx = longTxSize != 0 && idx < shared.nrTh4LongTx; // starvation setting.
     const size_t realNrOp = isLongTx ? longTxSize : nrOp;
     if (!isLongTx && shortTxMode == USE_MIX_TX) {
         isWriteV.resize(nrOp);
@@ -211,6 +212,7 @@ int main(int argc, char *argv[]) try
         shared.longTxMode = opt.longTxMode;
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         shared.usesRMW = opt.usesRMW ? 1 : 0;
+        shared.nrTh4LongTx = opt.nrTh4LongTx;
         for (size_t i = 0; i < opt.nrLoop; i++) {
             Result1 res;
             runExec(opt, shared, worker2, res);
