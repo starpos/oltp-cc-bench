@@ -425,7 +425,9 @@ enum TxMode
     USE_MIX_TX = 5,
     USE_LAST_WRITE_HC_TX = 6,
     USE_FIRST_WRITE_HC_TX = 7,
-    TXMODE_MAX = 8,
+    USE_LAST_WRITE_SAME_TX = 8,
+    USE_FIRST_WRITE_SAME_TX = 9,
+    TXMODE_MAX = 10,
 };
 
 enum TxIdGenType
@@ -542,9 +544,11 @@ Mode getMode(BoolRandom<Random>& boolRand, const std::vector<bool>& isWriteV,
         case USE_READONLY_TX:
             return Mode::S;
         case USE_FIRST_WRITE_TX:
+        case USE_FIRST_WRITE_SAME_TX:
             return i < nrWr ? Mode::X : Mode::S;
         default:
-            assert(longTxMode == USE_LAST_WRITE_TX);
+            assert(longTxMode == USE_LAST_WRITE_TX ||
+                   longTxMode == USE_LAST_WRITE_SAME_TX);
             return i >= nrOp - nrWr ? Mode::X : Mode::S;
         }
     } else {
@@ -559,9 +563,12 @@ Mode getMode(BoolRandom<Random>& boolRand, const std::vector<bool>& isWriteV,
             return Mode::X;
         case USE_FIRST_WRITE_TX:
         case USE_FIRST_WRITE_HC_TX:
+        case USE_FIRST_WRITE_SAME_TX:
             return i < nrWr ? Mode::X : Mode::S;
         default:
-            assert(shortTxMode == USE_LAST_WRITE_TX || shortTxMode == USE_LAST_WRITE_HC_TX);
+            assert(shortTxMode == USE_LAST_WRITE_TX ||
+                   shortTxMode == USE_LAST_WRITE_HC_TX ||
+                   shortTxMode == USE_LAST_WRITE_SAME_TX);
             return i >= nrOp - nrWr ? Mode::X : Mode::S;
         }
     }
@@ -630,14 +637,51 @@ size_t getRecordIdx(Random& rand, bool isLongTx, int shortTxMode, int longTxMode
                     size_t nrMu, size_t nrOp, size_t i, size_t& firstRecIdx)
 {
     unused(longTxMode);
-    if (!isLongTx && (shortTxMode == USE_LAST_WRITE_HC_TX || shortTxMode == USE_FIRST_WRITE_HC_TX)) {
-        if (i == 0) {
-            firstRecIdx = rand() & 0x1;
-            return firstRecIdx;
-        } else if (i == nrOp - 1) {
-            return 1 - firstRecIdx;
-        } else {
-            return rand() % nrMu;
+    if (isLongTx) {
+        if (longTxMode == USE_FIRST_WRITE_SAME_TX) {
+            if (i == 0) {
+                return 0;
+            } else {
+                assert(nrMu > 1);
+                return rand() % (nrMu - 1) + 1; // non-zero.
+            }
+        }
+        if (longTxMode == USE_LAST_WRITE_SAME_TX) {
+            if (i == nrOp - 1) {
+                return 0;
+            } else {
+                assert(nrMu > 1);
+                return rand() % (nrMu - 1) + 1; // non-zero.
+            }
+        }
+    } else {
+        if (shortTxMode == USE_LAST_WRITE_HC_TX || shortTxMode == USE_FIRST_WRITE_HC_TX) {
+            if (i == 0) {
+                firstRecIdx = rand() & 0x1;
+                return firstRecIdx;
+            } else if (i == nrOp - 1) {
+                return 1 - firstRecIdx;
+            } else {
+                return rand() % nrMu;
+            }
+        }
+        if (shortTxMode == USE_FIRST_WRITE_SAME_TX) {
+            if (i == 0) {
+                assert(nrMu > 0);
+                //return rand() % std::min<size_t>(10, nrMu); // typically first 10 records.
+                return 0;
+            } else {
+                assert(nrMu > 1);
+                return rand() % (nrMu - 1) + 1; // non-zero.
+            }
+        }
+        if (shortTxMode == USE_LAST_WRITE_SAME_TX) {
+            if (i == nrOp - 1) {
+                return 0;
+            } else {
+                assert(nrMu > 1);
+                return rand() % (nrMu - 1) + 1; // non-zero.
+            }
         }
     }
     return rand() % nrMu;
