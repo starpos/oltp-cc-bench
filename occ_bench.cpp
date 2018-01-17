@@ -185,8 +185,8 @@ struct CmdLineOptionPlus : CmdLineOption
     int usesRMW; // 0 or 1.
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
-        appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
-        appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write 0:w 1:rmw (default: 1)");
+        appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff (0:off, 1:on)");
+        appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write (0:w, 1:rmw, default:1)");
     }
     std::string str() const {
         return cybozu::util::formatString(
