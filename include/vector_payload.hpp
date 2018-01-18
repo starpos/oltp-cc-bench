@@ -25,17 +25,18 @@ class VectorWithPayload
 {
 public:
     using value_type = DataWithPayload<T>;
-    static const size_t ALIGNMENT_SIZE = 64;
 
 private:
     size_t payloadSize_; // [bytes]. do not change payloadSize when size_ > 0.
     uint8_t *data_;
     size_t size_;  // number of current items [nr].
     size_t reservedSize_; // allocated memory size [nr].
+    size_t alignmentSize_; // alignment [bytes].
 
 public:
     VectorWithPayload()
-        : payloadSize_(0), data_(nullptr), size_(0), reservedSize_(0) {
+        : payloadSize_(0), data_(nullptr), size_(0)
+        , reservedSize_(0), alignmentSize_(sizeof(uintptr_t)) {
     }
     ~VectorWithPayload() noexcept {
         if (data_) {
@@ -44,14 +45,24 @@ public:
         }
     }
 
-    void setPayloadSize(size_t payloadSize) {
+    void setPayloadSize(size_t payloadSize, size_t alignmentSize = sizeof(uintptr_t)) {
         if (size_ > 0) {
             throw std::runtime_error("setPayloadSize: size_ must be 0.");
         }
-        // recalcurate reservedSize_.
+        if (alignmentSize < sizeof(uintptr_t) || alignmentSize % sizeof(uintptr_t) != 0) {
+            throw std::runtime_error("setPayloadSize: invalid alignmenSize.");
+        }
+        alignmentSize_ = alignmentSize;
+
+        // calculate aligned payload size.
+        size_t elementSize = sizeof(T) + payloadSize;
+        size_t alignedElementSize = (((elementSize - 1) / alignmentSize) + 1) * alignmentSize;
+        size_t alignedPayloadSize = alignedElementSize - sizeof(T);
+
+        // recalculate reservedSize_.
         const size_t bytes = reservedSize_ * (sizeof(T) + payloadSize_);
-        reservedSize_ = bytes / (sizeof(T) + payloadSize);
-        payloadSize_ = payloadSize;
+        reservedSize_ = bytes / alignedElementSize;
+        payloadSize_ = alignedPayloadSize;
     }
 
     /*
@@ -396,7 +407,7 @@ private:
     }
     uint8_t* allocateNewArray(size_t size) const {
         void *p;
-        if (::posix_memalign(&p, ALIGNMENT_SIZE, elemSize() * size) != 0) {
+        if (::posix_memalign(&p, alignmentSize_, elemSize() * size) != 0) {
             throw std::bad_alloc();
         }
         return (uint8_t *)p;

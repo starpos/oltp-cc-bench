@@ -86,13 +86,14 @@ ReadMode strToReadMode(const char *s)
     }
 }
 
-
 template <typename PQLock>
 struct ILockShared
 {
     using IMutex = typename ILockTypes<PQLock>::IMutex;
 
-    std::vector<IMutex> muV;
+    //std::vector<IMutex> muV;
+    //std::vector<Record<IMutex> > recV;
+    VectorWithPayload<IMutex> recV;
     ReadMode rmode;
     size_t longTxSize;
     size_t nrOp;
@@ -103,6 +104,7 @@ struct ILockShared
     size_t writePct;
     bool usesRMW;
     size_t nrTh4LongTx;
+    size_t payload;
 };
 
 
@@ -115,7 +117,9 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
-    std::vector<IMutex>& muV = shared.muV;
+    //std::vector<IMutex>& muV = shared.muV;
+    //std::vector<Record<IMutex> >& recV = shared.recV;
+    auto& recV = shared.recV;
     const ReadMode rmode = shared.rmode;
     const size_t longTxSize = shared.longTxSize;
     const size_t nrOp = shared.nrOp;
@@ -155,6 +159,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 #endif
 
     ILockSet lockSet;
+    std::vector<uint8_t> value(shared.payload);
 
     //std::unordered_map<size_t, size_t> retryMap;
 #if 0
@@ -179,7 +184,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         const uint32_t ordId = epochTxIdGen.get();
 #endif
 
-        lockSet.init(ordId);
+        lockSet.init(ordId, shared.payload);
         //::printf("Tx begin\n"); // debug code
         size_t firstRecIdx;
 
@@ -205,28 +210,29 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 #if 0
                 size_t key = getRecordIdx(i);
 #elif 1
-                size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode, muV.size(), realNrOp, i, firstRecIdx);
+                size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode, recV.size(), realNrOp, i, firstRecIdx);
 #else
-                size_t key = rand() % muV.size();
+                size_t key = rand() % recV.size();
 #endif
                 //::printf("mode %c key %zu\n", mode == IMode::S ? 'S' : 'X', key); // QQQQQ
-                IMutex& mutex = muV[key];
-
+                auto& rec = recV[key];
+                IMutex& mutex = rec.value;
+                void *sharedValue = rec.payload;
                 if (mode == IMode::S) {
                     const bool tryInvisibleRead =
                         (rmode == ReadMode::OCC) ||
                         (rmode == ReadMode::HYBRID && !isLongTx && retry == 0);
                     if (tryInvisibleRead) {
-                        lockSet.invisibleRead(mutex);
+                        lockSet.invisibleRead(mutex, sharedValue, &value[0]);
                     } else {
-                        if (!lockSet.reservedRead(mutex)) goto abort;
+                        if (!lockSet.reservedRead(mutex, sharedValue, &value[0])) goto abort;
                     }
                 } else {
                     assert(mode == IMode::X);
                     if (usesRMW) {
-                        if (!lockSet.readForUpdate(mutex)) goto abort;
+                        if (!lockSet.readForUpdate(mutex, sharedValue, &value[0])) goto abort;
                     } else {
-                        if (!lockSet.write(mutex)) goto abort;
+                        if (!lockSet.write(mutex, sharedValue, &value[0])) goto abort;
                     }
                 }
             }
@@ -304,14 +310,16 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
-    std::vector<IMutex>& muV = shared.muV;
+    //std::vector<IMutex>& muV = shared.muV;
+    //std::vector<Record<IMutex> >& recV = shared.recV;
+    auto& recV = shared.recV;
     const ReadMode rmode = shared.rmode;
 
     const size_t txSize = [&]() -> size_t {
         if (idx == 0) {
-            return std::max<size_t>(muV.size() / 2, 10);
+            return std::max<size_t>(recV.size() / 2, 10);
         } else if (idx <= 5) {
-            return std::max<size_t>(muV.size() / 10, 10);
+            return std::max<size_t>(recV.size() / 10, 10);
         } else {
             return 10;
         }
@@ -349,6 +357,7 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 #endif
 #endif
 
+    std::vector<uint8_t> value(shared.payload);
     ILockSet lockSet;
 
     while (!start) _mm_pause();
@@ -360,7 +369,7 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         const uint32_t ordId = epochTxIdGen.get();
 #endif
 
-        lockSet.init(ordId);
+        lockSet.init(ordId, shared.payload);
         uint64_t t0;
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         auto randState = rand.getState();
@@ -375,23 +384,25 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 #else
                 IMode mode = rand() % 100 < shared.writePct ? IMode::X : IMode::S;
 #endif
-                size_t key = rand() % muV.size();
-                IMutex& mutex = muV[key];
+                size_t key = rand() % recV.size();
+                auto& rec = recV[key];
+                IMutex& mutex = rec.value;
+                void *sharedValue = rec.payload;
                 if (mode == IMode::S) {
                     const bool tryInvisibleRead =
                         (rmode == ReadMode::OCC) ||
                         (rmode == ReadMode::HYBRID && !isLongTx && retry == 0);
                     if (tryInvisibleRead) {
-                        lockSet.invisibleRead(mutex);
+                        lockSet.invisibleRead(mutex, sharedValue, &value[0]);
                     } else {
-                        if (!lockSet.reservedRead(mutex)) goto abort;
+                        if (!lockSet.reservedRead(mutex, sharedValue, &value[0])) goto abort;
                     }
                 } else {
                     assert(mode == IMode::X);
                     if (shared.usesRMW) {
-                        if (!lockSet.readForUpdate(mutex)) goto abort;
+                        if (!lockSet.readForUpdate(mutex, sharedValue, &value[0])) goto abort;
                     } else {
-                        if (!lockSet.write(mutex)) goto abort;
+                        if (!lockSet.write(mutex, sharedValue, &value[0])) goto abort;
                     }
                 }
             }
@@ -415,7 +426,13 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 template <typename PQLock>
 void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
 {
-    shared.muV.resize(opt.getNrMu());
+
+#ifdef MUTEX_ON_CACHELINE
+    shared.recV.setPayloadSize(opt.payload, cybozu::lock::licc_local::CACHE_LINE_SIZE);
+#else
+    shared.recV.setPayloadSize(opt.payload);
+#endif
+    shared.recV.resize(opt.getNrMu());
     shared.rmode = strToReadMode(opt.modeStr.c_str());
     shared.longTxSize = opt.longTxSize;
     shared.nrOp = opt.nrOp;
@@ -426,6 +443,7 @@ void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
     shared.writePct = opt.writePct;
     shared.usesRMW = opt.usesRMW != 0;
     shared.nrTh4LongTx = opt.nrTh4LongTx;
+    shared.payload = opt.payload;
 }
 
 

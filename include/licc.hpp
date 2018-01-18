@@ -9,6 +9,7 @@
 #include "util.hpp"
 #include "pqlock.hpp"
 #include "arch.hpp"
+#include "vector_payload.hpp"
 
 
 namespace cybozu {
@@ -110,11 +111,7 @@ struct ILockData
 template <typename PQLock>
 struct IMutex
 {
-#ifdef MUTEX_ON_CACHELINE
-    alignas(licc_local::CACHE_LINE_SIZE)
-#else
     alignas(8)
-#endif
     uint64_t obj;
 #if 0
     typename PQLock::Mutex pqMutex;
@@ -325,7 +322,7 @@ public:
     /*
      * State change: EMPTY --> RESERVED_READ.
      */
-    void readAndReadReserve() {
+    void readAndReadReserve(const void *shared, void *local, size_t size) {
         ILockData ld0 = mutex_->atomicLoad();
         ILockState st0 = state_;
         assert(st0.mode == AccessMode::EMPTY);
@@ -338,6 +335,7 @@ public:
             }
             __atomic_thread_fence(__ATOMIC_ACQUIRE);
             // read shared memory.
+            ::memcpy(local, shared, size);
             if (mutex_->compareAndSwapBegin(ld0, ld1)) {
                 state_ = st1;
                 return;
@@ -351,7 +349,7 @@ public:
      *
      * State change: EMPTY --> READ_MODIYF_WRITE.
      */
-    void readAndWriteReserve() {
+    void readAndWriteReserve(const void *shared, void *local, size_t size) {
         ILockData ld0 = mutex_->atomicLoad();
         ILockState st0 = state_;
         assert(st0.mode == AccessMode::EMPTY);
@@ -364,6 +362,7 @@ public:
             }
             __atomic_thread_fence(__ATOMIC_ACQUIRE);
             // read shared memory.
+            ::memcpy(local, shared, size);
             if (mutex_->compareAndSwapBegin(ld0, ld1)) {
                 state_ = st1;
                 return;
@@ -674,7 +673,8 @@ public:
     using Lock = ILock<PQLock>;
 
 
-    using Vec = std::vector<Lock>;
+    //using Vec = std::vector<Lock>;
+    using Vec = VectorWithPayload<Lock>;
     using Map = std::unordered_map<
         uintptr_t, size_t,
         std::hash<uintptr_t>,
@@ -684,77 +684,124 @@ public:
     using Mutex = IMutex<PQLock>;
 
 private:
+    // each item consists of (1) Lock object, (2) pointer to shared value, and (3) local value.
     Vec vec_;
+
+    // key: mutex pointer.  value: index in vec_.
     Map map_;
+
     uint32_t ordId_;
+    size_t valueSize_;
 
 public:
+    struct Payload {
+        void *sharedValue;
+        uint8_t localValue[0];
+
+        void loadLocalValue(void *value, size_t size) {
+            ::memcpy(value, localValue, size);
+        }
+        void storeLocalValue(const void *value, size_t size) {
+            ::memcpy(localValue, value, size);
+        }
+        void loadSharedValue(size_t size) {
+            ::memcpy(localValue, sharedValue, size);
+        }
+        void storeSharedValue(size_t size) {
+            ::memcpy(sharedValue, localValue, size);
+        }
+    };
+    size_t payloadSize() const {
+        return sizeof(uintptr_t) + valueSize_;
+    }
+
     // You must call this method before read/write operations.
-    void init(uint32_t ordId) {
+    void init(uint32_t ordId, size_t valueSize) {
         ordId_ = ordId;
+        valueSize_ = valueSize;
+        vec_.setPayloadSize(payloadSize());
     }
     /**
      * This is invisible read which does not modify the mutex so
      * it can be executed with low overhead.
      * However, this function does not preserve progress guarantee.
      */
-    void invisibleRead(Mutex& mutex) {
+    void invisibleRead(Mutex& mutex, void *sharedValue, void *value) {
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it = findInVec(key);
         if (it != vec_.end()) {
             // read local version.
+            ((Payload *)it->payload)->loadLocalValue(value, valueSize_);
             return;
         }
         vec_.emplace_back(mutex, ordId_);
-        Lock& lk = vec_.back();
+
+        //Lock& lk = vec_.back();
+        Lock& lk = vec_.back().value;
+        Payload *payload = (Payload *)vec_.back().payload;
+        payload->sharedValue = sharedValue;
+
         lk.initInvisibleRead();
         for (;;) {
             lk.waitForInvisibleRead();
             // read shared version.
+            payload->loadSharedValue(valueSize_);
             __atomic_thread_fence(__ATOMIC_ACQUIRE);
-            if (lk.unchanged()) return;
+            if (lk.unchanged()) break;
         }
+        payload->loadLocalValue(value, valueSize_);
     }
     /**
      * You should use this function to read records
      * to preserve progress guarantee.
      */
-    bool reservedRead(Mutex& mutex) {
+    bool reservedRead(Mutex& mutex, void *sharedValue, void *value) {
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
             vec_.emplace_back(mutex, ordId_);
-            Lock& lk = vec_.back();
-            lk.readAndReadReserve();
+            //Lock& lk = vec_.back();
+            Lock& lk = vec_.back().value;
+            Payload *payload = (Payload *)vec_.back().payload;
+            payload->sharedValue = sharedValue;
+            lk.readAndReadReserve(payload->sharedValue, payload->localValue, valueSize_);
+            payload->loadLocalValue(value, valueSize_);
             return true;
         }
-        Lock& lk = *it0;
+        Lock& lk = it0->value;
         if (lk.mode() == AccessMode::INVISIBLE_READ) {
             const uint32_t uVer = lk.state().uVer;
             lk.unlockAndReadReserve();
             if (lk.state().uVer != uVer) return false;
         }
         // read local version.
+        ((Payload *)it0->payload)->loadLocalValue(value, valueSize_);
         return true;
     }
     /**
      * You should use this function to write records.
      */
-    bool write(Mutex& mutex) {
+    bool write(Mutex& mutex, void *sharedValue, void *value) {
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
             vec_.emplace_back(mutex, ordId_);
-            Lock& lk = vec_.back();
+            //Lock& lk = vec_.back();
+            Lock& lk = vec_.back().value;
             lk.blindWrite();
+
             // write local version.
+            Payload *payload = (Payload *)vec_.back().payload;
+            payload->sharedValue = sharedValue;
+            payload->storeLocalValue(value, valueSize_);
             return true;
         }
-        Lock& lk = *it0;
+        Lock& lk = it0->value;
         if (lk.mode() == AccessMode::INVISIBLE_READ || lk.mode() == AccessMode::RESERVED_READ) {
             if (!lk.upgrade()) return false;
         }
         // write local version.
+        ((Payload *)it0->payload)->storeLocalValue(value, valueSize_);
         return true;
     }
     /*
@@ -768,19 +815,27 @@ public:
      *
      * (2) is more efficient than (1).
      */
-    bool readForUpdate(Mutex& mutex) {
+    bool readForUpdate(Mutex& mutex, void *sharedValue, void *value) {
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
             vec_.emplace_back(mutex, ordId_);
-            Lock& lk = vec_.back();
-            lk.readAndWriteReserve();
+            //Lock& lk = vec_.back();
+            Lock& lk = vec_.back().value;
+            Payload *payload = (Payload *)vec_.back().payload;
+            payload->sharedValue = sharedValue;
+            lk.readAndWriteReserve(payload->sharedValue, payload->localValue, valueSize_);
+            payload->loadLocalValue(value, valueSize_); // read local copy.
+            payload->storeLocalValue(value, valueSize_); // write local copy.
             return true;
         }
-        Lock& lk = *it0;
+        Lock& lk = it0->value;
         if (lk.mode() == AccessMode::INVISIBLE_READ || lk.mode() == AccessMode::RESERVED_READ) {
             if (!lk.upgrade()) return false;
         }
+        Payload *payload = (Payload *)it0->payload;
+        payload->loadLocalValue(value, valueSize_); // read local copy.
+        payload->storeLocalValue(value, valueSize_); // write local copy.
         return true;
     }
 
@@ -793,7 +848,8 @@ public:
      */
 
     void blindWriteReserveAll() {
-        for (Lock& lk : vec_) {
+        for (auto& item : vec_) {
+            Lock& lk = item.value;
             if (lk.mode() == AccessMode::BLIND_WRITE) {
                 lk.blindWriteReserve();
             }
@@ -804,7 +860,8 @@ public:
         std::sort(vec_.begin(), vec_.end());
         // map_ is invalidated here. Do not use it.
 #endif
-        for (Lock& lk : vec_) {
+        for (auto& item : vec_) {
+            Lock& lk = item.value;
             assert(lk.mode() != AccessMode::BLIND_WRITE);
             if (lk.mode() == AccessMode::WRITE) {
                 if (!lk.protect()) return false;
@@ -815,7 +872,8 @@ public:
         return true;
     }
     bool verifyAndUnlock() {
-        for (Lock& lk : vec_) {
+        for (auto& item : vec_) {
+            Lock& lk = item.value;
             if (lk.mode() == AccessMode::INVISIBLE_READ ||
                 lk.mode() == AccessMode::RESERVED_READ) {
                 if (!lk.unchanged()) return false;
@@ -826,10 +884,13 @@ public:
         return true;
     }
     void updateAndUnlock() {
-        for (Lock& lk : vec_) {
+        for (auto& item : vec_) {
+            Lock& lk = item.value;
             assert(lk.mode() != AccessMode::BLIND_WRITE);
             if (lk.mode() == AccessMode::WRITE) {
                 lk.update();
+                Payload *payload = (Payload *)item.payload;
+                payload->storeSharedValue(valueSize_);
                 lk.unlock();
             }
         }
@@ -848,7 +909,7 @@ private:
         if (vec_.size() > threshold) {
             // create indexes.
             for (size_t i = map_.size(); i < vec_.size(); i++) {
-                map_[vec_[i].getMutexId()] = i;
+                map_[vec_[i].value.getMutexId()] = i;
             }
             // use indexes.
             Map::iterator it = map_.find(key);
@@ -861,8 +922,8 @@ private:
         }
         return std::find_if(
             vec_.begin(), vec_.end(),
-            [&](const Lock& lk) {
-                return lk.getMutexId() == key;
+            [&](const auto& item) {
+                return item.value.getMutexId() == key;
             });
     }
 };

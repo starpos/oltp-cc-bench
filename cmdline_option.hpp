@@ -21,6 +21,7 @@ struct CmdLineOption : cybozu::Option
     int shortTxMode; // Short transaction mode. See enum TxMode.
     int longTxMode; // Long transaction mode. See enum TxMode.
     std::string amode; // affinity mode string.
+    size_t payload; // size of value payload.
     bool verbose; // verbose mode.
 
     constexpr static const char *NAME = "CmdLineOption";
@@ -44,6 +45,7 @@ struct CmdLineOption : cybozu::Option
                   "(0:last-writes, 1:first-writes, 2:read-only, 4:half-and-half, "
                   "8:last-write-same, 9:first-write-same)");
         appendOpt(&amode, "CORE", "amode", "[MODE]: thread affinity mode (CORE, CUSTOM1, ...)");
+        appendOpt(&payload, 0, "payload", "[bytes]: payload size (default:0).");
         appendBoolOpt(&verbose, "v", ": puts verbose messages.");
         appendHelp("h", ": put this message.");
     }
@@ -83,10 +85,10 @@ struct CmdLineOption : cybozu::Option
     virtual std::string str() const {
         return cybozu::util::formatString(
             "concurrency:%zu workload:%s nrMutex:%zu nrMuPerTh:%zu "
-            "sec:%zu longTxSize:%zu nrTh4LongTx:%zu nrOp:%zu nrWr:%zu shortTxMode:%d longTxMode:%d "
+            "sec:%zu longTxSize:%zu nrTh4LongTx:%zu nrOp:%zu nrWr:%zu shortTxMode:%d longTxMode:%d payload:%zu "
             "amode:%s"
             , nrTh, workload.c_str(), getNrMu(), getNrMuPerTh()
-            , runSec, longTxSize, nrTh4LongTx, nrOp, nrWr, shortTxMode, longTxMode
+            , runSec, longTxSize, nrTh4LongTx, nrOp, nrWr, shortTxMode, longTxMode, payload
             , amode.c_str());
     }
 };
