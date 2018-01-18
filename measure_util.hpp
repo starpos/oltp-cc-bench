@@ -22,12 +22,6 @@
 constexpr size_t CACHE_LINE_SIZE = 64;
 
 
-template <typename T>
-void unused(T&)
-{
-}
-
-
 void sleepMs(size_t ms)
 {
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));

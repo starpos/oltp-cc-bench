@@ -323,6 +323,7 @@ public:
      * State change: EMPTY --> RESERVED_READ.
      */
     void readAndReadReserve(const void *shared, void *local, size_t size) {
+        unused(shared); unused(local); unused(size);
         ILockData ld0 = mutex_->atomicLoad();
         ILockState st0 = state_;
         assert(st0.mode == AccessMode::EMPTY);
@@ -335,7 +336,9 @@ public:
             }
             __atomic_thread_fence(__ATOMIC_ACQUIRE);
             // read shared memory.
+#ifndef NO_PAYLOAD
             ::memcpy(local, shared, size);
+#endif
             if (mutex_->compareAndSwapBegin(ld0, ld1)) {
                 state_ = st1;
                 return;
@@ -350,6 +353,7 @@ public:
      * State change: EMPTY --> READ_MODIYF_WRITE.
      */
     void readAndWriteReserve(const void *shared, void *local, size_t size) {
+        unused(shared); unused(local); unused(size);
         ILockData ld0 = mutex_->atomicLoad();
         ILockState st0 = state_;
         assert(st0.mode == AccessMode::EMPTY);
@@ -362,7 +366,9 @@ public:
             }
             __atomic_thread_fence(__ATOMIC_ACQUIRE);
             // read shared memory.
+#ifndef NO_PAYLOAD
             ::memcpy(local, shared, size);
+#endif
             if (mutex_->compareAndSwapBegin(ld0, ld1)) {
                 state_ = st1;
                 return;
@@ -727,45 +733,59 @@ public:
      * However, this function does not preserve progress guarantee.
      */
     void invisibleRead(Mutex& mutex, void *sharedValue, void *value) {
+        unused(sharedValue); unused(value);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it = findInVec(key);
         if (it != vec_.end()) {
             // read local version.
+#ifndef NO_PAYLOAD
             ((Payload *)it->payload)->loadLocalValue(value, valueSize_);
+#endif
             return;
         }
         vec_.emplace_back(mutex, ordId_);
 
         //Lock& lk = vec_.back();
         Lock& lk = vec_.back().value;
+#ifndef NO_PAYLOAD
         Payload *payload = (Payload *)vec_.back().payload;
         payload->sharedValue = sharedValue;
+#endif
 
         lk.initInvisibleRead();
         for (;;) {
             lk.waitForInvisibleRead();
             // read shared version.
+#ifndef NO_PAYLOAD
             payload->loadSharedValue(valueSize_);
+#endif
             __atomic_thread_fence(__ATOMIC_ACQUIRE);
             if (lk.unchanged()) break;
         }
+#ifndef NO_PAYLOAD
         payload->loadLocalValue(value, valueSize_);
+#endif
     }
     /**
      * You should use this function to read records
      * to preserve progress guarantee.
      */
     bool reservedRead(Mutex& mutex, void *sharedValue, void *value) {
+        unused(sharedValue); unused(value);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
             vec_.emplace_back(mutex, ordId_);
             //Lock& lk = vec_.back();
             Lock& lk = vec_.back().value;
+#ifndef NO_PAYLOAD
             Payload *payload = (Payload *)vec_.back().payload;
             payload->sharedValue = sharedValue;
             lk.readAndReadReserve(payload->sharedValue, payload->localValue, valueSize_);
             payload->loadLocalValue(value, valueSize_);
+#else
+            lk.readAndReadReserve(nullptr, nullptr, 0);
+#endif
             return true;
         }
         Lock& lk = it0->value;
@@ -775,13 +795,16 @@ public:
             if (lk.state().uVer != uVer) return false;
         }
         // read local version.
+#ifndef NO_PAYLOAD
         ((Payload *)it0->payload)->loadLocalValue(value, valueSize_);
+#endif
         return true;
     }
     /**
      * You should use this function to write records.
      */
     bool write(Mutex& mutex, void *sharedValue, void *value) {
+        unused(sharedValue); unused(value);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
@@ -791,9 +814,11 @@ public:
             lk.blindWrite();
 
             // write local version.
+#ifndef NO_PAYLOAD
             Payload *payload = (Payload *)vec_.back().payload;
             payload->sharedValue = sharedValue;
             payload->storeLocalValue(value, valueSize_);
+#endif
             return true;
         }
         Lock& lk = it0->value;
@@ -801,7 +826,9 @@ public:
             if (!lk.upgrade()) return false;
         }
         // write local version.
+#ifndef NO_PAYLOAD
         ((Payload *)it0->payload)->storeLocalValue(value, valueSize_);
+#endif
         return true;
     }
     /*
@@ -816,26 +843,33 @@ public:
      * (2) is more efficient than (1).
      */
     bool readForUpdate(Mutex& mutex, void *sharedValue, void *value) {
+        unused(sharedValue); unused(value);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
             vec_.emplace_back(mutex, ordId_);
             //Lock& lk = vec_.back();
             Lock& lk = vec_.back().value;
+#ifndef NO_PAYLOAD
             Payload *payload = (Payload *)vec_.back().payload;
             payload->sharedValue = sharedValue;
             lk.readAndWriteReserve(payload->sharedValue, payload->localValue, valueSize_);
             payload->loadLocalValue(value, valueSize_); // read local copy.
             payload->storeLocalValue(value, valueSize_); // write local copy.
+#else
+            lk.readAndWriteReserve(nullptr, nullptr, 0);
+#endif
             return true;
         }
         Lock& lk = it0->value;
         if (lk.mode() == AccessMode::INVISIBLE_READ || lk.mode() == AccessMode::RESERVED_READ) {
             if (!lk.upgrade()) return false;
         }
+#ifndef NO_PAYLOAD
         Payload *payload = (Payload *)it0->payload;
         payload->loadLocalValue(value, valueSize_); // read local copy.
         payload->storeLocalValue(value, valueSize_); // write local copy.
+#endif
         return true;
     }
 
@@ -889,8 +923,10 @@ public:
             assert(lk.mode() != AccessMode::BLIND_WRITE);
             if (lk.mode() == AccessMode::WRITE) {
                 lk.update();
+#ifndef NO_PAYLOAD
                 Payload *payload = (Payload *)item.payload;
                 payload->storeSharedValue(valueSize_);
+#endif
                 lk.unlock();
             }
         }

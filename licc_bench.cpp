@@ -521,6 +521,11 @@ int main(int argc, char *argv[]) try
     CmdLineOptionPlus opt("licc_bench: benchmark with licc lock.");
     opt.parse(argc, argv);
     setCpuAffinityModeVec(opt.amode, CpuId_);
+
+#ifdef NO_PAYLOAD
+    if (opt.payload != 0) throw cybozu::Exception("payload not supported");
+#endif
+
     dispatch0(opt);
 
 } catch (std::exception& e) {

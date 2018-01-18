@@ -50,6 +50,12 @@ inline void unusedVar(T &)
 {
 }
 
+template <typename T>
+inline void unused(T&)
+{
+}
+
+
 namespace cybozu {
 namespace util {
 

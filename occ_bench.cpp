@@ -202,6 +202,8 @@ int main(int argc, char *argv[]) try
     opt.parse(argc, argv);
     setCpuAffinityModeVec(opt.amode, CpuId_);
 
+    if (opt.payload != 0) throw cybozu::Exception("payload not supported");
+
     if (opt.workload == "custom") {
         Shared shared;
         shared.muV.resize(opt.getNrMu());

@@ -20,6 +20,10 @@ ifneq ($(MUTEX_ON_CACHELINE),0)
     CFLAGS += -DMUTEX_ON_CACHELINE
 endif
 
+ifeq ($(NO_PAYLOAD),1)
+    CFLAGS += -DNO_PAYLOAD
+endif
+
 ifeq ($(ARCH),x86_64)
     CFLAGS += -mcx16
 endif
