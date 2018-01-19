@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include "lock.hpp"
 #include "arch.hpp"
+#include "vector_payload.hpp"
 
 
 namespace cybozu {
@@ -54,8 +55,12 @@ struct TsWord
 
 struct Mutex
 {
+#if 0
 #ifdef MUTEX_ON_CACHELINE
     alignas(CACHE_LINE_SIZE)
+#endif
+#else
+    alignas(sizeof(uintptr_t))
 #endif
     TsWord tsw;
 
@@ -101,9 +106,16 @@ class Reader
     Mutex *mutex_;
     TsWord tsw_;
 public:
+    size_t localValIdx;
+
     Reader() : mutex_() {}
     Reader(Reader&& rhs) : Reader() { swap(rhs); }
     Reader& operator=(Reader&& rhs) { swap(rhs); return *this; }
+
+    void set(Mutex *mutex, size_t localValIdx0) {
+        mutex_ = mutex;
+        localValIdx = localValIdx0;
+    }
 
     uintptr_t getId() const {
         uintptr_t ret;
@@ -112,8 +124,8 @@ public:
     }
     uint64_t wts() const { return tsw_.wts; }
 
-    void prepare(Mutex *mutex) {
-        mutex_ = mutex;
+    void prepare() {
+        assert(mutex_);
         spinForUnlocked();
     }
     void readFence() const {
@@ -163,6 +175,7 @@ private:
     void swap(Reader& rhs) {
         std::swap(mutex_, rhs.mutex_);
         std::swap(tsw_, rhs.tsw_);
+        std::swap(localValIdx, rhs.localValIdx);
     }
 };
 
@@ -172,11 +185,19 @@ class Writer
 public:
     Mutex *mutex;
     // written data.
+    void *sharedVal;
+    size_t localValIdx;
 
     Writer() : mutex() {}
     explicit Writer(Mutex *mutex0) : mutex(mutex0) {}
     Writer(Writer&& rhs) : Writer() { swap(rhs); }
     Writer& operator=(Writer&& rhs) { swap(rhs); return *this; }
+
+    void set(Mutex *mutex0, void *sharedVal0, size_t localValIdx0) {
+        mutex = mutex0;
+        sharedVal = sharedVal0;
+        localValIdx = localValIdx0;
+    }
 
     uintptr_t getId() const {
         uintptr_t ret;
@@ -188,6 +209,8 @@ public:
 private:
     void swap(Writer& rhs) {
         std::swap(mutex, rhs.mutex);
+        std::swap(localValIdx, rhs.localValIdx);
+        std::swap(sharedVal, rhs.sharedVal);
     }
 };
 
@@ -276,6 +299,7 @@ using LockSet = std::vector<Lock>;
 using Flags = std::vector<bool>; // isInWriteSet array.
 
 
+
 /**
  * Args:
  *   ls and flags are temporary data.
@@ -284,7 +308,7 @@ using Flags = std::vector<bool>; // isInWriteSet array.
  *   true: you must commit.
  *   false: you must abort.
  */
-bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags)
+bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags, MemoryVector& local, size_t valueSize)
 {
     bool ret = false;
 
@@ -327,9 +351,19 @@ bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags)
     }
 
     // Write phase.
-    for (Lock& lk : ls) {
-        // Write.
-        lk.updateAndUnlock(commitTs);
+    {
+        auto itLk = ls.begin();
+        auto itW = ws.begin();
+        while (itLk != ls.end()) {
+            assert(itW != ws.end());
+            // writeback
+#ifndef NO_PAYLOAD
+            ::memcpy(itW->sharedVal, &local[itW->localValIdx], valueSize);
+#endif
+            itLk->updateAndUnlock(commitTs);
+            ++itLk;
+            ++itW;
+        }
     }
     ret = true;
 
@@ -338,6 +372,7 @@ bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags)
     rs.clear();
     ls.clear();
     flags.clear();
+    local.clear();
     return ret;
 }
 
@@ -353,36 +388,89 @@ class LocalSet
     Index ridx_;
     Index widx_;
 
+    MemoryVector local_; // stores local values of read/write set.
+    size_t valueSize_;
+
 public:
-    void read(Mutex& mutex) {
-        ReadSet::iterator it = findInReadSet(uintptr_t(&mutex));
-        if (it != rs_.end()) {
-            // read local data.
-            return;
-        }
-        rs_.emplace_back();
-        Reader& r = rs_.back();
-        r.prepare(&mutex);
-        for (;;) {
-            // read shared data.
-            r.readFence();
-            if (r.isReadSucceeded()) break;
-            r.prepareRetry();
-        }
+    void init(size_t valueSize) {
+        valueSize_ = valueSize;
+
+        // MemoryVector does not allow zero-size element.
+        if (valueSize == 0) valueSize++;
+#ifdef MUTEX_ON_CACHELINE
+            local_.setSizes(valueSize, CACHE_LINE_SIZE);
+#else
+            local_.setSizes(valueSize);
+#endif
     }
-    void write(Mutex& mutex) {
-        WriteSet::iterator it = findInWriteSet(uintptr_t(&mutex));
-        if (it != ws_.end()) {
-            // write local data.
-            return;
+
+    void read(Mutex& mutex, void *sharedVal, void *localVal) {
+        unused(sharedVal); unused(localVal);
+        size_t localValIdx;
+        ReadSet::iterator itR = findInReadSet(uintptr_t(&mutex));
+        if (itR != rs_.end()) {
+            localValIdx = itR->localValIdx;
+        } else {
+            WriteSet::iterator itW = findInWriteSet(uintptr_t(&mutex));
+            if (itW == ws_.end()) {
+                // allocate new local value area.
+                localValIdx = local_.size();
+#ifndef NO_PAYLOAD
+                local_.resize(localValIdx + 1);
+#endif
+            } else {
+                localValIdx = itW->localValIdx;
+            }
+            rs_.emplace_back();
+            Reader& r = rs_.back();
+            r.set(&mutex, localValIdx);
+            r.prepare();
+            for (;;) {
+                // read shared data.
+#ifndef NO_PAYLOAD
+                ::memcpy(&local_[localValIdx], sharedVal, valueSize_);
+#endif
+                r.readFence();
+                if (r.isReadSucceeded()) break;
+                r.prepareRetry();
+            }
         }
-        ws_.emplace_back(&mutex);
+        // read local data.
+#ifndef NO_PAYLOAD
+        ::memcpy(localVal, &local_[localValIdx], valueSize_);
+#endif
+    }
+    void write(Mutex& mutex, void *sharedVal, void *localVal) {
+        unused(sharedVal); unused(localVal);
+        size_t localValIdx;
+        WriteSet::iterator itW = findInWriteSet(uintptr_t(&mutex));
+        if (itW != ws_.end()) {
+            localValIdx = itW->localValIdx;
+        } else {
+            ReadSet::iterator itR = findInReadSet(uintptr_t(&mutex));
+            if (itR == rs_.end()) {
+                // allocate new local value area.
+                localValIdx = local_.size();
+#ifndef NO_PAYLOAD
+                local_.resize(localValIdx + 1);
+#endif
+            } else {
+                localValIdx = itR->localValIdx;
+            }
+            ws_.emplace_back();
+            Writer& w = ws_.back();
+            w.set(&mutex, sharedVal, localValIdx);
+        }
         // write local data.
+#ifndef NO_PAYLOAD
+        ::memcpy(&local_[localValIdx], localVal, valueSize_);
+#endif
     }
     bool preCommit() {
-        bool ret = cybozu::tictoc::preCommit(rs_, ws_, ls_, flags_);
+        bool ret = cybozu::tictoc::preCommit(rs_, ws_, ls_, flags_, local_, valueSize_);
         ridx_.clear();
         widx_.clear();
+        local_.clear();
         return ret;
     }
     void clear() {
@@ -392,6 +480,7 @@ public:
         flags_.clear();
         ridx_.clear();
         widx_.clear();
+        local_.clear();
     }
 private:
     ReadSet::iterator findInReadSet(uintptr_t key) {
