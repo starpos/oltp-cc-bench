@@ -92,8 +92,12 @@ class WaitDieLock
 public:
     using Mode = cybozu::lock::LockStateXS::Mode;
     struct Mutex {
+#if 0
 #ifdef MUTEX_ON_CACHELINE
         alignas(CACHE_LINE_SIZE)
+#endif
+#else
+        alignas(sizeof(uintptr_t))
 #endif
         WaitDieData wd;
 
