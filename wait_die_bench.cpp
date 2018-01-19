@@ -4,6 +4,7 @@
 #include "cpuid.hpp"
 #include "measure_util.hpp"
 #include "arch.hpp"
+#include "vector_payload.hpp"
 
 #include "wait_die.hpp"
 #include "tx_util.hpp"
@@ -19,7 +20,7 @@ EpochGenerator epochGen_;
 
 struct Shared
 {
-    std::vector<Mutex> muV;
+    VectorWithPayload<Mutex> recV;
     size_t longTxSize;
     size_t nrOp;
     size_t nrWr;
@@ -28,6 +29,7 @@ struct Shared
     bool usesBackOff;
     size_t writePct;
     size_t nrTh4LongTx;
+    size_t payload;
 
     GlobalTxIdGenerator globalTxIdGen;
     SimpleTxIdGenerator simpleTxIdGen;
@@ -43,7 +45,7 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
-    std::vector<Mutex>& muV = shared.muV;
+    VectorWithPayload<Mutex>& recV = shared.recV;
     const size_t longTxSize = shared.longTxSize;
     const size_t nrOp = shared.nrOp;
     const size_t nrWr = shared.nrWr;
@@ -53,6 +55,7 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     cybozu::wait_die::LockSet lockSet;
+    std::vector<uint8_t> value(shared.payload);
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
 
     PriorityIdGenerator<12> priIdGen;
@@ -118,12 +121,20 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 #endif
                 size_t key = getRecordIdx(
                     rand, isLongTx, shortTxMode, longTxMode,
-                    muV.size(), realNrOp, i, firstRecIdx);
-                Mutex& mutex = muV[key];
+                    recV.size(), realNrOp, i, firstRecIdx);
+                auto& item = recV[key];
+                Mutex& mutex = item.value;
                 if (!lockSet.lock(mutex, mode)) {
                     abort = true;
                     break;
                 }
+#ifndef NO_PAYLOAD
+                if (mode == Mode::X) {
+                    ::memcpy(item.payload, &value[0], shared.payload);
+                } else {
+                    ::memcpy(&value[0], item.payload, shared.payload);
+                }
+#endif
             }
             if (abort) {
                 lockSet.clear();
@@ -150,13 +161,13 @@ Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
-    std::vector<Mutex>& muV = shared.muV;
+    VectorWithPayload<Mutex>& recV = shared.recV;
 
     const size_t txSize = [&]() -> size_t {
         if (idx == 0) {
-            return std::max<size_t>(muV.size() / 2, 10);
+            return std::max<size_t>(recV.size() / 2, 10);
         } else if (idx <= 5) {
-            return std::max<size_t>(muV.size() / 10, 10);
+            return std::max<size_t>(recV.size() / 10, 10);
         } else {
             return 10;
         }
@@ -165,6 +176,7 @@ Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     Result2 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     cybozu::wait_die::LockSet lockSet;
+    std::vector<uint8_t> value(shared.payload);
 
 #if 0
     TxIdGenerator localTxIdGen(&shared.globalTxIdGen);
@@ -216,12 +228,20 @@ Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 #else
                 const Mode mode = rand() % 100 < shared.writePct ? Mode::X : Mode::S;
 #endif
-                const size_t key = rand() % muV.size();
-                Mutex& mutex = muV[key];
+                const size_t key = rand() % recV.size();
+                auto& item = recV[key];
+                Mutex& mutex = item.value;
                 if (!lockSet.lock(mutex, mode)) {
                     abort = true;
                     break;
                 }
+#ifndef NO_PAYLOAD
+                if (mode == Mode::X) {
+                    ::memcpy(item.payload, &value[0], shared.payload);
+                } else {
+                    ::memcpy(&value[0], item.payload, shared.payload);
+                }
+#endif
             }
             if (abort) {
                 lockSet.clear();
@@ -347,11 +367,18 @@ int main(int argc, char *argv[]) try
     opt.parse(argc, argv);
     setCpuAffinityModeVec(opt.amode, CpuId_);
 
+#ifdef NO_PAYLOAD
     if (opt.payload != 0) throw cybozu::Exception("payload not supported");
+#endif
 
     if (opt.workload == "custom") {
         Shared shared;
-        shared.muV.resize(opt.getNrMu());
+#ifdef MUTEX_ON_CACHELINE
+        shared.recV.setPayloadSize(opt.payload, cybozu::wait_die::CACHE_LINE_SIZE);
+#else
+        shared.recV.setPayloadSize(opt.payload);
+#endif
+        shared.recV.resize(opt.getNrMu());
         shared.longTxSize = opt.longTxSize;
         shared.nrOp = opt.nrOp;
         shared.nrWr = opt.nrWr;
@@ -359,15 +386,22 @@ int main(int argc, char *argv[]) try
         shared.longTxMode = opt.longTxMode;
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         shared.nrTh4LongTx = opt.nrTh4LongTx;
+        shared.payload = opt.payload;
         for (size_t i = 0; i < opt.nrLoop; i++) {
             dispatch1(opt, shared);
             epochGen_.reset();
         }
     } else if (opt.workload == "custom3") {
         Shared shared;
-        shared.muV.resize(opt.getNrMu());
+#ifdef MUTEX_ON_CACHELINE
+        shared.recV.setPayloadSize(opt.payload, cybozu::wait_die::CACHE_LINE_SIZE);
+#else
+        shared.recV.setPayloadSize(opt.payload);
+#endif
+        shared.recV.resize(opt.getNrMu());
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         shared.writePct = opt.writePct;
+        shared.payload = opt.payload;
         for (size_t i = 0; i < opt.nrLoop; i++) {
             Result2 res;
             runExec(opt, shared, worker3, res);

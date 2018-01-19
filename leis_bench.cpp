@@ -5,6 +5,7 @@
 #include "measure_util.hpp"
 #include "leis_lock.hpp"
 #include "arch.hpp"
+#include "vector_payload.hpp"
 
 
 std::vector<uint> CpuId_;
@@ -13,13 +14,14 @@ std::vector<uint> CpuId_;
 template <typename LeisLockType>
 struct Shared
 {
-    std::vector<typename LeisLockType::Mutex> muV;
+    VectorWithPayload<typename LeisLockType::Mutex> recV;
     size_t longTxSize;
     size_t nrOp;
     size_t nrWr;
     int shortTxMode;
     int longTxMode;
     size_t nrTh4LongTx;
+    size_t payload;
 };
 
 
@@ -32,7 +34,7 @@ Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
-    std::vector<Mutex>& muV = shared.muV;
+    VectorWithPayload<Mutex>& recV = shared.recV;
     const size_t longTxSize = shared.longTxSize;
     const size_t nrOp = shared.nrOp;
     const size_t nrWr = shared.nrWr;
@@ -42,6 +44,7 @@ Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     cybozu::lock::LeisLockSet<UseMap, LeisLockType> llSet;
+    std::vector<uint8_t> value(shared.payload);
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
 
     // USE_MIX_TX
@@ -84,13 +87,21 @@ Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
                     boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
                     realNrOp, nrWr, i);
 #endif
-                size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode, muV.size(), realNrOp, i, firstRecIdx);
-                Mutex& mutex = muV[key];
+                size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode, recV.size(), realNrOp, i, firstRecIdx);
+                auto& item = recV[key];
+                Mutex& mutex = item.value;
                 if (!llSet.lock(&mutex, mode)) {
                     res.incAbort(isLongTx);
                     abort = true;
                     break;
                 }
+#ifndef NO_PAYLOAD
+                if (mode == Mode::X) {
+                    ::memcpy(item.payload, &value[0], shared.payload);
+                } else {
+                    ::memcpy(&value[0], item.payload, shared.payload);
+                }
+#endif
             }
             if (abort) {
                 llSet.recover();
@@ -211,13 +222,20 @@ template <typename Lock>
 void dispatch1(const CmdLineOptionPlus& opt)
 {
     Shared<Lock> shared;
-    shared.muV.resize(opt.getNrMu());
+
+#ifdef MUTEX_ON_CACHELINE
+    shared.recV.setPayloadSize(opt.payload, cybozu::lock::CACHE_LINE_SIZE);
+#else
+    shared.recV.setPayloadSize(opt.payload);
+#endif
+    shared.recV.resize(opt.getNrMu());
     shared.longTxSize = opt.longTxSize;
     shared.nrOp = opt.nrOp;
     shared.nrWr = opt.nrWr;
     shared.shortTxMode = opt.shortTxMode;
     shared.longTxMode = opt.longTxMode;
     shared.nrTh4LongTx = opt.nrTh4LongTx;
+    shared.payload = opt.payload;
 
     for (size_t i = 0; i < opt.nrLoop; i++) {
         Result1 res;
@@ -254,7 +272,9 @@ int main(int argc, char *argv[]) try
     opt.parse(argc, argv);
     setCpuAffinityModeVec(opt.amode, CpuId_);
 
+#ifdef NO_PAYLOAD
     if (opt.payload != 0) throw cybozu::Exception("payload not supported");
+#endif
 
     if (opt.workload != "custom") {
         throw cybozu::Exception("bad workload.") << opt.workload;
