@@ -855,7 +855,6 @@ public:
             payload->sharedValue = sharedValue;
             lk.readAndWriteReserve(payload->sharedValue, payload->localValue, valueSize_);
             payload->loadLocalValue(value, valueSize_); // read local copy.
-            payload->storeLocalValue(value, valueSize_); // write local copy.
 #else
             lk.readAndWriteReserve(nullptr, nullptr, 0);
 #endif
@@ -868,7 +867,6 @@ public:
 #ifndef NO_PAYLOAD
         Payload *payload = (Payload *)it0->payload;
         payload->loadLocalValue(value, valueSize_); // read local copy.
-        payload->storeLocalValue(value, valueSize_); // write local copy.
 #endif
         return true;
     }

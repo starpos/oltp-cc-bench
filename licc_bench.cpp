@@ -118,8 +118,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
     //std::vector<IMutex>& muV = shared.muV;
-    //std::vector<Record<IMutex> >& recV = shared.recV;
-    auto& recV = shared.recV;
+    VectorWithPayload<IMutex>& recV = shared.recV;
     const ReadMode rmode = shared.rmode;
     const size_t longTxSize = shared.longTxSize;
     const size_t nrOp = shared.nrOp;
@@ -231,6 +230,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                     assert(mode == IMode::X);
                     if (usesRMW) {
                         if (!lockSet.readForUpdate(mutex, sharedValue, &value[0])) goto abort;
+                        if (!lockSet.write(mutex, sharedValue, &value[0])) goto abort;
                     } else {
                         if (!lockSet.write(mutex, sharedValue, &value[0])) goto abort;
                     }
@@ -401,6 +401,7 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                     assert(mode == IMode::X);
                     if (shared.usesRMW) {
                         if (!lockSet.readForUpdate(mutex, sharedValue, &value[0])) goto abort;
+                        if (!lockSet.write(mutex, sharedValue, &value[0])) goto abort;
                     } else {
                         if (!lockSet.write(mutex, sharedValue, &value[0])) goto abort;
                     }
