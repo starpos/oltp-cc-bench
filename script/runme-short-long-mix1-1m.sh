@@ -2,8 +2,8 @@
 
 CXX=clang++-5.0
 
-#make clean
-#make CXX=$CXX DEBUG=0 LTO=1 MUTEX_ON_CACHELINE=0 -j
+make clean
+make CXX=$CXX DEBUG=0 LTO=1 MUTEX_ON_CACHELINE=0 -j
 
 
 do_expr() {
@@ -18,8 +18,7 @@ for longTxSize in 150 250 350 450 500;
 do
   longTxSize2=$(u2s.py $longTxSize)
 
-  #if [ $longTxSize2 -le $(u2s.py 500) ]; then
-  #if [ $longTxSize2 -gt $(u2s.py 500) ]; then
+  #if [ $longTxSize2 -le $(u2s.py 1k) ]; then
     #period=100
     ./occ_bench -th $th -mu $nrMu -p $period -loop $loop -long-tx-size $longTxSize
     ./tictoc_bench -th $th -mu $nrMu -p $period -loop $loop -long-tx-size $longTxSize
@@ -52,16 +51,19 @@ do
   #./tlock_bench -mode trlock-hybrid -th $th -mu $nrMu -p $period -loop $loop -pqlock 4 -long-tx-size $longTxSize
 done
 
-for longTxSize in 60k 80k 100k 200k 300k 400k 600k 800k 1m;
+for longTxSize in 100 1k 4k 10k 20k 30k 40k 60k 80k 100k 200k 300k 400k 600k 800k 1m;
+#for longTxSize in 60k 80k 100k 200k 300k 400k 600k 800k 1m;
 do
     ./licc_bench -mode licc-pcc -th $th -mu $nrMu -p $period -loop $loop -long-tx-size $longTxSize
     ./licc_bench -mode licc-hybrid -th $th -mu $nrMu -p $period -loop $loop -long-tx-size $longTxSize
+    ./wait_die_bench -th $th -mu $nrMu -p $period -loop $loop -long-tx-size $longTxSize
 done
 
-for longTxSize in 150k 250k 350k;
+for longTxSize in 100 1k 4k 10k 20k 30k 40k 60k 80k 100k 200k 300k 400k 600k 800k 1m;
+#for longTxSize in 150k 250k 350k;
 do
     ./nowait_bench -th $th -mu $nrMu -p $period -loop $loop -long-tx-size $longTxSize
 done
 }
 
-do_expr | tee -a short-long-mix-1m.log.20171220
+do_expr | tee -a short-long-mix-1m.log.20181217b
