@@ -71,6 +71,8 @@ struct OccMutex
 #ifdef MUTEX_ON_CACHELINE
     alignas(CACHE_LINE_SIZE)
 #endif
+#else
+    alignas(sizeof(uintptr_t))
 #endif
     uint32_t obj;
 #ifdef USE_OCC_MCS
@@ -242,6 +244,7 @@ private:
     void swap(OccReader& rhs) {
         std::swap(mutex_, rhs.mutex_);
         std::swap(lockD_, rhs.lockD_);
+        std::swap(localValIdx, rhs.localValIdx);
     }
 };
 
@@ -249,10 +252,16 @@ private:
 struct WriteEntry
 {
     using Mutex = OccLock::Mutex;
-
     Mutex *mutex;
     void *sharedVal;
     size_t localValIdx;  // index in the local data area.
+
+    WriteEntry() : mutex(), sharedVal(), localValIdx() {
+    }
+    WriteEntry(const WriteEntry&) = delete;
+    WriteEntry(WriteEntry&& rhs) : WriteEntry() { swap(rhs); }
+    WriteEntry& operator=(const WriteEntry&) = delete;
+    WriteEntry& operator=(WriteEntry&& rhs) { swap(rhs); return *this; }
 
     bool operator<(const WriteEntry& rhs) const {
         return getMutexId() < rhs.getMutexId();
@@ -264,6 +273,12 @@ struct WriteEntry
     }
     uintptr_t getMutexId() const {
         return uintptr_t(mutex);
+    }
+private:
+    void swap(WriteEntry& rhs) {
+        std::swap(mutex, rhs.mutex);
+        std::swap(sharedVal, rhs.sharedVal);
+        std::swap(localValIdx, rhs.localValIdx);
     }
 };
 
