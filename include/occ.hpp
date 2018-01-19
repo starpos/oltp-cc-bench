@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include "lock.hpp"
 #include "arch.hpp"
+#include "vector_payload.hpp"
 
 #define USE_OCC_MCS
 //#undef USE_OCC_MCS
@@ -191,7 +192,7 @@ private:
     const Mutex *mutex_;
     LockData lockD_;
 public:
-    size_t localValOffset;  // offset in the local data area.
+    size_t localValIdx;  // local data index.
 
     OccReader() : mutex_(), lockD_() {}
     OccReader(const OccReader&) = delete;
@@ -199,9 +200,9 @@ public:
     OccReader& operator=(const OccReader&) = delete;
     OccReader& operator=(OccReader&& rhs) { swap(rhs); return *this; }
 
-    void set(const Mutex *mutex, size_t localValOffset0) {
+    void set(const Mutex *mutex, size_t localValIdx0) {
         mutex_ = mutex;
-        localValOffset = localValOffset0;
+        localValIdx = localValIdx0;
     }
 
     /**
@@ -251,15 +252,15 @@ struct WriteEntry
 
     Mutex *mutex;
     void *sharedVal;
-    size_t localValOffset;  // offset in the local data area.
+    size_t localValIdx;  // index in the local data area.
 
     bool operator<(const WriteEntry& rhs) const {
         return getMutexId() < rhs.getMutexId();
     }
-    void set(Mutex *mutex0, void *sharedVal0, size_t localValOffset0) {
+    void set(Mutex *mutex0, void *sharedVal0, size_t localValIdx0) {
         mutex = mutex0;
         sharedVal = sharedVal0;
-        localValOffset = localValOffset0;
+        localValIdx = localValIdx0;
     }
     uintptr_t getMutexId() const {
         return uintptr_t(mutex);
@@ -286,39 +287,47 @@ private:
     IndexM readM_; // read set index.
     LockV lockV_;
 
-    std::vector<uint8_t> local_; // stores local values of read/write set.
+    MemoryVector local_; // stores local values of read/write set.
     size_t valueSize_;
 
 public:
     void init(size_t valueSize) {
         valueSize_ = valueSize;  // 0 can be allowed.
+
+        // MemoryVector does not allow zero-size element.
+        if (valueSize == 0) valueSize++;
+#ifdef MUTEX_ON_CACHELINE
+            local_.setSizes(valueSize, CACHE_LINE_SIZE);
+#else
+            local_.setSizes(valueSize);
+#endif
     }
     void read(Mutex& mutex, void *sharedVal, void *localVal) {
         unused(sharedVal); unused(localVal);
-        size_t localValOffset;
+        size_t localValIdx;
         ReadV::iterator itR = findInReadSet(uintptr_t(&mutex));
         if (itR != readV_.end()) {
-            localValOffset = itR->localValOffset;
+            localValIdx = itR->localValIdx;
         } else {
             // For blind-write, you must check write set also.
             WriteV::iterator itW = findInWriteSet(uintptr_t(&mutex));
             if (itW == writeV_.end()) {
                 // allocate new local value area.
-                localValOffset = local_.size();
+                localValIdx = local_.size();
 #ifndef NO_PAYLOAD
-                local_.resize(localValOffset + valueSize_);
+                local_.resize(localValIdx + 1);
 #endif
             } else {
-                localValOffset = itW->localValOffset;
+                localValIdx = itW->localValIdx;
             }
             readV_.emplace_back();
             OccReader& r = readV_.back();
-            r.set(&mutex, localValOffset);
+            r.set(&mutex, localValIdx);
             for (;;) {
                 r.prepare();
                 // read shared data.
 #ifndef NO_PAYLOAD
-                ::memcpy(&local_[localValOffset], sharedVal, valueSize_);
+                ::memcpy(&local_[localValIdx], sharedVal, valueSize_);
 #endif
                 r.readFence();
                 if (r.verifyAll()) break;
@@ -326,33 +335,33 @@ public:
         }
         // read local data.
 #ifndef NO_PAYLOAD
-        ::memcpy(localVal, &local_[localValOffset], valueSize_);
+        ::memcpy(localVal, &local_[localValIdx], valueSize_);
 #endif
     }
     void write(Mutex& mutex, void *sharedVal, void *localVal) {
         unused(sharedVal); unused(localVal);
-        size_t localValOffset;
+        size_t localValIdx;
         WriteV::iterator itW = findInWriteSet(uintptr_t(&mutex));
         if (itW != writeV_.end()) {
-            localValOffset = itW->localValOffset;
+            localValIdx = itW->localValIdx;
         } else {
             ReadV::iterator itR = findInReadSet(uintptr_t(&mutex));
             if (itR == readV_.end()) {
                 // allocate new local value area.
-                localValOffset = local_.size();
+                localValIdx = local_.size();
 #ifndef NO_PAYLOAD
-                local_.resize(localValOffset + valueSize_);
+                local_.resize(localValIdx + 1);
 #endif
             } else {
-                localValOffset = itR->localValOffset;
+                localValIdx = itR->localValIdx;
             }
             writeV_.emplace_back();
             WriteEntry& w = writeV_.back();
-            w.set(&mutex, sharedVal, localValOffset);
+            w.set(&mutex, sharedVal, localValIdx);
         }
         // write local data.
 #ifndef NO_PAYLOAD
-        ::memcpy(&local_[localValOffset], localVal, valueSize_);
+        ::memcpy(&local_[localValIdx], localVal, valueSize_);
 #endif
     }
     void lock() {
@@ -391,7 +400,7 @@ public:
             itLk->update();
 #ifndef NO_PAYLOAD
             // writeback
-            ::memcpy(itW->sharedVal, &local_[itW->localValOffset], valueSize_);
+            ::memcpy(itW->sharedVal, &local_[itW->localValIdx], valueSize_);
 #endif
             itLk->unlock();
             ++itLk;
