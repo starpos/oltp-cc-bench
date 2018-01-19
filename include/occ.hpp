@@ -66,8 +66,10 @@ struct OccLockData
 
 struct OccMutex
 {
+#if 0
 #ifdef MUTEX_ON_CACHELINE
     alignas(CACHE_LINE_SIZE)
+#endif
 #endif
     uint32_t obj;
 #ifdef USE_OCC_MCS
@@ -189,16 +191,24 @@ private:
     const Mutex *mutex_;
     LockData lockD_;
 public:
+    size_t localValOffset;  // offset in the local data area.
+
     OccReader() : mutex_(), lockD_() {}
     OccReader(const OccReader&) = delete;
     OccReader(OccReader&& rhs) : OccReader() { swap(rhs); }
     OccReader& operator=(const OccReader&) = delete;
     OccReader& operator=(OccReader&& rhs) { swap(rhs); return *this; }
+
+    void set(const Mutex *mutex, size_t localValOffset0) {
+        mutex_ = mutex;
+        localValOffset = localValOffset0;
+    }
+
     /**
      * Call this before read the resource.
      */
-    void prepare(const Mutex *mutex) {
-        mutex_ = mutex;
+    void prepare() {
+        assert(mutex_);
         for (;;) {
             lockD_ = mutex_->loadAcquire();
             if (!lockD_.isLocked()) break;
@@ -215,12 +225,12 @@ public:
      * Call this to verify read data is valid or not.
      */
     bool verifyAll() const {
-        if (!mutex_) throw std::runtime_error("OccReader::verify: mutex_ is null");
+        assert(mutex_);
         const LockData lockD = mutex_->load();
         return !lockD.isLocked() && lockD_.getVersion() == lockD.getVersion();
     }
     bool verifyVersion() const {
-        if (!mutex_) throw std::runtime_error("OccReader::verify: mutex_ is null");
+        assert(mutex);
         const LockData lockD = mutex_->load();
         return lockD_.getVersion() == lockD.getVersion();
     }
@@ -235,6 +245,28 @@ private:
 };
 
 
+struct WriteEntry
+{
+    using Mutex = OccLock::Mutex;
+
+    Mutex *mutex;
+    void *sharedVal;
+    size_t localValOffset;  // offset in the local data area.
+
+    bool operator<(const WriteEntry& rhs) const {
+        return getMutexId() < rhs.getMutexId();
+    }
+    void set(Mutex *mutex0, void *sharedVal0, size_t localValOffset0) {
+        mutex = mutex0;
+        sharedVal = sharedVal0;
+        localValOffset = localValOffset0;
+    }
+    uintptr_t getMutexId() const {
+        return uintptr_t(mutex);
+    }
+};
+
+
 class LockSet
 {
 public:
@@ -243,7 +275,9 @@ public:
 private:
     using LockV = std::vector<OccLock>;
     using ReadV = std::vector<OccReader>;
-    using WriteV = std::vector<uintptr_t>; // mutex pointers.
+    using WriteV = std::vector<WriteEntry>;
+
+    // key is mutex pointer, value is index in vector.
     using IndexM = std::unordered_map<uintptr_t, size_t>;
 
     WriteV writeV_; // write set.
@@ -252,35 +286,79 @@ private:
     IndexM readM_; // read set index.
     LockV lockV_;
 
+    std::vector<uint8_t> local_; // stores local values of read/write set.
+    size_t valueSize_;
+
 public:
-    void read(Mutex& mutex) {
-        ReadV::iterator it = findInReadSet(uintptr_t(&mutex));
-        if (it != readV_.end()) {
-            // read local data.
-            return;
-        }
-        readV_.emplace_back();
-        OccReader& r = readV_.back();
-        for (;;) {
-            r.prepare(&mutex);
-            // read shared data.
-            r.readFence();
-            if (r.verifyAll()) break;
-        }
+    void init(size_t valueSize) {
+        valueSize_ = valueSize;  // 0 can be allowed.
     }
-    void write(Mutex& mutex) {
-        WriteV::iterator it = findInWriteSet(uintptr_t(&mutex));
-        if (it != writeV_.end()) {
-            // write local data.
-            return;
+    void read(Mutex& mutex, void *sharedVal, void *localVal) {
+        unused(sharedVal); unused(localVal);
+        size_t localValOffset;
+        ReadV::iterator itR = findInReadSet(uintptr_t(&mutex));
+        if (itR != readV_.end()) {
+            localValOffset = itR->localValOffset;
+        } else {
+            // For blind-write, you must check write set also.
+            WriteV::iterator itW = findInWriteSet(uintptr_t(&mutex));
+            if (itW == writeV_.end()) {
+                // allocate new local value area.
+                localValOffset = local_.size();
+#ifndef NO_PAYLOAD
+                local_.resize(localValOffset + valueSize_);
+#endif
+            } else {
+                localValOffset = itW->localValOffset;
+            }
+            readV_.emplace_back();
+            OccReader& r = readV_.back();
+            r.set(&mutex, localValOffset);
+            for (;;) {
+                r.prepare();
+                // read shared data.
+#ifndef NO_PAYLOAD
+                ::memcpy(&local_[localValOffset], sharedVal, valueSize_);
+#endif
+                r.readFence();
+                if (r.verifyAll()) break;
+            }
         }
-        writeV_.push_back(uintptr_t(&mutex));
+        // read local data.
+#ifndef NO_PAYLOAD
+        ::memcpy(localVal, &local_[localValOffset], valueSize_);
+#endif
+    }
+    void write(Mutex& mutex, void *sharedVal, void *localVal) {
+        unused(sharedVal); unused(localVal);
+        size_t localValOffset;
+        WriteV::iterator itW = findInWriteSet(uintptr_t(&mutex));
+        if (itW != writeV_.end()) {
+            localValOffset = itW->localValOffset;
+        } else {
+            ReadV::iterator itR = findInReadSet(uintptr_t(&mutex));
+            if (itR == readV_.end()) {
+                // allocate new local value area.
+                localValOffset = local_.size();
+#ifndef NO_PAYLOAD
+                local_.resize(localValOffset + valueSize_);
+#endif
+            } else {
+                localValOffset = itR->localValOffset;
+            }
+            writeV_.emplace_back();
+            WriteEntry& w = writeV_.back();
+            w.set(&mutex, sharedVal, localValOffset);
+        }
         // write local data.
+#ifndef NO_PAYLOAD
+        ::memcpy(&local_[localValOffset], localVal, valueSize_);
+#endif
     }
     void lock() {
         std::sort(writeV_.begin(), writeV_.end());
-        for (uintptr_t mutex : writeV_) {
-            lockV_.emplace_back((Mutex *)mutex);
+        for (WriteEntry& w : writeV_) {
+            lockV_.emplace_back(w.mutex);
         }
         // Serialization point.
         __atomic_thread_fence(__ATOMIC_ACQ_REL);
@@ -295,8 +373,9 @@ public:
             if (useIndex) {
                 inWriteSet = findInWriteSet(r.getMutexId()) != writeV_.end();
             } else {
-                inWriteSet = std::binary_search(
-                    writeV_.begin(), writeV_.end(), r.getMutexId());
+                WriteEntry w;
+                w.set((Mutex *)r.getMutexId(), nullptr, 0);
+                inWriteSet = std::binary_search(writeV_.begin(), writeV_.end(), w);
             }
             const bool valid = inWriteSet ? r.verifyVersion() : r.verifyAll();
             if (!valid) return false;
@@ -304,9 +383,19 @@ public:
         return true;
     }
     void updateAndUnlock() {
-        for (OccLock& lk : lockV_) {
-            lk.update();
-            lk.unlock();
+        assert(lockV_.size() == writeV_.size());
+        auto itLk = lockV_.begin();
+        auto itW = writeV_.begin();
+        while (itLk != lockV_.end()) {
+            assert(itW != writeV_.end());
+            itLk->update();
+#ifndef NO_PAYLOAD
+            // writeback
+            ::memcpy(itW->sharedVal, &local_[itW->localValOffset], valueSize_);
+#endif
+            itLk->unlock();
+            ++itLk;
+            ++itW;
         }
         clear();
     }
@@ -316,13 +405,15 @@ public:
         readM_.clear();
         writeV_.clear();
         writeM_.clear();
+        local_.clear();
     }
     bool empty() const {
         return lockV_.empty() &&
             readV_.empty() &&
             readM_.empty() &&
             writeV_.empty() &&
-            writeM_.empty();
+            writeM_.empty() &&
+            local_.empty();
     }
 private:
     ReadV::iterator findInReadSet(uintptr_t key) {
@@ -333,7 +424,7 @@ private:
     WriteV::iterator findInWriteSet(uintptr_t key) {
         return findInSet(
             key, writeV_, writeM_,
-            [](uintptr_t v) { return v; });
+            [](const WriteEntry& w) { return w.getMutexId(); });
     }
     /**
      * func: uintptr_t(const Vector::value_type&)
