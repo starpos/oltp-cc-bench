@@ -6,6 +6,13 @@ GRTAGS
 GSYMS
 GTAGS
 
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.ninja
+.ninja_*
+compile_commands.json
+
 cn_bench
 leis_bench
 lock_bench

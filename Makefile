@@ -5,11 +5,13 @@ ARCH = $(shell uname -m)
 
 ifeq ($(DEBUG),1)
     CFLAGS = -O0 -g -DDEBUG
+    CMAKE_TARGET = Debug
 else
     #CFLAGS = -O2 -g -DNDEBUG -mcx16 -march=native
     #CFLAGS = -Ofast -g -DNDEBUG -mcx16 -march=native
     #CFLAGS = -Ofast -g -DNDEBUG -mcx16
     CFLAGS = -Ofast -g -DNDEBUG -ftree-vectorize
+    CMAKE_TARGET = RelWithDebInfo
 endif
 
 ifeq ($(LTO),1)
@@ -88,6 +90,21 @@ rebuild:
 
 clean:
 	rm -f $(BINARIES) *.o *.d
+
+cmake:
+	cmake -G Ninja . -DCMAKE_BUILD_TYPE=$(CMAKE_TARGET) -DCMAKE_CXX_COMPILER=$(CXX)
+cmake_clean:
+	rm -rf CMakeFiles CMakeCache.txt cmake_install.cmake
+cmake_rebuild:
+	$(MAKE) cmake_clean
+	$(MAKE) cmake
+cmake_all:
+	for CMAKE_TARGET in Debug RelWithDebInfo; do \
+		$(MAKE) cmake_clean; \
+		cmake -G Ninja . -DCMAKE_BUILD_TYPE=$$CMAKE_TARGET -DCMAKE_CXX_COMPILER=$(CXX); \
+		ninja; \
+	done
+
 
 ifeq "$(findstring $(MAKECMDGOALS), clean)" ""
 -include $(DEPENDS)
