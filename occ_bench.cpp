@@ -77,8 +77,8 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         if (!isLongTx && shortTxMode == USE_MIX_TX) {
             fillModeVec(isWriteV, rand, nrWr, tmpV2);
         }
-        size_t firstRecIdx;
-        uint64_t t0;
+        size_t firstRecIdx = 0;
+        uint64_t t0 = 0;
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {

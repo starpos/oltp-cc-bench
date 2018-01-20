@@ -177,24 +177,27 @@ struct Mutex
 #else
     alignas(16)
 #endif
-    uint128_t obj;
+    union {
+        uint128_t obj;
+        LockData ld;
+    } u;
 
-    Mutex() : obj(0) {}
+    Mutex() { u.obj = 0; }
 
     LockData atomicLoad() const {
-        return __atomic_load_n(&obj, __ATOMIC_ACQUIRE);
+        return __atomic_load_n(&u.obj, __ATOMIC_ACQUIRE);
     }
     bool compareAndSwap(LockData& before, const LockData &after) {
 #if 1
         return __atomic_compare_exchange(
-            &obj, (uint128_t *)&before, (uint128_t *)&after,
+            &u.obj, (uint128_t *)&before, (uint128_t *)&after,
             false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
 #else
         LockData after2 = after; // debug
         after2.unused3++;
 
         bool ret = __atomic_compare_exchange(
-            &obj, (uint128_t *)&before, (uint128_t *)&after2,
+            &u.obj, (uint128_t *)&before, (uint128_t *)&after2,
             false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
         if (ret) {
             ld_.push_back(before);
@@ -207,7 +210,7 @@ struct Mutex
     std::string str() const {
         return cybozu::util::formatString(
             "sxq::Mutex %p %s"
-            , this, ((LockData *)&obj)->str().c_str());
+            , this, u.ld.str().c_str());
     }
 };
 

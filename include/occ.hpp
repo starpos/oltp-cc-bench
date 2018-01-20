@@ -233,7 +233,7 @@ public:
         return !lockD.isLocked() && lockD_.getVersion() == lockD.getVersion();
     }
     bool verifyVersion() const {
-        assert(mutex);
+        assert(mutex_);
         const LockData lockD = mutex_->load();
         return lockD_.getVersion() == lockD.getVersion();
     }

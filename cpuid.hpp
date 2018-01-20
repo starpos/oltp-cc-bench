@@ -165,7 +165,7 @@ public:
     CpuTopology pop() {
         while (it_ != m_.end() && it_->second.empty()) it_ = m_.erase(it_);
         if (it_ == m_.end()) throw std::runtime_error("Shuffler: no data");
-        assert(!it_.empty());
+        assert(!it_->second.empty());
         CpuTopology ret = it_->second.front();
         it_->second.pop_front();
         ++it_;

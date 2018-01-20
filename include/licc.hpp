@@ -383,7 +383,7 @@ public:
      * in blindWriteReserveAll().
      */
     void blindWrite() {
-        assert(st0.mode == AccessMode::EMPTY);
+        assert(state_.mode == AccessMode::EMPTY);
         state_.mode = AccessMode::BLIND_WRITE;
     }
 

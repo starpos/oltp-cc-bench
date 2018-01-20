@@ -100,7 +100,7 @@ public:
     };
 private:
     Mutex *mutex_;
-#ifdef DEBUG
+#ifndef NDEBUG
     UintT v_;
 #endif
 public:
@@ -109,14 +109,14 @@ public:
         while (v0 != __atomic_load_n(&mutex_->tail, __ATOMIC_CONSUME)) {
             _mm_pause();
         }
-#ifdef DEBUG
+#ifndef NDEBUG
         v_ = v0;
 #endif
     }
     ~TicketSpinlockT() noexcept {
         __attribute__((unused)) UintT v1
             = __atomic_fetch_add(&mutex_->tail, 1, __ATOMIC_RELEASE);
-#ifdef DEBUG
+#ifndef NDEBUG
         assert(v_ == v1);
 #endif
     }
