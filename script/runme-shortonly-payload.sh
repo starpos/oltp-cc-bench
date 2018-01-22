@@ -1,7 +1,8 @@
 #!/bin/sh
 
-#make clean
+make clean
 #make CXX=clang++-5.0 DEBUG=0 MUTEX_ON_CACHELINE=1 LTO=1 -j
+make CXX=clang++-5.0 DEBUG=0 MUTEX_ON_CACHELINE=0 LTO=1 -j
 
 #for th in 1 2 4 8 12 16 18 27 36 45 54 63 72 81 90 99 108 117 126 135 144; do
 #for th in 1 2 3 4 6 8 10 12 14 16 20 24 28 32; do
@@ -27,13 +28,15 @@ for amode in CORE; do
   ./leis_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -vector 1 -amode $amode -payload $payload
   for rmw in 0 1; do
     for sm in 0; do
+      echo -n
       ./occ_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
+      ./tictoc_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -payload $payload
     done
   done
-  ./tictoc_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -payload $payload
   ./wait_die_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -payload $payload
   for rmw in 0 1; do
     for sm in 0; do
+      echo -n
       ./licc_bench -mode licc-pcc -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
       ./licc_bench -mode licc-occ -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
       ./licc_bench -mode licc-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -pqlock 0 -amode $amode -rmw $rmw -sm $sm -payload $payload
@@ -41,10 +44,6 @@ for amode in CORE; do
     done
   done
 
-  #./tlock_bench -mode trlock -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop
-  #./tlock_bench -mode trlock-occ -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop
-  #./tlock_bench -mode trlock-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop
-  #./tlock_bench -mode trlock-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -pqlock 4
 done
-done | tee -a short-only-payload.log.20180119a
+done | tee -a short-only-payload.log.20180119b
 
