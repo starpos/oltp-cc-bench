@@ -593,12 +593,22 @@ public:
     void reserve(size_t size) {
         if (data_ == nullptr) {
             data_ = allocateNewArray(size);
+#if 0
+            // zero-clear
+            ::memset(data_, 0, elemSize() * size);
+#endif
             reservedSize_ = size;
         } else if (size > reservedSize_) {
             uint8_t *data = allocateNewArray(size);
             moveToNewArray(data_, data, size_);
             std::swap(data_, data);
             ::free(data);
+#if 0
+            // zero-clear
+            size_t start = reservedSize_ * elemSize();
+            size_t end = size * elemSize();
+            ::memset(data_ + start, 0, end - start);
+#endif
             reservedSize_ = size;
         } else {
             // do nothing.
@@ -905,6 +915,23 @@ public:
         const_iterator it;
         it.c_ = this;
         it.p_ = (uint8_t *)getAddress(size_);
+    }
+
+    /**
+     * For debug.
+     */
+    void dump() const {
+        if (data_ == nullptr) return;
+        for (size_t i = 0; i < size_; i++) {
+            size_t off0 = elemSize() * i;
+            ::printf("%04zu", i);
+            for (size_t j = 0; j < elemSize(); j++) {
+                size_t off1 = off0 + j;
+                if (off1 % 4 == 0) ::printf(" ");
+                ::printf("%02x", data_[off1]);
+            }
+            ::printf("\n");
+        }
     }
 
 private:
