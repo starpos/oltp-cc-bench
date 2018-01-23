@@ -79,6 +79,9 @@ struct OccMutex
     cybozu::lock::McsSpinlock::Mutex mcsMutex;
 #endif
 
+    OccMutex() : obj(0) {
+    }
+
     OccLockData load() const {
         return __atomic_load_n(&obj, __ATOMIC_RELAXED);
     }
