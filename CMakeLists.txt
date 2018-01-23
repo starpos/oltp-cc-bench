@@ -16,7 +16,7 @@ set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Ofast -DNDEBUG -g")
 # For rtags
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(MUTEX_ON_CACHE ON CACHE BOOL "mutex on cache")
+set(MUTEX_ON_CACHELINE ON CACHE BOOL "mutex on cacheline")
 set(NO_PAYLOAD OFF CACHE BOOL "payload size 0")
 set(LTO ON CACHE BOOL "use LTO")
 
@@ -44,9 +44,9 @@ message(STATUS "architecture: " ${architecture})
 
 set(cflagItems "")
 set(ldflagItems "")
-message(STATUS "MUTEX_ON_CACHE: " ${MUTEX_ON_CACHE})
-if(MUTEX_ON_CACHE)
-	list(APPEND cflagItems " -DMUTEX_ON_CACHE")
+message(STATUS "MUTEX_ON_CACHELINE: " ${MUTEX_ON_CACHELINE})
+if(MUTEX_ON_CACHELINE)
+	list(APPEND cflagItems " -DMUTEX_ON_CACHELINE")
 endif()
 message(STATUS "NO_PAYLOAD: " ${NO_PAYLOAD})
 if(NO_PAYLOAD)
