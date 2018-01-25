@@ -1,8 +1,16 @@
 #!/bin/sh
 
-make clean
+#make clean
 #make CXX=clang++-5.0 DEBUG=0 MUTEX_ON_CACHELINE=1 LTO=1 -j
-make CXX=clang++-5.0 DEBUG=0 MUTEX_ON_CACHELINE=0 LTO=1 -j
+#make CXX=clang++-5.0 DEBUG=0 MUTEX_ON_CACHELINE=0 LTO=1 -j
+
+make cmake_clean
+cmake -G Ninja . \
+-DCMAKE_CXX_COMPILER=clang++-5.0 \
+-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+-DMUTEX_ON_CACHELINE=OFF \
+-DLTO=ON
+ninja
 
 #for th in 1 2 4 8 12 16 18 27 36 45 54 63 72 81 90 99 108 117 126 135 144; do
 #for th in 1 2 3 4 6 8 10 12 14 16 20 24 28 32; do
@@ -45,5 +53,5 @@ for amode in CORE; do
   done
 
 done
-done | tee -a short-only-payload.log.20180119b
+done | tee -a short-only-payload.log.20180122a
 
