@@ -136,7 +136,7 @@ public:
 
     public:
         using value_type = MemoryElement;
-        using difference_type = ptrdiff_t;
+        using difference_type = ssize_t;
         using pointer = MemoryElement*;
         using reference = MemoryElement&;
         using iterator_category = std::random_access_iterator_tag;
@@ -218,7 +218,7 @@ public:
         ssize_t operator-(const iterator& rhs) const {
             assert(c_ != nullptr);
             assert(c_->elemSize_ != 0);
-            return ssize_t(rhs.p_ - p_) / c_->elemSize_;
+            return (ptrdiff_t(p_) - ptrdiff_t(rhs.p_)) / c_->elemSize_;
         }
         MemoryElement& operator[](ssize_t i) {
             return *(MemoryElement*)(p_ + (c_->elemSize_ * i));
@@ -375,7 +375,7 @@ public:
 
     public:
         using value_type = DataWithPayload<T>;
-        using difference_type = ptrdiff_t;
+        using difference_type = ssize_t;
         using pointer = DataWithPayload<T>*;
         using reference = DataWithPayload<T>&;
         using iterator_category = std::random_access_iterator_tag;
@@ -455,7 +455,7 @@ public:
             return it;
         }
         ssize_t operator-(const iterator& rhs) const {
-            return ssize_t(rhs.p_ - p_) / c_->elemSize_;
+            return (ptrdiff_t(p_) - ptrdiff_t(rhs.p_)) / c_->elemSize_;
         }
         DataWithPayload<T>& operator[](ssize_t i) {
             return *(DataWithPayload<T>*)(p_ + (c_->elemSize_ * i));
@@ -679,7 +679,7 @@ public:
 
     public:
         using value_type = DataWithPayload<T>;
-        using difference_type = ptrdiff_t;
+        using difference_type = ssize_t;
         using pointer = DataWithPayload<T>*;
         using reference = DataWithPayload<T>&;
         using iterator_category = std::random_access_iterator_tag;
@@ -759,7 +759,7 @@ public:
             return it;
         }
         ssize_t operator-(const iterator& rhs) const {
-            return ssize_t(rhs.p_ - p_) / c_->elemSize();
+            return (ptrdiff_t(p_) - ptrdiff_t(rhs.p_)) / c_->elemSize();
         }
         DataWithPayload<T>& operator[](ssize_t i) {
             return *(DataWithPayload<T>*)(p_ + (c_->elemSize() * i));
@@ -789,7 +789,7 @@ public:
 
     public:
         using value_type = DataWithPayload<T>;
-        using difference_type = ptrdiff_t;
+        using difference_type = ssize_t;
         using pointer = const DataWithPayload<T>*;
         using reference = const DataWithPayload<T>&;
         using iterator_category = std::random_access_iterator_tag;
@@ -865,7 +865,7 @@ public:
             return it;
         }
         ssize_t operator-(const const_iterator& rhs) const {
-            return ssize_t(rhs.p_ - p_) / c_->elemSize();
+            return (ptrdiff_t(p_) - ptrdiff_t(rhs.p_)) / c_->elemSize();
         }
         const DataWithPayload<T>& operator[](ssize_t i) const {
             return *(const DataWithPayload<T>*)(p_ + (c_->elemSize() * i));
