@@ -552,7 +552,7 @@ private:
         if (!allowProtected && ld0.protected_) return false;
         ld1 = ld0;
         st1 = st0;
-        assert(st0.mode == AccessMode::EMPTY);
+        assert(st0.mode == AccessMode::EMPTY || st0.mode == AccessMode::BLIND_WRITE);
         st1.mode = AccessMode::WRITE;
 #if 0
         if (ld0.ordId == MAX_ORD_ID && ld0.readers == 0) {
