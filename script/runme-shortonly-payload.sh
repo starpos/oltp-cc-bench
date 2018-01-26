@@ -23,7 +23,8 @@ ninja
 for payload in 0 8 16 32 64 128 256 512 1024; do
 for amode in CORE; do
 #for amode in CUSTOM1; do
-  th=96
+  #th=96
+  th=32
   nrMuPerTh=4000
   workload=custom
   period=10
@@ -53,5 +54,5 @@ for amode in CORE; do
   done
 
 done
-done | tee -a short-only-payload.log.20180122a
+done | tee -a short-only-payload.log.20180125c
 
