@@ -6,6 +6,7 @@
 #include "leis_lock.hpp"
 #include "arch.hpp"
 #include "vector_payload.hpp"
+#include "cache_line_size.hpp"
 
 
 std::vector<uint> CpuId_;
@@ -44,6 +45,7 @@ Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     cybozu::lock::LeisLockSet<UseMap, LeisLockType> llSet;
+    llSet.init(shared.payload);
     std::vector<uint8_t> value(shared.payload);
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
 
@@ -90,16 +92,22 @@ Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
                 size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode, recV.size(), realNrOp, i, firstRecIdx);
                 auto& item = recV[key];
                 Mutex& mutex = item.value;
-                if (!llSet.lock(&mutex, mode)) {
+                void* localVal;
+                if (!llSet.lock(&mutex, mode, item.payload, localVal)) {
                     res.incAbort(isLongTx);
                     abort = true;
                     break;
                 }
 #ifndef NO_PAYLOAD
                 if (mode == Mode::X) {
-                    ::memcpy(item.payload, &value[0], shared.payload);
+                    assert(localVal != nullptr);
+                    ::memcpy(localVal, &value[0], shared.payload);
                 } else {
-                    ::memcpy(&value[0], item.payload, shared.payload);
+                    if (localVal == nullptr) {
+                        ::memcpy(&value[0], item.payload, shared.payload);
+                    } else {
+                        ::memcpy(&value[0], localVal, shared.payload);
+                    }
                 }
 #endif
             }
@@ -109,7 +117,7 @@ Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
             }
 
             res.incCommit(isLongTx);
-            llSet.unlock();
+            llSet.updateAndUnlock();
             res.addRetryCount(isLongTx, retry);
             break; // retry is not required.
         }
@@ -224,7 +232,7 @@ void dispatch1(const CmdLineOptionPlus& opt)
     Shared<Lock> shared;
 
 #ifdef MUTEX_ON_CACHELINE
-    shared.recV.setPayloadSize(opt.payload, cybozu::lock::CACHE_LINE_SIZE);
+    shared.recV.setPayloadSize(opt.payload, CACHE_LINE_SIZE);
 #else
     shared.recV.setPayloadSize(opt.payload);
 #endif

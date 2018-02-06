@@ -11,11 +11,13 @@
 #include <vector>
 #include "lock.hpp"
 #include "sxql.hpp"
+#include "cache_line_size.hpp"
+#include "vector_payload.hpp"
+#include "allocator.hpp"
 
 
 namespace cybozu {
 namespace lock {
-
 
 
 struct MutexWithMcs
@@ -29,7 +31,7 @@ struct MutexWithMcs
     }
 
     // This is used for lock or upgrade.
-    bool compareAndSwap(int& before, int after, int mode = __ATOMIC_ACQUIRE) {
+    bool compareAndSwap(int& before, int after, int mode) {
         return __atomic_compare_exchange_n(
             &obj, &before, after, false, mode, __ATOMIC_RELAXED);
     }
@@ -39,11 +41,11 @@ struct MutexWithMcs
     }
 
     // These are used for unlock.
-    int atomicFetchAdd(int value) {
-        return __atomic_fetch_add(&obj, value, __ATOMIC_RELEASE);
+    int atomicFetchAdd(int value, int mode) {
+        return __atomic_fetch_add(&obj, value, mode);
     }
-    int atomicFetchSub(int value) {
-        return __atomic_fetch_sub(&obj, value, __ATOMIC_RELEASE);
+    int atomicFetchSub(int value, int mode) {
+        return __atomic_fetch_sub(&obj, value, mode);
     }
 
     std::string str() const {
@@ -111,7 +113,7 @@ public:
         if (mode == Mode::X) {
             for (;;) {
                 if (v != 0) waitForWrite(v);
-                if (mutex_->compareAndSwap(v, -1)) {
+                if (mutex_->compareAndSwap(v, -1, __ATOMIC_ACQUIRE)) {
                     return;
                 }
             }
@@ -119,7 +121,7 @@ public:
         assert(mode == Mode::S);
         for (;;) {
             if (v < 0) waitForRead(v);
-            if (mutex_->compareAndSwap(v, v + 1)) {
+            if (mutex_->compareAndSwap(v, v + 1, __ATOMIC_ACQUIRE)) {
                 return;
             }
         }
@@ -134,7 +136,7 @@ public:
         int v = mutex->atomicLoad();
         if (mode == Mode::X) {
             while (v == 0) {
-                if (mutex->compareAndSwap(v, -1)) {
+                if (mutex->compareAndSwap(v, -1, __ATOMIC_ACQUIRE)) {
                     mutex_ = mutex;
                     mode_ = mode;
                     return true;
@@ -145,7 +147,7 @@ public:
         }
         assert(mode == Mode::S);
         while (v >= 0) {
-            if (mutex->compareAndSwap(v, v + 1)) {
+            if (mutex->compareAndSwap(v, v + 1, __ATOMIC_ACQUIRE)) {
                 mutex_ = mutex;
                 mode_ = mode;
                 return true;
@@ -178,12 +180,12 @@ public:
         assert(mutex_);
 
         if (mode_ == Mode::X) {
-            int ret = mutex_->atomicFetchAdd(1);
+            int ret = mutex_->atomicFetchAdd(1, __ATOMIC_RELEASE);
             unusedVar(ret);
             assert(ret == -1);
         } else {
             assert(mode_ == Mode::S);
-            int ret = mutex_->atomicFetchSub(1);
+            int ret = mutex_->atomicFetchSub(1, __ATOMIC_RELEASE);
             unusedVar(ret);
             assert(ret >= 1);
         }
@@ -253,6 +255,78 @@ class LeisLockSet
 };
 
 
+/**
+ * Informatin for write set.
+ */
+struct LocalValInfo
+{
+    /*
+     * If the lock is for read, the below values are empty.
+     */
+    size_t localValIdx; // UINT64_MAX means empty.
+    void *sharedVal; // If localValIdx != UINT64_MAX, it must not be null.
+
+    LocalValInfo() : localValIdx(UINT64_MAX), sharedVal(nullptr) {
+    }
+    LocalValInfo(size_t localValIdx0, void *sharedVal0)
+        : localValIdx(localValIdx0), sharedVal(sharedVal0) {
+    }
+    LocalValInfo(const LocalValInfo&) = default;
+    LocalValInfo& operator=(const LocalValInfo&) = default;
+    LocalValInfo(LocalValInfo&& rhs) : LocalValInfo() {
+        swap(rhs);
+    }
+    LocalValInfo& operator=(LocalValInfo&& rhs) {
+        swap(rhs);
+        return *this;
+    }
+
+    void set(size_t localValIdx0, void *sharedVal0) {
+        localValIdx = localValIdx0;
+        sharedVal = sharedVal0;
+    }
+    void reset() {
+        localValIdx = UINT64_MAX;
+        sharedVal = nullptr;
+    }
+
+    void swap(LocalValInfo& rhs) {
+        std::swap(localValIdx, rhs.localValIdx);
+        std::swap(sharedVal, rhs.sharedVal);
+    }
+};
+
+
+/**
+ * Lock object and localValInfo object.
+ */
+template <typename Lock>
+struct OpEntry
+{
+    Lock lock;
+    LocalValInfo info;
+
+    OpEntry() : lock(), info() {
+    }
+    explicit OpEntry(Lock&& lock0) : OpEntry() {
+        lock = std::move(lock0);
+    }
+    OpEntry(const OpEntry&) = delete;
+    OpEntry& operator=(const OpEntry&) = delete;
+    OpEntry(OpEntry&& rhs) : OpEntry() {
+        swap(rhs);
+    }
+    OpEntry& operator=(OpEntry&& rhs) {
+        swap(rhs);
+        return *this;
+    }
+    void swap(OpEntry& rhs) {
+        std::swap(lock, rhs.lock);
+        std::swap(info, rhs.info);
+    }
+};
+
+
 /*
  * Using std::map.
  */
@@ -262,63 +336,111 @@ class LeisLockSet<1, Lock>
 public:
     using Mutex = typename Lock::Mutex;
     using Mode = typename Mutex::Mode;
+    using OpEntryL = OpEntry<Lock>;
 
 private:
-    using Map = std::map<Mutex*, Lock>;
+    using Map = std::map<Mutex*, OpEntryL>;
     Map map_;
 
     // Temporary used in recover().
-    std::vector<bool> tmp_;
+    std::vector<bool> tmpIsReadV_;
+    std::vector<LocalValInfo> tmpInfoV_;
 
     // Temporary variables for lock() and recover().
     Mutex *mutex_;
     Mode mode_;
+    void *sharedVal_;
     typename Map::iterator bgn_; // begin of M.
+
+    MemoryVector local_;
+    size_t valueSize_;
 
 public:
     LeisLockSet() = default;
     ~LeisLockSet() noexcept {
         unlock();
     }
-    bool lock(Mutex *mutex, Mode mode) {
+    /**
+     * You must call this at first.
+     */
+    void init(size_t valueSize) {
+        valueSize_ = valueSize;
+
+        if (valueSize == 0) valueSize++;
+#ifdef MUTEX_ON_CACHELINE
+        local_.setSizes(valueSize, CACHE_LINE_SIZE);
+#else
+        local_.setSizes(valueSize);
+#endif
+    }
+
+    bool lock(Mutex *mutex, Mode mode, void* sharedVal, void*& localVal) {
+        unused(sharedVal); unused(localVal);
         typename Map::iterator it = map_.lower_bound(mutex);
         if (it == map_.end()) {
             // M is empty.
-            map_.emplace(mutex, Lock(mutex, mode)); // blocking
+            // Lock object constructor may block.
+            auto pair = map_.emplace(mutex, OpEntryL(Lock(mutex, mode)));
+            assert(pair.second);
+            OpEntryL& ope = pair.first->second;
+            if (mode == Mode::X) {
+                ope.info.set(allocateLocalVal(), sharedVal);
+            }
+            localVal = getLocalValPtr(ope.info);
             return true;
         }
         Mutex *mu = it->first;
         if (mu == mutex) { // already exists
-            Lock& lk = it->second;
+            OpEntryL& ope = it->second;
+            Lock& lk = ope.lock;
             if (mode == Mode::X && lk.isShared()) {
                 if (lk.tryUpgrade()) {
+                    ope.info.set(allocateLocalVal(), sharedVal);
+                    localVal = getLocalValPtr(ope.info);
                     return true;
+                } else {
+                    // goto retrospective mode.
                 }
             } else {
+                localVal = getLocalValPtr(ope.info);
                 return true;
             }
-        } else {
+        } else { // not found.
             Lock lk;
             if (lk.tryLock(mutex, mode)) { // non-blocking.
-                map_.emplace(mutex, std::move(lk));
+                auto pair = map_.emplace(mutex, OpEntryL(std::move(lk)));
+                assert(pair.second);
+                OpEntryL& ope = pair.first->second;
+                if (mode == Mode::X) {
+                    ope.info.set(allocateLocalVal(), sharedVal);
+                }
+                localVal = getLocalValPtr(ope.info);
                 return true;
+            } else {
+                // goto retrospecitive mode.
             }
         }
 
         // Retrospective mode.
         mutex_ = mutex;
         mode_ = mode;
+        sharedVal_ = sharedVal;
         bgn_ = it;
         return false;
     }
     void recover() {
         // release locks in M.
-        assert(tmp_.empty());
+        assert(tmpIsReadV_.empty());
+        assert(tmpInfoV_.empty());
         typename Map::iterator it = bgn_;
         while (it != map_.end()) {
-            Lock& lk = it->second;
-            tmp_.push_back(lk.isShared());
+            OpEntryL& ope = it->second;
+            Lock& lk = ope.lock;
+            LocalValInfo& info = ope.info;
+            tmpIsReadV_.push_back(lk.isShared());
             lk.unlock();
+            tmpInfoV_.emplace_back(info);
+            info.reset();
             ++it;
         }
 
@@ -326,28 +448,68 @@ public:
         it = bgn_;
         size_t i = 0;
         if (bgn_ != map_.end() && bgn_->first == mutex_) {
-            Lock& lk = it->second;
-            assert(tmp_[0]); // isShared.
+            OpEntryL& ope = it->second;
+            Lock& lk = ope.lock;
+            assert(tmpIsReadV_[0]); // isShared.
             assert(mode_ == Mode::X);
             lk.lock(mutex_, mode_); // blocking.
+            ope.info.set(allocateLocalVal(), sharedVal_);
             ++it;
             i = 1;
         } else {
-            map_.emplace(mutex_, Lock(mutex_, mode_)); // blocking
+            auto pair = map_.emplace(mutex_, Lock(mutex_, mode_)); // blocking
+            assert(pair.second);
+            OpEntryL& ope = pair.first->second;
+            if (!ope.lock.isShared()) {
+                ope.info.set(allocateLocalVal(), sharedVal_);
+            }
         }
+
+        assert(tmpInfoV_.size() == tmpIsReadV_.size());
 
         // re-lock mutexes in M.
         while (it != map_.end()) {
+            assert(i < tmpIsReadV_.size());
+            assert(i < tmpInfoV_.size());
             Mutex *mu = it->first;
-            Lock& lk = it->second;
-            assert(i < tmp_.size());
-            lk.lock(mu, tmp_[i] ? Mode::S : Mode::X); // blocking
+            OpEntryL& ope = it->second;
+            Lock& lk = ope.lock;
+            lk.lock(mu, tmpIsReadV_[i] ? Mode::S : Mode::X); // blocking
+            if (!lk.isShared()) {
+                ope.info = tmpInfoV_[i];
+            }
             ++it;
             ++i;
         }
-
-        tmp_.clear();
+        tmpIsReadV_.clear();
+        tmpInfoV_.clear();
     }
+    /**
+     * Writeback local writeset and unlock.
+     */
+    void updateAndUnlock() {
+        // here is serialized point.
+
+        typename Map::iterator it = map_.begin();
+        while (it != map_.end()) {
+            OpEntryL& ope = it->second;
+            if (!ope.lock.isShared()) {
+                // Update the shared value.
+#ifndef NO_PAYLOAD
+                LocalValInfo& info = ope.info;
+                assert(info.localValIdx != UINT64_MAX);
+                assert(info.sharedVal != nullptr);
+                ::memcpy(info.sharedVal, &local_[info.localValIdx], valueSize_);
+#endif
+            }
+            it = map_.erase(it); // unlock
+        }
+        assert(map_.empty());
+        local_.clear();
+    }
+    /**
+     * If you want to abort, use this instead of updateAndUnlock().
+     */
     void unlock() noexcept {
 #if 1
         map_.clear(); // automatically unlocked in their destructor.
@@ -356,9 +518,10 @@ public:
         typename Map::iterator it = map_.begin();
         while (it != map_.end()) {
             Mutex *mu = it->first;
-            it = map_.erase(it);
+            it = map_.erase(it); // unlock
         }
 #endif
+        local_.clear();
     }
     bool empty() const {
         return map_.empty();
@@ -367,14 +530,35 @@ public:
         return map_.size();
     }
 
-    void printLockV(const char *prefix) const {
+    void printVec(const char *prefix) const {
         ::printf("%p %s BEGIN\n", this, prefix);
         for (const typename Map::value_type& pair : map_) {
-            const Lock& lk = pair.second;
-            ::printf("%p %s mutex:%p %s\n"
-                     , this, prefix, lk.mutex(), lk.mutex()->str().c_str());
+            OpEntryL& ope = pair.second;
+            const Lock& lk = ope.lock;
+            ::printf("%p %s mutex:%p %s shared:%p localIdx:%zu\n"
+                     , this, prefix, lk.mutex(), lk.mutex()->str().c_str()
+                     , ope.sharedVal, ope.localValIdx);
         }
         ::printf("%p %s END\n", this, prefix);
+    }
+private:
+    size_t allocateLocalVal() {
+        const size_t idx = local_.size();
+#ifndef NO_PAYLOAD
+        local_.resize(idx + 1);
+#endif
+        return idx;
+    }
+    void* getLocalValPtr(const LocalValInfo& info) {
+#ifdef NO_PAYLOAD
+        return nullptr;
+#else
+        if (info.localValIdx == UINT64_MAX) {
+            return nullptr;
+        } else {
+            return &local_[info.localValIdx];
+        }
+#endif
     }
 };
 
@@ -388,49 +572,87 @@ class LeisLockSet<0, Lock>
 public:
     using Mutex = typename Lock::Mutex;
     using Mode = typename Mutex::Mode;
+    using OpEntryL = OpEntry<Lock>;
 
 private:
-    using LockV = std::vector<Lock>;
-    LockV lockV_;
+    using Vec = std::vector<OpEntryL>;
+    Vec vec_;
     uintptr_t maxMutex_;
     size_t nrSorted_;
 
+    MemoryVector local_;
+    size_t valueSize_;
+
     std::vector<uintptr_t> tmpMutexV_; // mutex pointers.
     std::vector<bool> tmpIsReadV_; // true for Mode::S, false for Mode::X.
+    std::vector<LocalValInfo> tmpInfoV_; // local val info for write set.
+    void *tmpSharedVal_; // temporary shared val for recovery.
 
 public:
-    LeisLockSet() : lockV_(), maxMutex_(0), nrSorted_(0)
-                  , tmpMutexV_(), tmpIsReadV_() {}
+    LeisLockSet() : vec_(), maxMutex_(0), nrSorted_(0)
+                  , tmpMutexV_(), tmpIsReadV_(), tmpInfoV_()
+                  , tmpSharedVal_(nullptr) {
+    }
     ~LeisLockSet() noexcept {
         unlock();
     }
-    bool lock(Mutex *mutex, Mode mode) {
+
+    /**
+     * You must call this at first.
+     */
+    void init(size_t valueSize) {
+        valueSize_ = valueSize;
+
+        if (valueSize == 0) valueSize++;
+#ifdef MUTEX_ON_CACHELINE
+        local_.setSizes(valueSize, CACHE_LINE_SIZE);
+#else
+        local_.setSizes(valueSize);
+#endif
+    }
+
+    bool lock(Mutex *mutex, Mode mode, void* sharedVal, void*& localVal) {
+        unused(sharedVal); unused(localVal);
         if (maxMutex_ < uintptr_t(mutex)) {
             // Lock order is preserved.
-            lockV_.emplace_back(mutex, mode);
+            vec_.emplace_back(OpEntryL(Lock(mutex, mode)));
             maxMutex_ = uintptr_t(mutex);
-            if (nrSorted_ + 1 == lockV_.size()) {
+            if (nrSorted_ + 1 == vec_.size()) {
                 nrSorted_++;
             }
+            OpEntryL& ope = vec_.back();
+            if (mode == Mode::X) {
+                ope.info.set(allocateLocalVal(), sharedVal);
+            }
+            localVal = getLocalValPtr(ope.info);
             return true;
         }
-        typename LockV::iterator it = find(mutex);
-        if (it != lockV_.end()) {
-            Lock& lk = *it;
+        typename Vec::iterator it = find(mutex);
+        if (it != vec_.end()) {
+            OpEntryL& ope = *it;
+            Lock& lk = ope.lock;
             if (mode == Mode::X && lk.isShared()) {
                 if (lk.tryUpgrade()) {
+                    ope.info.set(allocateLocalVal(), sharedVal);
+                    localVal = getLocalValPtr(ope.info);
                     return true;
                 } else {
                     // Go to retrospective mode.
                 }
             } else {
                 // Already locked.
+                localVal = getLocalValPtr(ope.info);
                 return true;
             }
         } else {
             Lock lk;
             if (lk.tryLock(mutex, mode)) {
-                lockV_.push_back(std::move(lk));
+                vec_.push_back(OpEntry(std::move(lk)));
+                OpEntryL& ope = vec_.back();
+                if (mode == Mode::X) {
+                    ope.info.set(allocateLocalVal(), sharedVal);
+                }
+                localVal = getLocalValPtr(ope.info);
                 return true;
             }
             // Go to retrospective mode.
@@ -438,8 +660,12 @@ public:
 
         assert(tmpMutexV_.empty());
         assert(tmpIsReadV_.empty());
+        assert(tmpInfoV_.empty());
         tmpMutexV_.push_back(uintptr_t(mutex));
         tmpIsReadV_.push_back(mode == Mode::S);
+        if (mode == Mode::X) {
+            tmpSharedVal_ = sharedVal;
+        }
         return false;
     }
     void recover() {
@@ -448,106 +674,176 @@ public:
          * all mutexes after which is no more than mutex_.
          */
         std::sort(
-            lockV_.begin(), lockV_.end(),
-            [](const Lock& a, const Lock& b) {
-                return a.getMutexId() < b.getMutexId();
+            vec_.begin(), vec_.end(),
+            [](const OpEntryL& a, const OpEntryL& b) {
+                return a.lock.getMutexId() < b.lock.getMutexId();
             });
         Mutex *mutexCmp = (Mutex *)tmpMutexV_[0];
-        typename LockV::iterator it = lower_bound(mutexCmp, lockV_.end());
-        assert(it != lockV_.end());
+        typename Vec::iterator it = lower_bound(mutexCmp, vec_.end());
+        assert(it != vec_.end());
+
+        // QQQQQ
+
 
         // Release locks.
         assert(tmpMutexV_.size() == 1);
         assert(tmpIsReadV_.size() == 1);
-        const bool hasTarget = it->getMutexId() == uintptr_t(mutexCmp);
-        const size_t nr0 = std::distance(lockV_.begin(), it);
-        const size_t nr1 = lockV_.size() - nr0;
-        tmpMutexV_.reserve(nr1);
-        tmpIsReadV_.reserve(nr1);
+        assert(tmpInfoV_.empty());
+        const bool hasTarget = it->lock.getMutexId() == uintptr_t(mutexCmp);
+        const size_t nr0 = std::distance(vec_.begin(), it);
+        const size_t nr1 = vec_.size() - nr0;
+        tmpMutexV_.reserve(nr1 + 1);
+        tmpIsReadV_.reserve(nr1 + 1);
+        tmpInfoV_.reserve(nr1 + 1); // nr1 + 1 is upper bound because only write locks uses it.
         if (hasTarget) {
-            ++it; // skip.
+            assert(it->lock.isShared()); // it had read lock.
+            assert(!tmpIsReadV_[0]);  // it tried write lock and failed.
+            tmpInfoV_.emplace_back(allocateLocalVal(), tmpSharedVal_);
+            ++it; // the first item just after the target.
+        } else if (!tmpIsReadV_[0]) {
+            tmpInfoV_.emplace_back(allocateLocalVal(), tmpSharedVal_);
         }
-        while (it != lockV_.end()) {
+        while (it != vec_.end()) {
             // Backup.
-            tmpMutexV_.push_back(it->getMutexId());
-            tmpIsReadV_.push_back(it->isShared());
+            Lock& lk = it->lock;
+            tmpMutexV_.push_back(lk.getMutexId());
+            tmpIsReadV_.push_back(lk.isShared());
+            if (!lk.isShared()) tmpInfoV_.push_back(it->info);
             ++it;
         }
-        lockV_.resize(nr0); // unlock remaining objects.
+        vec_.resize(nr0); // unlock remaining objects.
 
         // Re-lock mutexes.
         if (!hasTarget) {
-            lockV_.reserve(nr0 + nr1 + 1);
+            // ....., target, it,.....
+            //  nr0            nr1
+            vec_.reserve(nr0 + nr1 + 1);
+        } else {
+            // ....., target, it,.....
+            //  nr0           nr1-1
         }
         auto it1 = tmpMutexV_.begin();
         auto it2 = tmpIsReadV_.begin();
+        auto it3 = tmpInfoV_.begin();
         while (it1 != tmpMutexV_.end()) {
-            lockV_.emplace_back((Mutex *)*it1, *it2 ? Mode::S : Mode::X);
+            const Mode mode = *it2 ? Mode::S : Mode::X;
+            vec_.emplace_back(Lock((Mutex *)*it1, mode));
             ++it1;
             ++it2;
+            if (mode == Mode::X) {
+                vec_.back().info = *it3;
+                ++it3;
+            }
         }
         assert(it2 == tmpIsReadV_.end());
+        assert(it3 == tmpInfoV_.end());
 
         tmpMutexV_.clear();
         tmpIsReadV_.clear();
-        maxMutex_ = lockV_.back().getMutexId();
-        nrSorted_ = lockV_.size();
-
+        tmpInfoV_.clear();
+        maxMutex_ = vec_.back().lock.getMutexId();
+        nrSorted_ = vec_.size();
     }
-    void unlock() noexcept {
-        lockV_.clear();// automatically release the locks.
+    void updateAndUnlock() noexcept {
+        // here is serialized point.
+
+        typename Vec::iterator it = vec_.begin();
+        while (it != vec_.end()) {
+            OpEntryL& ope = *it;
+            if (!ope.lock.isShared()) {
+                // Update the shared value.
+#ifndef NO_PAYLOAD
+                LocalValInfo& info = ope.info;
+                assert(info.localValIdx != UINT64_MAX);
+                assert(info.sharedVal != nullptr);
+                ::memcpy(info.sharedVal, &local_[info.localValIdx], valueSize_);
+#endif
+            }
+#if 1 // unlock one by one.
+            OpEntry garbage(std::move(ope)); // will be unlocked.
+#endif
+            ++it;
+        }
+        vec_.clear();
         maxMutex_ = 0; // smaller than any valid pointers.
         nrSorted_ = 0;
+        local_.clear();
+    }
+    void unlock() noexcept {
+        vec_.clear();// automatically release the locks.
+        maxMutex_ = 0; // smaller than any valid pointers.
+        nrSorted_ = 0;
+        local_.clear();
     }
     bool empty() const {
-        return lockV_.empty();
+        return vec_.empty();
     }
     size_t size() const {
-        return lockV_.size();
+        return vec_.size();
     }
 private:
-    typename LockV::iterator find(Mutex *mutex) {
+    typename Vec::iterator find(Mutex *mutex) {
         const uintptr_t key = uintptr_t(mutex);
 #if 1
         // Binary search in sorted area.
-        typename LockV::iterator end = lockV_.begin();
+        typename Vec::iterator end = vec_.begin();
         std::advance(end, nrSorted_);
-        typename LockV::iterator it = lower_bound(mutex, end);
-        if (it != end && it->getMutexId() == key) {
+        typename Vec::iterator it = lower_bound(mutex, end);
+        if (it != end && it->lock.getMutexId() == key) {
             // found.
             return it;
         }
         // Sequential search in unsorted area.
         it = end;
-        while (it != lockV_.end()) {
-            if (it->getMutexId() == key) return it;
+        while (it != vec_.end()) {
+            if (it->lock.getMutexId() == key) return it;
             ++it;
         }
-        return lockV_.end();
+        return vec_.end();
 #else
         return std::find_if(
-            lockV_.begin(), lockV_.end(),
-            [&](const Lock& lk) {
-                return lk.getMutexId() == key;
+            vec_.begin(), vec_.end(),
+            [&](const OpEntryL& ope) {
+                return ope.lock.getMutexId() == key;
             });
 #endif
     }
+    size_t allocateLocalVal() {
+        const size_t idx = local_.size();
+#ifndef NO_PAYLOAD
+        local_.resize(idx + 1);
+#endif
+        return idx;
+    }
+    void* getLocalValPtr(const LocalValInfo& info) {
+#ifdef NO_PAYLOAD
+        return nullptr;
+#else
+        if (info.localValIdx == UINT64_MAX) {
+            return nullptr;
+        } else {
+            return &local_[info.localValIdx];
+        }
+#endif
+    }
 public:
-    void printLockV(const char *prefix) const {
+    void printVec(const char *prefix) const {
         ::printf("%p %s BEGIN\n", this, prefix);
-        for (const Lock& lk : lockV_) {
-            ::printf("%p %s mutex:%p %s\n"
-                     , this, prefix, lk.mutex(), lk.mutex()->str().c_str());
+        for (const OpEntryL& ope : vec_) {
+            ::printf("%p %s mutex:%p %s shared:%p localIdx:%zu\n"
+                     , this, prefix, ope.lock.mutex(), ope.lock.mutex()->str().c_str()
+                     , ope.sharedVal, ope.localValIdx);
         }
         ::printf("%p %s END\n", this, prefix);
     }
-    typename LockV::iterator lower_bound(Mutex *mutex, typename LockV::iterator end) {
+    typename Vec::iterator lower_bound(Mutex *mutex, typename Vec::iterator end) {
         Lock lkcmp;
         lkcmp.setMutex(mutex);
+        OpEntryL ope(std::move(lkcmp));
         return std::lower_bound(
-            lockV_.begin(), end, lkcmp,
-            [](const Lock& a, const Lock& b) {
-                return a.getMutexId() < b.getMutexId();
+            vec_.begin(), end, ope,
+            [](const OpEntryL& a, const OpEntryL& b) {
+                return a.lock.getMutexId() < b.lock.getMutexId();
             });
     }
 };
