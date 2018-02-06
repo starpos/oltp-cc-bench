@@ -28,6 +28,7 @@ struct Shared
     int longTxMode;
     bool usesBackOff;
     size_t writePct;
+    bool usesRMW;
     size_t nrTh4LongTx;
     size_t payload;
 
@@ -55,6 +56,8 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     cybozu::wait_die::LockSet lockSet;
+    lockSet.init(shared.payload);
+
     std::vector<uint8_t> value(shared.payload);
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
 
@@ -96,7 +99,7 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
             txId = localTxIdGen.get();
         } else if (txIdGenType == SIMPLE_TXID_GEN) {
             txId = shared.simpleTxIdGen.get();
-	} else if (txIdGenType == EPOCH_TXID_GEN) {
+        } else if (txIdGenType == EPOCH_TXID_GEN) {
             txId = epochTxIdGen.get();
         } else {
             throw cybozu::Exception("bad txIdGenType") << txIdGenType;
@@ -109,7 +112,6 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
             assert(lockSet.empty());
-            bool abort = false;
             rand.setState(randState);
             for (size_t i = 0; i < realNrOp; i++) {
 #if 0
@@ -124,29 +126,29 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                     recV.size(), realNrOp, i, firstRecIdx);
                 auto& item = recV[key];
                 Mutex& mutex = item.value;
-                if (!lockSet.lock(mutex, mode)) {
-                    abort = true;
-                    break;
-                }
-#ifndef NO_PAYLOAD
-                if (mode == Mode::X) {
-                    ::memcpy(item.payload, &value[0], shared.payload);
+                if (mode == Mode::S) {
+                    if (!lockSet.read(mutex, item.payload, &value[0])) goto abort;
                 } else {
-                    ::memcpy(&value[0], item.payload, shared.payload);
+                    assert(mode == Mode::X);
+                    if (shared.usesRMW) {
+                        if (!lockSet.readForUpdate(mutex, item.payload, &value[0])) goto abort;
+                        if (!lockSet.write(mutex, item.payload, &value[0])) goto abort;
+                    } else {
+                        if (!lockSet.write(mutex, item.payload, &value[0])) goto abort;
+                    }
                 }
-#endif
             }
-            if (abort) {
-                lockSet.clear();
-                res.incAbort(isLongTx);
-                if (shared.usesBackOff) backOff(t0, retry, rand);
-                continue;
-            }
-
+            if (!lockSet.blindWriteLockAll()) goto abort;
+            lockSet.updateAndUnlock();
             res.incCommit(isLongTx);
-            lockSet.clear();
             res.addRetryCount(isLongTx, retry);
             break; // retry is not required.
+
+          abort:
+            lockSet.unlock();
+            res.incAbort(isLongTx);
+            if (shared.usesBackOff) backOff(t0, retry, rand);
+            // continue
         }
     }
     return res;
@@ -176,6 +178,7 @@ Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     Result2 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     cybozu::wait_die::LockSet lockSet;
+    lockSet.init(shared.payload);
     std::vector<uint8_t> value(shared.payload);
 
 #if 0
@@ -219,7 +222,6 @@ Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
             assert(lockSet.empty());
-            bool abort = false;
             rand.setState(randState);
             boolRand.reset();
             for (size_t i = 0; i < realNrOp; i++) {
@@ -231,29 +233,28 @@ Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                 const size_t key = rand() % recV.size();
                 auto& item = recV[key];
                 Mutex& mutex = item.value;
-                if (!lockSet.lock(mutex, mode)) {
-                    abort = true;
-                    break;
-                }
-#ifndef NO_PAYLOAD
-                if (mode == Mode::X) {
-                    ::memcpy(item.payload, &value[0], shared.payload);
+                if (mode == Mode::S) {
+                    if (!lockSet.read(mutex, item.payload, &value[0])) goto abort;
                 } else {
-                    ::memcpy(&value[0], item.payload, shared.payload);
+                    assert(mode == Mode::X);
+                    if (shared.usesRMW) {
+                        if (!lockSet.readForUpdate(mutex, item.payload, &value[0])) goto abort;
+                        if (!lockSet.write(mutex, item.payload, &value[0])) goto abort;
+                    } else {
+                        if (!lockSet.write(mutex, item.payload, &value[0])) goto abort;
+                    }
                 }
-#endif
             }
-            if (abort) {
-                lockSet.clear();
-                res.incAbort(txSize);
-                if (shared.usesBackOff) backOff(t0, retry, rand);
-                continue;
-            }
-
+            if (!lockSet.blindWriteLockAll()) goto abort;
+            lockSet.updateAndUnlock();
             res.incCommit(txSize);
-            lockSet.clear();
             res.addRetryCount(txSize, retry);
             break; // retry is not required.
+
+          abort:
+            lockSet.unlock();
+            res.incAbort(txSize);
+            if (shared.usesBackOff) backOff(t0, retry, rand);
         }
     }
     return res;
@@ -325,16 +326,19 @@ struct CmdLineOptionPlus : CmdLineOption
     int txIdGenType;
     int usesBackOff; // 0 or 1.
     size_t writePct;
+    int usesRMW; // 0 or 1.
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&txIdGenType, 3, "txid-gen", "[id]: txid gen method (0:sclable, 1:bulk, 2:simple, 3:epoch(default))");
         appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
+        appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write 0:w 1:rmw (default: 1)");
         appendOpt(&writePct, 50, "writepct", "[pct]: write percentage (0 to 100) for custom3 workload.");
     }
     std::string str() const {
         return cybozu::util::formatString(
-            "mode:wait-die %s txidGenType:%d backoff:%d writePct:%zu"
-            , base::str().c_str(), txIdGenType, usesBackOff ? 1 : 0, writePct);
+            "mode:wait-die %s txidGenType:%d backoff:%d writePct:%zu rmw:%d"
+            , base::str().c_str(), txIdGenType, usesBackOff ? 1 : 0
+            , writePct, usesRMW ? 1 : 0);
     }
 };
 
@@ -386,6 +390,7 @@ int main(int argc, char *argv[]) try
         shared.longTxMode = opt.longTxMode;
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         shared.nrTh4LongTx = opt.nrTh4LongTx;
+        shared.usesRMW = opt.usesRMW != 0;
         shared.payload = opt.payload;
         for (size_t i = 0; i < opt.nrLoop; i++) {
             dispatch1(opt, shared);
@@ -401,6 +406,7 @@ int main(int argc, char *argv[]) try
         shared.recV.resize(opt.getNrMu());
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         shared.writePct = opt.writePct;
+        shared.usesRMW = opt.usesRMW != 0;
         shared.payload = opt.payload;
         for (size_t i = 0; i < opt.nrLoop; i++) {
             Result2 res;

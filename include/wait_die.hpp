@@ -5,6 +5,8 @@
 #include "lock_data.hpp"
 #include "arch.hpp"
 #include "cache_line_size.hpp"
+#include "vector_payload.hpp"
+#include "write_set.hpp"
 
 
 namespace cybozu {
@@ -128,11 +130,17 @@ public:
     WaitDieLock& operator=(WaitDieLock&& rhs) { swap(rhs); return *this; }
 
     /**
+     * This is for blind-write.
+     */
+    void setMutex(Mutex *mutex) { mutex_ = mutex; }
+
+    /**
      * If true, locked.
      * If false, you must abort your running transaction.
      */
     bool lock(Mutex *mutex, Mode mode, TxId txId) {
-        assert(!mutex_);
+        assert(mode_ == Mode::INVALID);
+        assert(mode != Mode::INVALID);
         assert(mutex);
         mutex_ = mutex;
         mode_ = mode;
@@ -170,7 +178,8 @@ public:
         return false;
     }
     void unlock() noexcept {
-        if (!mutex_) return;
+        if (mode_ == Mode::INVALID) return;
+        assert(mutex_);
 
         WaitDieData wd0 = mutex_->atomicRead();
         for (;;) {
@@ -239,84 +248,214 @@ class LockSet
 {
     using Mode = cybozu::lock::LockStateXS::Mode;
     using Mutex = WaitDieLock::Mutex;
-    using LockV = std::vector<WaitDieLock>;
+    using Lock = WaitDieLock;
+    using OpEntryL = OpEntry<Lock>;
+    using Vec = std::vector<OpEntryL>;
 
     // key: mutex addr, value: index in the vector.
     using Index = std::unordered_map<uintptr_t, size_t>;
 
-    LockV lockV_;
+    Vec vec_;
     Index index_;
 
     TxId txId_;
 
+    MemoryVector local_;
+    size_t valueSize_;
+
+    struct BlindWriteInfo {
+        Mutex *mutex;
+        size_t idx; // index of blind-write entry in vec_.
+
+        BlindWriteInfo() {
+        }
+        BlindWriteInfo(Mutex* mutex0, size_t idx0) : mutex(mutex0), idx(idx0) {
+        }
+    };
+    std::vector<BlindWriteInfo> bwV_;
+
 public:
-    /* call this before read/write. */
+    // Call this at first once.
+    void init(size_t valueSize) {
+        valueSize_ = valueSize;
+        if (valueSize == 0) valueSize++;
+#ifdef MUTEX_ON_CACHELINE
+        local_.setSizes(valueSize, CACHE_LINE_SIZE);
+#else
+        local_.setSizes(valueSize);
+#endif
+    }
+    /* call this before read/write just after a transaction trial starts. */
     void setTxId(TxId txId) { txId_ = txId; }
 
-    bool lock(Mutex& mutex, Mode mode) {
-        return mode == Mode::S ? read(mutex) : write(mutex);
-    }
-    bool read(Mutex& mutex) {
-        LockV::iterator it = find(uintptr_t(&mutex));
-        if (it != lockV_.end()) {
-            // read shared data.
+    bool read(Mutex& mutex, void *sharedVal, void *dst) {
+        Vec::iterator it = find(uintptr_t(&mutex));
+        if (it != vec_.end()) {
+            Lock& lk = it->lock;
+            if (lk.mode() == Mode::S) {
+                copyValue(dst, sharedVal); // read shared data.
+                return true;
+            }
+            assert(lk.mode() == Mode::X || lk.mode() == Mode::INVALID);
+            copyValue(dst, getLocalValPtr(it->info)); // read local data.
             return true;
         }
-        lockV_.emplace_back();
-        WaitDieLock &lk = lockV_.back();
+        // Try to read lock.
+        vec_.emplace_back();
+        OpEntryL &ope = vec_.back();
+        Lock& lk = ope.lock;
         if (!lk.lock(&mutex, Mode::S, txId_)) {
             // should die.
             return false;
         }
-        // read shared data.
+        copyValue(dst, sharedVal); // read shared data.
         return true;
     }
-    bool write(Mutex& mutex) {
-        LockV::iterator it = find(uintptr_t(&mutex));
-        if (it != lockV_.end()) {
-            WaitDieLock& lk = *it;
-            if (lk.mode() == Mode::S && !lk.upgrade()) {
-                return false;
+    bool write(Mutex& mutex, void *sharedVal, void *src) {
+        Vec::iterator it = find(uintptr_t(&mutex));
+        if (it != vec_.end()) {
+            Lock& lk = it->lock;
+            if (lk.mode() == Mode::S) {
+                if (!lk.upgrade()) return false;
+                it->info.set(allocateLocalVal(), sharedVal);
             }
-            // write shared data.
+            assert(lk.mode() == Mode::X || lk.mode() == Mode::INVALID);
+            copyValue(getLocalValPtr(it->info), src); // write local data.
             return true;
         }
-        lockV_.emplace_back();
-        WaitDieLock &lk = lockV_.back();
+        // This is blind write.
+        vec_.emplace_back();
+        OpEntryL& ope = vec_.back();
+        // Lock will be tried later. See blindWriteLockAll().
+        ope.lock.setMutex(&mutex); // for search.
+        bwV_.emplace_back(&mutex, vec_.size() - 1);
+        ope.info.set(allocateLocalVal(), sharedVal);
+        copyValue(getLocalValPtr(ope.info), src); // write local data.
+        return true;
+    }
+    bool readForUpdate(Mutex& mutex, void *sharedVal, void *dst) {
+        Vec::iterator it = find(uintptr_t(&mutex));
+        if (it != vec_.end()) {
+            // Found.
+            Lock& lk = it->lock;
+            LocalValInfo& info = it->info;
+            if (lk.mode() == Mode::X) {
+                copyValue(dst, getLocalValPtr(info)); // read local data.
+                return true;
+            }
+            if (lk.mode() == Mode::S) {
+                if (!lk.upgrade()) return false;
+                info.set(allocateLocalVal(), sharedVal);
+                void* localVal = getLocalValPtr(info);
+                copyValue(localVal, sharedVal); // for next read.
+                copyValue(dst, localVal); // read local data.
+                return true;
+            }
+            assert(lk.mode() == Mode::INVALID);
+            copyValue(dst, getLocalValPtr(info)); // read local data.
+            return true;
+        }
+        // Not found. Try to write lock.
+        vec_.emplace_back();
+        OpEntryL &ope = vec_.back();
+        Lock& lk = ope.lock;
+        LocalValInfo& info = ope.info;
         if (!lk.lock(&mutex, Mode::X, txId_)) {
             // should die.
             return false;
         }
-        // write shared data.
+        info.set(allocateLocalVal(), sharedVal);
+        void* localVal = getLocalValPtr(info);
+        copyValue(localVal, sharedVal); // for next read.
+        copyValue(dst, localVal); // read local data.
         return true;
     }
-    void clear() {
-        lockV_.clear(); // unlock.
+
+    bool blindWriteLockAll() {
+        for (BlindWriteInfo& bwInfo : bwV_) {
+            OpEntryL& ope = vec_[bwInfo.idx];
+            assert(ope.lock.mode() == Mode::INVALID);
+            if (!ope.lock.lock(bwInfo.mutex, Mode::X, txId_)) {
+                // should die.
+                return false;
+            }
+        }
+        return true;
+    }
+    void updateAndUnlock() {
+        // serialization point.
+
+        for (OpEntryL& ope : vec_) {
+            Lock& lk = ope.lock;
+            if (lk.mode() == Mode::X) {
+                // update.
+                LocalValInfo& info = ope.info;
+                copyValue(info.sharedVal, getLocalValPtr(info));
+            } else {
+                assert(lk.mode() == Mode::S);
+            }
+#if 1 // unlock one by one.
+            OpEntryL garbage(std::move(ope)); // will be unlocked soon.
+#endif
+        }
+        vec_.clear();
         index_.clear();
+        local_.clear();
+        bwV_.clear();
+    }
+    void unlock() {
+        vec_.clear(); // unlock.
+        index_.clear();
+        local_.clear();
+        bwV_.clear();
     }
     bool empty() const {
-        return lockV_.empty() && index_.empty();
+        return vec_.empty() && index_.empty();
     }
 private:
-    LockV::iterator find(uintptr_t key) {
-        const size_t threshold = 4096 / sizeof(WaitDieLock);
-        if (lockV_.size() > threshold) {
-            for (size_t i = index_.size(); i < lockV_.size(); i++) {
-                index_[lockV_[i].getMutexId()] = i;
+    Vec::iterator find(uintptr_t key) {
+        // at most 4KiB scan.
+        const size_t threshold = 4096 / sizeof(OpEntryL);
+        if (vec_.size() > threshold) {
+            for (size_t i = index_.size(); i < vec_.size(); i++) {
+                index_[vec_[i].lock.getMutexId()] = i;
             }
             Index::iterator it = index_.find(key);
             if (it == index_.end()) {
-                return lockV_.end();
+                return vec_.end();
             } else {
                 size_t idx = it->second;
-                return lockV_.begin() + idx;
+                return vec_.begin() + idx;
             }
         }
         return std::find_if(
-            lockV_.begin(), lockV_.end(),
-            [&](const WaitDieLock& lk) {
-                return lk.getMutexId() == key;
+            vec_.begin(), vec_.end(),
+            [&](const OpEntryL& ope) {
+                return ope.lock.getMutexId() == key;
             });
+    }
+    void* getLocalValPtr(const LocalValInfo& info) {
+#ifdef NO_PAYLOAD
+        return nullptr;
+#else
+        if (info.localValIdx == UINT64_MAX) {
+            return nullptr;
+        } else {
+            return &local_[info.localValIdx];
+        }
+#endif
+    }
+    void copyValue(void* dst, const void* src) {
+#ifndef NO_PAYLOAD
+        ::memcpy(dst, src, valueSize_);
+#endif
+    }
+    size_t allocateLocalVal() {
+        const size_t idx = local_.size();
+#ifndef NO_PAYLOAD
+        local_.resize(idx + 1);
+#endif
+        return idx;
     }
 };
 

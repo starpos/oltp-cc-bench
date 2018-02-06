@@ -932,8 +932,8 @@ public:
 
 private:
     typename Vec::iterator findInVec(uintptr_t key) {
-        // 4KiB scan in average.
-        const size_t threshold = 4096 * 2 / sizeof(Lock);
+        // at most 4KiB scan.
+        const size_t threshold = 4096 / (sizeof(Lock) + payloadSize());
         if (vec_.size() > threshold) {
             // create indexes.
             for (size_t i = map_.size(); i < vec_.size(); i++) {
