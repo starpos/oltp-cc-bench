@@ -177,7 +177,6 @@ public:
 };
 
 
-
 /**
  * Simple writer-reader mutex.
  */
@@ -220,20 +219,20 @@ public:
      * S --> X
      */
     bool tryUpgrade() {
-        int v = atomicLoad();
+        int v = load(v_);
         if (v > 1) return false;
         assert(v == 1);
-        return compareAndSwap(v, -1);
+        return compareExchange(v_, v, -1, __ATOMIC_RELAXED);
     }
     void upgrade() {
-        int v = atomicLoad();
+        int v = load(v_);
         for (;;) {
             while (v > 1) {
                 _mm_pause();
-                v = atomicLoad();
+                v = load(v_);
             }
             assert(v == 1);
-            if (compareAndSwap(v, -1)) {
+            if (compareExchange(v_, v, -1, __ATOMIC_RELAXED)) {
                 return;
             }
         }
@@ -249,8 +248,7 @@ public:
         }
     }
     std::string str() const {
-        return cybozu::util::formatString(
-            "XSMutex(%d)", atomicLoad());
+        return cybozu::util::formatString("XSMutex(%d)", load(v_));
     }
 
 private:
@@ -260,12 +258,12 @@ private:
                 _mm_pause();
                 continue;
             }
-            if (atomicLoad() != 0) {
+            if (loadAcquire(v_) != 0) {
                 _mm_pause();
                 continue;
             }
             int v = 0;
-            if (!compareAndSwap(v, -1)) {
+            if (!compareExchange(v_, v, -1, __ATOMIC_ACQUIRE)) {
                 _mm_pause();
                 continue;
             }
@@ -274,15 +272,15 @@ private:
     }
     bool tryLockX() {
 #if 0
-        int v = atomicLoad();
+        int v = loadAcquire(v_);
         if (v != 0) return false;
-        return compareAndSwap(v, -1);
+        return compareExchange(v_, v, -1, __ATOMIC_ACQUIRE);
 #else
         // We should retry CAS.
-        int v = atomicLoad();
+        int v = loadAcquire(v_);
         for (;;) {
             if (v != 0) return false;
-            if (compareAndSwap(v, -1)) {
+            if (compareExchange(v_, v, -1, __ATOMIC_ACQUIRE)) {
                 break;
             }
             _mm_pause();
@@ -296,15 +294,15 @@ private:
     }
     bool tryLockS() {
 #if 0
-        int v = atomicLoad();
+        int v = loadAcquire(v_);
         if (v < 0) return false;
-        return compareAndSwap(v, v + 1);
+        return compareExchange(v_, v, v + 1, __ATOMIC_ACQUIRE);
 #else
         // We should retry CAS.
-        int v = atomicLoad();
+        int v = loadAcquire(v_);
         for (;;) {
             if (v < 0) return false;
-            if (compareAndSwap(v, v + 1)) {
+            if (compareExchange(v_, v, v + 1, __ATOMIC_ACQUIRE)) {
                 break;
             }
             _mm_pause();
@@ -318,12 +316,12 @@ private:
                 _mm_pause();
                 continue;
             }
-            int v = atomicLoad();
+            int v = loadAcquire(v_);
             if (v < 0) {
                 _mm_pause();
                 continue;
             }
-            if (!compareAndSwap(v, v + 1)) {
+            if (!compareExchange(v_, v, v + 1, __ATOMIC_ACQUIRE)) {
                 _mm_pause();
                 continue;
             }
@@ -333,13 +331,6 @@ private:
     void unlockS() noexcept {
         __attribute__((unused)) int ret = __atomic_fetch_sub(&v_, 1, __ATOMIC_RELEASE);
         assert(ret > 0);
-    }
-    // This is used for lock only.
-    bool compareAndSwap(int& before, int after) {
-        return __atomic_compare_exchange_n(&v_, &before, after, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
-    }
-    int atomicLoad() const {
-        return __atomic_load_n(&v_, __ATOMIC_RELAXED);
     }
 };
 
