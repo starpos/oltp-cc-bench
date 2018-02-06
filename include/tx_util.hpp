@@ -11,6 +11,7 @@
 #include "cybozu/exception.hpp"
 #include "thread_util.hpp"
 #include "atomic_wrapper.hpp"
+#include "cache_line_size.hpp"
 
 
 /**
@@ -70,7 +71,6 @@ public:
 class GlobalTxIdGenerator
 {
 private:
-    static constexpr size_t CACHE_LINE_SIZE = 64;
     alignas(CACHE_LINE_SIZE)
     TxId counter_;
     uint8_t fixedBits_;
@@ -160,7 +160,6 @@ public:
 class SimpleTxIdGenerator
 {
 private:
-    static constexpr size_t CACHE_LINE_SIZE = 64;
     alignas(CACHE_LINE_SIZE)
     TxId id_;
 public:

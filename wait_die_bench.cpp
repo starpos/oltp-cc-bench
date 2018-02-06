@@ -374,7 +374,7 @@ int main(int argc, char *argv[]) try
     if (opt.workload == "custom") {
         Shared shared;
 #ifdef MUTEX_ON_CACHELINE
-        shared.recV.setPayloadSize(opt.payload, cybozu::wait_die::CACHE_LINE_SIZE);
+        shared.recV.setPayloadSize(opt.payload, CACHE_LINE_SIZE);
 #else
         shared.recV.setPayloadSize(opt.payload);
 #endif
@@ -394,7 +394,7 @@ int main(int argc, char *argv[]) try
     } else if (opt.workload == "custom3") {
         Shared shared;
 #ifdef MUTEX_ON_CACHELINE
-        shared.recV.setPayloadSize(opt.payload, cybozu::wait_die::CACHE_LINE_SIZE);
+        shared.recV.setPayloadSize(opt.payload, CACHE_LINE_SIZE);
 #else
         shared.recV.setPayloadSize(opt.payload);
 #endif

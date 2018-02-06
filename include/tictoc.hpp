@@ -15,13 +15,11 @@
 #include "lock.hpp"
 #include "arch.hpp"
 #include "vector_payload.hpp"
+#include "cache_line_size.hpp"
 
 
 namespace cybozu {
 namespace tictoc {
-
-
-constexpr size_t CACHE_LINE_SIZE = 64;
 
 
 struct TsWord

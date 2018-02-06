@@ -7,6 +7,8 @@
 #include <cinttypes>
 #include "util.hpp"
 #include "allocator.hpp"
+#include "cache_line_size.hpp"
+
 
 //#define DEBUG_PRINT
 #undef DEBUG_PRINT
@@ -14,12 +16,6 @@
 
 namespace cybozu {
 namespace lock {
-
-namespace sxql_local {
-
-constexpr size_t CACHE_LINE_SIZE = 64;
-
-} // namepsace sxql_local
 
 
 /**
@@ -71,7 +67,7 @@ struct NodePtrAndIsWriter
 struct Node
 {
 #ifdef MUTEX_ON_CACHELINE
-    alignas(sxql_local::CACHE_LINE_SIZE)
+    alignas(CACHE_LINE_SIZE)
 #else
     alignas(8)
 #endif
@@ -173,7 +169,7 @@ struct Mutex
     enum class Mode : uint8_t { Invalid = 0, X, S, };
 
 #ifdef MUTEX_ON_CACHELINE
-    alignas(sxql_local::CACHE_LINE_SIZE)
+    alignas(CACHE_LINE_SIZE)
 #else
     alignas(16)
 #endif

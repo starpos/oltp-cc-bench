@@ -1,11 +1,10 @@
 #pragma once
 
 #include <cinttypes>
+#include "cache_line_size.hpp"
 
 namespace cybozu {
 namespace util {
-
-constexpr size_t CACHE_LINE_SIZE = 64;
 
 
 class Balancer2x2

@@ -11,6 +11,8 @@
 #include "lock.hpp"
 #include "arch.hpp"
 #include "vector_payload.hpp"
+#include "cache_line_size.hpp"
+
 
 #define USE_OCC_MCS
 //#undef USE_OCC_MCS
@@ -18,8 +20,6 @@
 
 namespace cybozu {
 namespace occ {
-
-constexpr size_t CACHE_LINE_SIZE = 64;
 
 struct OccLockData
 {

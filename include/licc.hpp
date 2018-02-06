@@ -10,17 +10,11 @@
 #include "pqlock.hpp"
 #include "arch.hpp"
 #include "vector_payload.hpp"
+#include "cache_line_size.hpp"
 
 
 namespace cybozu {
 namespace lock {
-
-namespace licc_local {
-
-constexpr size_t CACHE_LINE_SIZE = 64;
-
-} // namespace licc_local
-
 
 /**
  * This is very simple epoch generator.

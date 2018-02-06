@@ -4,13 +4,13 @@
  */
 #include "lock_data.hpp"
 #include "arch.hpp"
+#include "cache_line_size.hpp"
 
 
 namespace cybozu {
 namespace wait_die {
 
 using uint128_t = __uint128_t;
-constexpr size_t CACHE_LINE_SIZE = 64;
 
 #ifndef USE_64BIT_TXID
 using TxId = uint32_t;

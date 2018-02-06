@@ -27,7 +27,6 @@ namespace cybozu {
 namespace lock {
 
 using uint128_t = __uint128_t;
-constexpr size_t CACHE_LINE_SIZE = 64;
 
 /**
  * Mutex lock wrapper.

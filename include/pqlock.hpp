@@ -4,6 +4,8 @@
  */
 #include "lock.hpp"
 #include "atomic_wrapper.hpp"
+#include "cache_line_size.hpp"
+
 
 namespace cybozu {
 namespace lock {
