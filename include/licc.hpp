@@ -725,14 +725,14 @@ public:
      * it can be executed with low overhead.
      * However, this function does not preserve progress guarantee.
      */
-    void invisibleRead(Mutex& mutex, void *sharedValue, void *value) {
-        unused(sharedValue); unused(value);
+    void invisibleRead(Mutex& mutex, void *sharedVal, void *dst) {
+        unused(sharedVal); unused(dst);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it = findInVec(key);
         if (it != vec_.end()) {
             // read local version.
 #ifndef NO_PAYLOAD
-            ((Payload *)it->payload)->loadLocalValue(value, valueSize_);
+            ((Payload *)it->payload)->loadLocalValue(dst, valueSize_);
 #endif
             return;
         }
@@ -742,7 +742,7 @@ public:
         Lock& lk = vec_.back().value;
 #ifndef NO_PAYLOAD
         Payload *payload = (Payload *)vec_.back().payload;
-        payload->sharedValue = sharedValue;
+        payload->sharedValue = sharedVal;
 #endif
 
         lk.initInvisibleRead();
@@ -756,15 +756,15 @@ public:
             if (lk.unchanged()) break;
         }
 #ifndef NO_PAYLOAD
-        payload->loadLocalValue(value, valueSize_);
+        payload->loadLocalValue(dst, valueSize_);
 #endif
     }
     /**
      * You should use this function to read records
      * to preserve progress guarantee.
      */
-    bool reservedRead(Mutex& mutex, void *sharedValue, void *value) {
-        unused(sharedValue); unused(value);
+    bool reservedRead(Mutex& mutex, void *sharedVal, void *dst) {
+        unused(sharedVal); unused(dst);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
@@ -773,9 +773,9 @@ public:
             Lock& lk = vec_.back().value;
 #ifndef NO_PAYLOAD
             Payload *payload = (Payload *)vec_.back().payload;
-            payload->sharedValue = sharedValue;
+            payload->sharedValue = sharedVal;
             lk.readAndReadReserve(payload->sharedValue, payload->localValue, valueSize_);
-            payload->loadLocalValue(value, valueSize_);
+            payload->loadLocalValue(dst, valueSize_);
 #else
             lk.readAndReadReserve(nullptr, nullptr, 0);
 #endif
@@ -789,15 +789,15 @@ public:
         }
         // read local version.
 #ifndef NO_PAYLOAD
-        ((Payload *)it0->payload)->loadLocalValue(value, valueSize_);
+        ((Payload *)it0->payload)->loadLocalValue(dst, valueSize_);
 #endif
         return true;
     }
     /**
      * You should use this function to write records.
      */
-    bool write(Mutex& mutex, void *sharedValue, void *value) {
-        unused(sharedValue); unused(value);
+    bool write(Mutex& mutex, void *sharedVal, void *src) {
+        unused(sharedVal); unused(src);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
@@ -809,8 +809,8 @@ public:
             // write local version.
 #ifndef NO_PAYLOAD
             Payload *payload = (Payload *)vec_.back().payload;
-            payload->sharedValue = sharedValue;
-            payload->storeLocalValue(value, valueSize_);
+            payload->sharedValue = sharedVal;
+            payload->storeLocalValue(src, valueSize_);
 #endif
             return true;
         }
@@ -820,7 +820,7 @@ public:
         }
         // write local version.
 #ifndef NO_PAYLOAD
-        ((Payload *)it0->payload)->storeLocalValue(value, valueSize_);
+        ((Payload *)it0->payload)->storeLocalValue(src, valueSize_);
 #endif
         return true;
     }
@@ -835,8 +835,8 @@ public:
      *
      * (2) is more efficient than (1).
      */
-    bool readForUpdate(Mutex& mutex, void *sharedValue, void *value) {
-        unused(sharedValue); unused(value);
+    bool readForUpdate(Mutex& mutex, void *sharedVal, void *dst) {
+        unused(sharedVal); unused(dst);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
@@ -845,9 +845,9 @@ public:
             Lock& lk = vec_.back().value;
 #ifndef NO_PAYLOAD
             Payload *payload = (Payload *)vec_.back().payload;
-            payload->sharedValue = sharedValue;
+            payload->sharedValue = sharedVal;
             lk.readAndWriteReserve(payload->sharedValue, payload->localValue, valueSize_);
-            payload->loadLocalValue(value, valueSize_); // read local copy.
+            payload->loadLocalValue(dst, valueSize_); // read local copy.
 #else
             lk.readAndWriteReserve(nullptr, nullptr, 0);
 #endif
@@ -859,7 +859,7 @@ public:
         }
 #ifndef NO_PAYLOAD
         Payload *payload = (Payload *)it0->payload;
-        payload->loadLocalValue(value, valueSize_); // read local copy.
+        payload->loadLocalValue(dst, valueSize_); // read local copy.
 #endif
         return true;
     }
