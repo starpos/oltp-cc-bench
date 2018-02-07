@@ -8,6 +8,7 @@
 #include <cassert>
 #include <cstdio>
 #include <unordered_map>
+#include <map>
 #include <list>
 
 
@@ -189,3 +190,11 @@ using SingleThreadUnorderedMap =
                        std::hash<Key>,
                        std::equal_to<Key>,
                        LowOverheadAllocatorT<std::pair<const Key, T> > >;
+
+
+template <typename Key, typename T>
+using SingleThreadMap =
+    std::map<Key,
+             T,
+             std::less<Key>,
+             LowOverheadAllocatorT<std::pair<const Key, T> > >;

@@ -267,7 +267,11 @@ public:
     using OpEntryL = OpEntry<Lock>;
 
 private:
+#if 1
+    using Map = SingleThreadMap<Mutex*, OpEntryL>;
+#else
     using Map = std::map<Mutex*, OpEntryL>;
+#endif
     Map map_;
 
     // Temporary used in recover().
