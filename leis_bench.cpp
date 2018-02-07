@@ -23,6 +23,7 @@ struct Shared
     int longTxMode;
     size_t nrTh4LongTx;
     size_t payload;
+    bool usesRMW;
 };
 
 
@@ -79,7 +80,6 @@ Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
-            bool abort = false;
             rand.setState(randState); // Retries will reproduce the same access pattern.
             for (size_t i = 0; i < realNrOp; i++) {
 #if 0
@@ -92,34 +92,28 @@ Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
                 size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode, recV.size(), realNrOp, i, firstRecIdx);
                 auto& item = recV[key];
                 Mutex& mutex = item.value;
-                void* localVal;
-                if (!llSet.lock(&mutex, mode, item.payload, localVal)) {
-                    res.incAbort(isLongTx);
-                    abort = true;
-                    break;
-                }
-#ifndef NO_PAYLOAD
-                if (mode == Mode::X) {
-                    assert(localVal != nullptr);
-                    ::memcpy(localVal, &value[0], shared.payload);
+                if (mode == Mode::S) {
+                    if (!llSet.read(mutex, item.payload, &value[0])) goto abort;
                 } else {
-                    if (localVal == nullptr) {
-                        ::memcpy(&value[0], item.payload, shared.payload);
+                    assert(mode == Mode::X);
+                    if (shared.usesRMW) {
+                        if (!llSet.readForUpdate(mutex, item.payload, &value[0])) goto abort;
+                        if (!llSet.write(mutex, item.payload, &value[0])) goto abort;
                     } else {
-                        ::memcpy(&value[0], localVal, shared.payload);
+                        if (!llSet.write(mutex, item.payload, &value[0])) goto abort;
                     }
                 }
-#endif
             }
-            if (abort) {
-                llSet.recover();
-                continue;
-            }
-
-            res.incCommit(isLongTx);
+            if (!llSet.blindWriteLockAll()) goto abort;
             llSet.updateAndUnlock();
+            res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);
             break; // retry is not required.
+
+          abort:
+            llSet.recover();
+            res.incAbort(isLongTx);
+            // continue
         }
 
 #if 0
@@ -204,15 +198,17 @@ struct CmdLineOptionPlus : CmdLineOption
 
     int useVector;
     int leisLockType;
+    int usesRMW; // 0 or 1.
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&useVector, 0, "vector", "[0 or 1]: use vector instead of map. (default:0)");
         appendOpt(&leisLockType, 0, "lock", "[id]: leis lock type (0:spin, 1:withmcs, 2:sxql, default:0)");
+        appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write 0:w 1:rmw (default: 1)");
     }
     std::string str() const {
         return cybozu::util::formatString(
-            "mode:leis %s vector:%d lockType:%d"
-            , base::str().c_str(), useVector != 0, leisLockType);
+            "mode:leis %s vector:%d lockType:%d rmw:%d"
+            , base::str().c_str(), useVector != 0, leisLockType, usesRMW ? 1 : 0);
     }
 };
 
@@ -244,6 +240,7 @@ void dispatch1(const CmdLineOptionPlus& opt)
     shared.longTxMode = opt.longTxMode;
     shared.nrTh4LongTx = opt.nrTh4LongTx;
     shared.payload = opt.payload;
+    shared.usesRMW = opt.usesRMW ? 1 : 0;
 
     for (size_t i = 0; i < opt.nrLoop; i++) {
         Result1 res;
