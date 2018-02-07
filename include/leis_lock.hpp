@@ -610,9 +610,6 @@ public:
         typename Vec::iterator it = lower_bound(mutexCmp, vec_.end());
         assert(it != vec_.end());
 
-        // QQQQQ
-
-
         // Release locks.
         assert(tmpMutexV_.size() == 1);
         assert(tmpIsReadV_.size() == 1);
@@ -688,7 +685,7 @@ public:
 #endif
             }
 #if 1 // unlock one by one.
-            OpEntryL garbage(std::move(ope)); // will be unlocked soon.
+            ope.lock.unlock();
 #endif
             ++it;
         }

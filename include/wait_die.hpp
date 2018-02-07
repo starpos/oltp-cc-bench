@@ -399,7 +399,7 @@ public:
                 assert(lk.mode() == Mode::S);
             }
 #if 1 // unlock one by one.
-            OpEntryL garbage(std::move(ope)); // will be unlocked soon.
+            ope.lock.unlock();
 #endif
         }
         vec_.clear();
