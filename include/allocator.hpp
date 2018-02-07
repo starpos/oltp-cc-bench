@@ -180,3 +180,12 @@ public:
         memAlloc().deallocate(p, n * sizeof(T));
     }
 };
+
+
+template <typename Key, typename T>
+using SingleThreadUnorderedMap =
+    std::unordered_map<Key,
+                       T,
+                       std::hash<Key>,
+                       std::equal_to<Key>,
+                       LowOverheadAllocatorT<std::pair<const Key, T> > >;

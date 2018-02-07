@@ -16,6 +16,7 @@
 #include "arch.hpp"
 #include "vector_payload.hpp"
 #include "cache_line_size.hpp"
+#include "allocator.hpp"
 
 
 namespace cybozu {
@@ -382,7 +383,11 @@ class LocalSet
     LockSet ls_;
     Flags flags_;
 
+#if 1
+    using Index = SingleThreadUnorderedMap<uintptr_t, size_t>;
+#else
     using Index = std::unordered_map<uintptr_t, size_t>;
+#endif
     Index ridx_;
     Index widx_;
 

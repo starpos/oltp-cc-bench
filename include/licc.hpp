@@ -672,14 +672,13 @@ class ILockSet
 public:
     using Lock = ILock<PQLock>;
 
-
     //using Vec = std::vector<Lock>;
     using Vec = VectorWithPayload<Lock>;
-    using Map = std::unordered_map<
-        uintptr_t, size_t,
-        std::hash<uintptr_t>,
-        std::equal_to<uintptr_t>,
-        LowOverheadAllocatorT<std::pair<const uintptr_t, size_t> > >;
+#if 1
+    using Map = SingleThreadUnorderedMap<uintptr_t, size_t>;
+#else
+    using Map = std::unordered_map<uintptr_t, size_t>;
+#endif
 
     using Mutex = IMutex<PQLock>;
 

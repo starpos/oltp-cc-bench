@@ -253,7 +253,11 @@ class LockSet
     using Vec = std::vector<OpEntryL>;
 
     // key: mutex addr, value: index in the vector.
+#if 1
+    using Index = SingleThreadUnorderedMap<uintptr_t, size_t>;
+#else
     using Index = std::unordered_map<uintptr_t, size_t>;
+#endif
 
     Vec vec_;
     Index index_;

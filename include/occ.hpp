@@ -12,6 +12,7 @@
 #include "arch.hpp"
 #include "vector_payload.hpp"
 #include "cache_line_size.hpp"
+#include "allocator.hpp"
 
 
 #define USE_OCC_MCS
@@ -297,7 +298,11 @@ private:
     using WriteV = std::vector<WriteEntry>;
 
     // key is mutex pointer, value is index in vector.
+#if 1
+    using IndexM = SingleThreadUnorderedMap<uintptr_t, size_t>;
+#else
     using IndexM = std::unordered_map<uintptr_t, size_t>;
+#endif
 
     WriteV writeV_; // write set.
     IndexM writeM_; // write set index.
