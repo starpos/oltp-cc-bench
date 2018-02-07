@@ -7,6 +7,7 @@
 #include "arch.hpp"
 #include "vector_payload.hpp"
 #include "cache_line_size.hpp"
+#include "nowait.hpp"
 
 
 using Mutex = cybozu::lock::XSMutex;
@@ -27,6 +28,7 @@ struct Shared
     bool usesBackOff;
     size_t nrTh4LongTx;
     size_t payload;
+    bool usesRMW;
 };
 
 Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
@@ -44,6 +46,7 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     cybozu::lock::NoWaitLockSet lockSet;
+    lockSet.init(shared.payload);
     std::vector<uint8_t> value(shared.payload);
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
 
@@ -80,7 +83,6 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
             assert(lockSet.empty());
-            bool abort = false;
             rand.setState(randState);
             for (size_t i = 0; i < realNrOp; i++) {
 #if 0
@@ -95,29 +97,30 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                     recV.size(), realNrOp, i, firstRecIdx);
                 auto& item = recV[key];
                 Mutex& mutex = item.value;
-                if (!lockSet.lock(mutex, mode)) {
-                    abort = true;
-                    break;
-                }
-#ifndef NO_PAYLOAD
-                if (mode == Mode::X) {
-                    ::memcpy(item.payload, &value[0], shared.payload);
-                } else {
-                    ::memcpy(&value[0], item.payload, shared.payload);
-                }
-#endif
-            }
-            if (abort) {
-                res.incAbort(isLongTx);
-                lockSet.clear();
-                if (shared.usesBackOff) backOff(t0, retry, rand);
-                continue;
-            }
 
+                if (mode == Mode::S) {
+                    if (!lockSet.read(mutex, item.payload, &value[0])) goto abort;
+                } else {
+                    assert(mode == Mode::X);
+                    if (shared.usesRMW) {
+                        if (!lockSet.readForUpdate(mutex, item.payload, &value[0])) goto abort;
+                        if (!lockSet.write(mutex, item.payload, &value[0])) goto abort;
+                    } else {
+                        if (!lockSet.write(mutex, item.payload, &value[0])) goto abort;
+                    }
+                }
+            }
+            if (!lockSet.blindWriteLockAll()) goto abort;
+            lockSet.updateAndUnlock();
             res.incCommit(isLongTx);
-            lockSet.clear();
             res.addRetryCount(isLongTx, retry);
             break; // retry is not required.
+
+          abort:
+            res.incAbort(isLongTx);
+            lockSet.unlock();
+            if (shared.usesBackOff) backOff(t0, retry, rand);
+            // continue
         }
     }
     return res;
@@ -200,14 +203,16 @@ struct CmdLineOptionPlus : CmdLineOption
     using base = CmdLineOption;
 
     int usesBackOff; // 0 or 1.
+    int usesRMW; // 0 or 1.
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
+        appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write 0:w 1:rmw (default: 1)");
     }
     std::string str() const {
         return cybozu::util::formatString(
-            "mode:nowait %s backoff:%d"
-            , base::str().c_str(), usesBackOff ? 1 : 0);
+            "mode:nowait %s backoff:%d rmw:%d"
+            , base::str().c_str(), usesBackOff ? 1 : 0, usesRMW ? 1 : 0);
     }
 };
 
@@ -238,6 +243,7 @@ int main(int argc, char *argv[]) try
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         shared.nrTh4LongTx = opt.nrTh4LongTx;
         shared.payload = opt.payload;
+        shared.usesRMW = opt.usesRMW != 0;
         for (size_t i = 0; i < opt.nrLoop; i++) {
             Result1 res;
             runExec(opt, shared, worker2, res);

@@ -359,13 +359,15 @@ public:
     XSLock& operator=(const XSLock&) = delete;
     XSLock& operator=(XSLock&& rhs) { swap(rhs); return *this; }
     void lock(XSMutex *mutex, Mode mode) {
-        assert(!mutex_);
+        assert(mode_ == Mode::Invalid);
+        assert(mutex);
         mutex_ = mutex;
         mode_ = mode;
         mutex_->lock(mode);
     }
     bool tryLock(XSMutex *mutex, Mode mode) {
-        assert(!mutex_);
+        assert(mode_ == Mode::Invalid);
+        assert(mutex);
         mutex_ = mutex;
         mode_ = mode;
         if (mutex_->tryLock(mode)) return true;
@@ -412,87 +414,6 @@ private:
     void swap(XSLock& rhs) {
         std::swap(mutex_, rhs.mutex_);
         std::swap(mode_, rhs.mode_);
-    }
-};
-
-
-class NoWaitLockSet
-{
-    using Mutex = cybozu::lock::XSMutex;
-    using Lock = cybozu::lock::XSLock;
-    using Mode = Mutex::Mode;
-
-    using LockV = std::vector<Lock>;
-    using Index = std::unordered_map<uintptr_t, size_t>;
-
-    LockV lockV_;
-    Index index_;
-
-public:
-    bool lock(Mutex& mutex, Mode mode) {
-        return mode == Mode::S ? read(mutex) : write(mutex);
-    }
-    bool read(Mutex& mutex) {
-        LockV::iterator it = find(uintptr_t(&mutex));
-        if (it != lockV_.end()) {
-            // read shared data.
-            return true;
-        }
-        lockV_.emplace_back();
-        Lock &lk = lockV_.back();
-        if (!lk.tryLock(&mutex, Mode::S)) {
-            // should die.
-            return false;
-        }
-        // read shared data.
-        return true;
-    }
-    bool write(Mutex& mutex) {
-        LockV::iterator it = find(uintptr_t(&mutex));
-        if (it != lockV_.end()) {
-            Lock& lk = *it;
-            if (lk.mode() == Mode::S && !lk.tryUpgrade()) {
-                return false;
-            }
-            // write shared data.
-            return true;
-        }
-        lockV_.emplace_back();
-        Lock &lk = lockV_.back();
-        if (!lk.tryLock(&mutex, Mode::X)) {
-            // should die.
-            return false;
-        }
-        // write shared data.
-        return true;
-    }
-    void clear() {
-        lockV_.clear(); // unlock.
-        index_.clear();
-    }
-    bool empty() const {
-        return lockV_.empty() && index_.empty();
-    }
-private:
-    LockV::iterator find(uintptr_t key) {
-        const size_t threshold = 4096 / sizeof(Lock);
-        if (lockV_.size() > threshold) {
-            for (size_t i = index_.size(); i < lockV_.size(); i++) {
-                index_[lockV_[i].getMutexId()] = i;
-            }
-            Index::iterator it = index_.find(key);
-            if (it == index_.end()) {
-                return lockV_.end();
-            } else {
-                size_t idx = it->second;
-                return lockV_.begin() + idx;
-            }
-        }
-        return std::find_if(
-            lockV_.begin(), lockV_.end(),
-            [&](const Lock& lk) {
-                return lk.getMutexId() == key;
-            });
     }
 };
 
