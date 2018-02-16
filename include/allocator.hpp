@@ -14,6 +14,10 @@
 
 #define ALIGNED_SIZE 4096
 
+#if 0
+#define DEBUG_PRINT_ALLOCATOR
+#endif
+
 
 template <size_t BulkSize = ALIGNED_SIZE, size_t CacheSize = ALIGNED_SIZE * 4>
 class LowOverheadMemoryAllocator
@@ -62,7 +66,9 @@ class LowOverheadMemoryAllocator
 public:
     LowOverheadMemoryAllocator()
         : map_(), freeQ_() {
-        //::printf("LowOverheadMemoryAllocator: cstr %p\n", this); // QQQ
+#ifdef DEBUG_PRINT_ALLOCATOR
+        ::printf("LowOverheadMemoryAllocator: cstr %p\n", this);
+#endif
         addNewFragment();
     }
 #if 0
@@ -78,8 +84,10 @@ public:
         }
         void *p = cur_->second.alloc(size);
         if (p != nullptr) {
-            //::printf("addr %0lx %p\n", getKey(p), cur_->second.buf.data()); // QQQQQ
-            assert(getKey(p) == uintptr_t(cur_->second.buf.data())); // QQQ
+#ifdef DEBUG_PRINT_ALLOCATOR
+            ::printf("addr %0lx %p\n", getKey(p), cur_->second.buf.data());
+#endif
+            assert(getKey(p) == uintptr_t(cur_->second.buf.data()));
             return p;
         }
         addNewFragment();
@@ -94,16 +102,14 @@ public:
         }
         typename Map::iterator it = map_.find(getKey(p));
         assert(it != map_.end());
-        if (it->second.free()) {
-            if (map_.size() == 1) {
-                cur_ = it;
-                return;
-            }
-            //::printf("addTofreeQ: %0lx\n", it->first); // QQQQQ
-            freeQ_.push_front(std::move(it->second));
-            map_.erase(it);
-            gc();
-        }
+        if (!it->second.free()) return;
+        if (cur_ == it) return;
+#ifdef DEBUG_PRINT_ALLOCATOR
+        ::printf("addTofreeQ: %0lx\n", it->first);
+#endif
+        freeQ_.push_front(std::move(it->second));
+        map_.erase(it);
+        gc();
     }
     void addNewFragment() {
         bool ret;
@@ -117,19 +123,25 @@ public:
                 map_.emplace(std::make_pair(frag.key(), std::move(frag)));
             freeQ_.pop_front();
         }
-        //::printf("addNewFragment: %0lx\n", cur_->first); // QQQQQ
+#ifdef DEBUG_PRINT_ALLOCATOR
+        ::printf("addNewFragment: %0lx %d\n", cur_->first, ret);
         //print();
+#endif
         assert(ret);
     }
     static uintptr_t getKey(void *p) {
         uintptr_t ret = uintptr_t(p) & ~(BulkSize - 1);
+#ifdef DEBUG_PRINT_ALLOCATOR
         //::printf("key: %0lx %0lx  %p\n", ret, ret + BulkSize, p);
+#endif
         return ret;
     }
     void gc() {
         const size_t maxSize = (CacheSize - 1) / BulkSize + 1;
         if (freeQ_.size() > maxSize) {
-            //::printf("shrink %zu -> %zu\n", freeQ_.size(), maxSize);
+#ifdef DEBUG_PRINT_ALLOCATOR
+            ::printf("shrink %zu -> %zu\n", freeQ_.size(), maxSize);
+#endif
             freeQ_.resize(maxSize);
         }
     }
