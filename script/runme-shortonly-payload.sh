@@ -22,37 +22,30 @@ ninja
 #for amode in CUSTOM1 CORE; do
 for payload in 0 8 16 32 64 128 256 512 1024; do
 for amode in CORE; do
+for rmw in 0 1; do
 #for amode in CUSTOM1; do
-  #th=96
-  th=32
+  th=96
+  #th=32
   nrMuPerTh=4000
   workload=custom
   period=10
   loop=10
   #amode=CORE
   #amode=CUSTOM1
+  sm=0
 
-  ./nowait_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -payload $payload
-  ./leis_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -vector 0 -amode $amode -payload $payload
-  ./leis_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -vector 1 -amode $amode -payload $payload
-  for rmw in 0 1; do
-    for sm in 0; do
-      echo -n
-      ./occ_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
-      ./tictoc_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -payload $payload
-    done
-  done
-  ./wait_die_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -payload $payload
-  for rmw in 0 1; do
-    for sm in 0; do
-      echo -n
-      ./licc_bench -mode licc-pcc -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
-      ./licc_bench -mode licc-occ -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
-      ./licc_bench -mode licc-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -pqlock 0 -amode $amode -rmw $rmw -sm $sm -payload $payload
-      ./licc_bench -mode licc-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -pqlock 7 -amode $amode -rmw $rmw -sm $sm -payload $payload
-    done
-  done
+  ./nowait_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
+  ./leis_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -vector 0 -amode $amode -rmw $rmw -sm $sm -payload $payload
+  ./leis_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -vector 1 -amode $amode -rmw $rmw -sm $sm -payload $payload
+  ./occ_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
+  ./tictoc_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
+  ./wait_die_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
+  ./licc_bench -mode licc-pcc -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
+  ./licc_bench -mode licc-occ -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
+  ./licc_bench -mode licc-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -pqlock 0 -amode $amode -rmw $rmw -sm $sm -payload $payload
+  ./licc_bench -mode licc-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -pqlock 7 -amode $amode -rmw $rmw -sm $sm -payload $payload
 
 done
-done | tee -a short-only-payload.log.20180125c
+done
+done | tee -a short-only-payload.log.20180209a
 
