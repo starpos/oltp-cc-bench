@@ -7,7 +7,6 @@
 #include <cinttypes>
 #include "util.hpp"
 #include "allocator.hpp"
-#include "cache_line_size.hpp"
 
 
 //#define DEBUG_PRINT
@@ -66,11 +65,6 @@ struct NodePtrAndIsWriter
 
 struct Node
 {
-#ifdef MUTEX_ON_CACHELINE
-    alignas(CACHE_LINE_SIZE)
-#else
-    alignas(8)
-#endif
     uintptr_t nextAndIsWriter;
     bool wait;
 
@@ -168,11 +162,7 @@ struct Mutex
 {
     enum class Mode : uint8_t { Invalid = 0, X, S, };
 
-#ifdef MUTEX_ON_CACHELINE
-    alignas(CACHE_LINE_SIZE)
-#else
     alignas(16)
-#endif
     union {
         uint128_t obj;
         LockData ld;

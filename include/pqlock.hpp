@@ -4,7 +4,6 @@
  */
 #include "lock.hpp"
 #include "atomic_wrapper.hpp"
-#include "cache_line_size.hpp"
 
 
 namespace cybozu {
@@ -44,11 +43,6 @@ public:
         }
     };
     struct Mutex {
-#ifdef MUTEX_ON_CACHELINE
-        alignas(CACHE_LINE_SIZE)
-#else
-        alignas(8)
-#endif
         Node *tail;
         std::vector<Node*> buf; // sort buffer;
         Mutex() : tail(nullptr), buf() {}
@@ -213,9 +207,6 @@ private:
     using PriQueue = std::priority_queue<Node*, std::vector<Node*>, Compare>;
 public:
     struct Mutex {
-#ifdef MUTEX_ON_CACHELINE
-        alignas(CACHE_LINE_SIZE)
-#endif
         TtasSpinlockT<0>::Mutex ttasMutex;
         PriQueue priQ;
         bool locked;
@@ -310,9 +301,6 @@ private:
 
 public:
     struct Mutex {
-#ifdef MUTEX_ON_CACHELINE
-        alignas(CACHE_LINE_SIZE)
-#endif
         Node *tail; // This must be changed by CAS.
         size_t nr; // Number of nodes. atomic access is required.
 
@@ -569,11 +557,6 @@ private:
 
 public:
     struct Mutex {
-#ifdef MUTEX_ON_CACHELINE
-        alignas(CACHE_LINE_SIZE)
-#else
-        alignas(8)
-#endif
         // This must be changed by CAS or XCHG.
         // LSB is used to the manager existance.
         // The manager is almost the lock holder except for the initial procedure.
@@ -766,9 +749,6 @@ private:
     using PriQueue = std::priority_queue<Node*, std::vector<Node*>, Compare>;
 public:
     struct Mutex {
-#ifdef MUTEX_ON_CACHELINE
-        alignas(CACHE_LINE_SIZE)
-#endif
         std::mutex posixMutex;
         PriQueue priQ;
         bool locked;
@@ -906,9 +886,6 @@ void freeReq(std::unique_ptr<Req>&& req)
 
 struct Lock
 {
-#ifdef MUTEX_ON_CACHELINE
-    alignas(CACHE_LINE_SIZE)
-#endif
     Req *head;
     Req *tail;
 #if 0 // debug
@@ -1151,9 +1128,6 @@ static_assert(sizeof(PCtr) <= sizeof(uint128_t), "PCtr size proceeds uint128_t."
 
 struct Node
 {
-#ifdef MUTEX_ON_CACHELINE
-    alignas(CACHE_LINE_SIZE)
-#endif
     PCtr next;
     uint32_t pri; // smaller is prior.
     bool isLocked; // You will get lock when this becomes false.
@@ -1169,9 +1143,6 @@ struct Node
 
 struct Mutex
 {
-#ifdef MUTEX_ON_CACHELINE
-    alignas(CACHE_LINE_SIZE)
-#endif
     PCtr next;
 
     Mutex() : next() { next.init(); }

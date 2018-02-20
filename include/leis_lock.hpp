@@ -11,7 +11,6 @@
 #include <vector>
 #include "lock.hpp"
 #include "sxql.hpp"
-#include "cache_line_size.hpp"
 #include "vector_payload.hpp"
 #include "allocator.hpp"
 #include "write_set.hpp"
@@ -325,11 +324,7 @@ public:
         valueSize_ = valueSize;
 
         if (valueSize == 0) valueSize++;
-#ifdef MUTEX_ON_CACHELINE
-        local_.setSizes(valueSize, CACHE_LINE_SIZE);
-#else
         local_.setSizes(valueSize);
-#endif
     }
 
     bool read(Mutex& mutex, const void* sharedVal, void* dst) {
@@ -686,11 +681,7 @@ public:
         valueSize_ = valueSize;
 
         if (valueSize == 0) valueSize++;
-#ifdef MUTEX_ON_CACHELINE
-        local_.setSizes(valueSize, CACHE_LINE_SIZE);
-#else
         local_.setSizes(valueSize);
-#endif
     }
 
     bool read(Mutex& mutex, const void* sharedVal, void* dst) {

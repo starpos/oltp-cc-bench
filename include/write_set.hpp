@@ -1,6 +1,8 @@
 #pragma once
 #include <cstddef>
 #include <cinttypes>
+#include "cache_line_size.hpp"
+
 
 /**
  * Informatin for write set.

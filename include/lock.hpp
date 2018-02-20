@@ -185,13 +185,7 @@ class XSMutex
 public:
     enum class Mode : uint8_t { Invalid = 0, X, S, };
 private:
-#if 0
-#ifdef MUTEX_ON_CACHELINE
-    alignas(CACHE_LINE_SIZE)
-#endif
-#else
     alignas(sizeof(uintptr_t))
-#endif
     int v_;
 public:
     XSMutex() : v_(0) {}

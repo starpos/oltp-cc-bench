@@ -8,6 +8,8 @@
 #include "measure_util.hpp"
 #include "cpuid.hpp"
 #include "vector_payload.hpp"
+#include "cache_line_size.hpp"
+
 
 using Mutex = cybozu::tictoc::Mutex;
 

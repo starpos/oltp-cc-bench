@@ -11,7 +11,6 @@
 #include "lock.hpp"
 #include "arch.hpp"
 #include "vector_payload.hpp"
-#include "cache_line_size.hpp"
 #include "allocator.hpp"
 
 
@@ -68,13 +67,7 @@ struct OccLockData
 
 struct OccMutex
 {
-#if 0
-#ifdef MUTEX_ON_CACHELINE
-    alignas(CACHE_LINE_SIZE)
-#endif
-#else
     alignas(sizeof(uintptr_t))
-#endif
     uint32_t obj;
 #ifdef USE_OCC_MCS
     cybozu::lock::McsSpinlock::Mutex mcsMutex;
@@ -319,11 +312,7 @@ public:
 
         // MemoryVector does not allow zero-size element.
         if (valueSize == 0) valueSize++;
-#ifdef MUTEX_ON_CACHELINE
-            local_.setSizes(valueSize, CACHE_LINE_SIZE);
-#else
-            local_.setSizes(valueSize);
-#endif
+        local_.setSizes(valueSize);
     }
     void read(Mutex& mutex, void *sharedVal, void *localVal) {
         unused(sharedVal); unused(localVal);

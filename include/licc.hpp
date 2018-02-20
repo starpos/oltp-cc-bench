@@ -721,11 +721,7 @@ public:
         ordId_ = ordId;
         valueSize_ = valueSize;
         if (valueSize == 0) valueSize++;
-#ifdef MUTEX_ON_CACHELINE
-        local_.setSizes(valueSize, CACHE_LINE_SIZE);
-#else
         local_.setSizes(valueSize);
-#endif
     }
     /**
      * This is invisible read which does not modify the mutex so

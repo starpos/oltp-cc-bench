@@ -4,7 +4,6 @@
  */
 #include "lock_data.hpp"
 #include "arch.hpp"
-#include "cache_line_size.hpp"
 #include "vector_payload.hpp"
 #include "write_set.hpp"
 
@@ -94,13 +93,7 @@ class WaitDieLock
 public:
     using Mode = cybozu::lock::LockStateXS::Mode;
     struct Mutex {
-#if 0
-#ifdef MUTEX_ON_CACHELINE
-        alignas(CACHE_LINE_SIZE)
-#endif
-#else
         alignas(sizeof(uintptr_t))
-#endif
         WaitDieData wd;
 
         Mutex() { wd.init(); }
@@ -283,11 +276,7 @@ public:
     void init(size_t valueSize) {
         valueSize_ = valueSize;
         if (valueSize == 0) valueSize++;
-#ifdef MUTEX_ON_CACHELINE
-        local_.setSizes(valueSize, CACHE_LINE_SIZE);
-#else
         local_.setSizes(valueSize);
-#endif
     }
     /* call this before read/write just after a transaction trial starts. */
     void setTxId(TxId txId) { txId_ = txId; }

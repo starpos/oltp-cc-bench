@@ -2,7 +2,6 @@
 #include "lock.hpp"
 #include "write_set.hpp"
 #include "vector_payload.hpp"
-#include "cache_line_size.hpp"
 #include "allocator.hpp"
 
 
@@ -45,11 +44,7 @@ public:
     void init(size_t valueSize) {
         valueSize_ = valueSize;
         if (valueSize == 0) valueSize++;
-#ifdef MUTEX_ON_CACHELINE
-        local_.setSizes(valueSize, CACHE_LINE_SIZE);
-#else
         local_.setSizes(valueSize);
-#endif
     }
 
     bool read(Mutex& mutex, void* sharedVal, void* dst) {
