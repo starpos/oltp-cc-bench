@@ -713,8 +713,10 @@ private:
     Vec vec_;
     MemoryVector local_;
 
-    std::vector<size_t> bwV_; /* index in vec_.
+    std::vector<size_t> bwV_; /* Indexes of blind-writes in vec_.
                                * This is cache to speed up blindWriteReserveAll(). */
+    std::vector<size_t> wV_; /* index in writes in vec_.
+                              * This is cache to speed up protect(). */
 
     // key: mutex pointer.  value: index in vec_.
     Map index_;
@@ -734,6 +736,7 @@ public:
         vec_.reserve(nrReserve);
         local_.reserve(nrReserve);
         bwV_.reserve(nrReserve);
+        wV_.reserve(nrReserve);
     }
     /**
      * This is invisible read which does not modify the mutex so
@@ -797,18 +800,21 @@ public:
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
+            const size_t idx = vec_.size();
             vec_.emplace_back(Lock(mutex, ordId_));
             OpEntryL& ope = vec_.back();
             Lock& lk = ope.lock;
             lk.blindWrite();
             ope.info.set(allocateLocalVal(), sharedVal);
             copyValue(getLocalValPtr(ope.info), src);
-            bwV_.push_back(vec_.size() - 1);
+            bwV_.push_back(idx);
+            wV_.push_back(idx);
             return true;
         }
         Lock& lk = it0->lock;
         if (lk.mode() == AccessMode::INVISIBLE_READ || lk.mode() == AccessMode::RESERVED_READ) {
             if (!lk.upgrade()) return false;
+            wV_.push_back(std::distance(vec_.begin(), it0));
         }
         copyValue(getLocalValPtr(it0->info), src);
         return true;
@@ -829,6 +835,7 @@ public:
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
+            const size_t idx = vec_.size();
             vec_.emplace_back(Lock(mutex, ordId_));
             OpEntryL& ope = vec_.back();
             Lock& lk = ope.lock;
@@ -836,11 +843,13 @@ public:
             void *localVal = getLocalValPtr(ope.info);
             lk.readAndWriteReserve(sharedVal, localVal, valueSize_);
             copyValue(dst, localVal);
+            wV_.push_back(idx);
             return true;
         }
         Lock& lk = it0->lock;
         if (lk.mode() == AccessMode::INVISIBLE_READ || lk.mode() == AccessMode::RESERVED_READ) {
             if (!lk.upgrade()) return false;
+            wV_.push_back(std::distance(vec_.begin(), it0));
         }
         copyValue(dst, getLocalValPtr(it0->info));
         return true;
@@ -893,6 +902,7 @@ public:
         }
         // index_ is invalidated here. Do not use it.
 #endif
+#if 0
         for (OpEntryL& ope : vec_) {
             Lock& lk = ope.lock;
             assert(lk.mode() != AccessMode::BLIND_WRITE);
@@ -900,6 +910,15 @@ public:
                 if (!lk.protect()) return false;
             }
         }
+#else
+        for (size_t i : wV_) {
+            Lock& lk = vec_[i].lock;
+            assert(lk.mode() != AccessMode::BLIND_WRITE);
+            if (lk.mode() == AccessMode::WRITE) {
+                if (!lk.protect()) return false;
+            }
+        }
+#endif
         // Here is serialization point.
         __atomic_thread_fence(__ATOMIC_ACQ_REL);
         return true;
@@ -917,6 +936,7 @@ public:
         return true;
     }
     void updateAndUnlock() {
+#if 0
         for (OpEntryL& ope : vec_) {
             Lock& lk = ope.lock;
             assert(lk.mode() != AccessMode::BLIND_WRITE);
@@ -927,6 +947,17 @@ public:
                 lk.unlock();
             }
         }
+#else
+        for (size_t i : wV_) {
+            OpEntryL& ope = vec_[i];
+            Lock& lk = ope.lock;
+            assert(lk.mode() != AccessMode::WRITE);
+            lk.update();
+            // writeback.
+            copyValue(ope.info.sharedVal, getLocalValPtr(ope.info));
+            lk.unlock();
+        }
+#endif
         clear();
     }
     void clear() {
@@ -934,6 +965,7 @@ public:
         vec_.clear();
         local_.clear();
         bwV_.clear();
+        wV_.clear();
     }
     bool isEmpty() const { return vec_.empty(); }
 
