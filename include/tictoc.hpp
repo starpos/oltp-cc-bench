@@ -415,27 +415,28 @@ public:
             localValIdx = itR->localValIdx;
         } else {
             WriteSet::iterator itW = findInWriteSet(uintptr_t(&mutex));
-            if (itW == ws_.end()) {
+            if (itW != ws_.end()) {
+                // This is blind-written entry.
+                localValIdx = itW->localValIdx;
+            } else {
                 // allocate new local value area.
                 localValIdx = local_.size();
 #ifndef NO_PAYLOAD
                 local_.resize(localValIdx + 1);
 #endif
-            } else {
-                localValIdx = itW->localValIdx;
-            }
-            rs_.emplace_back();
-            Reader& r = rs_.back();
-            r.set(&mutex, localValIdx);
-            r.prepare();
-            for (;;) {
-                // read shared data.
+                rs_.emplace_back();
+                Reader& r = rs_.back();
+                r.set(&mutex, localValIdx);
+                r.prepare();
+                for (;;) {
+                    // read shared data.
 #ifndef NO_PAYLOAD
-                ::memcpy(&local_[localValIdx], sharedVal, valueSize_);
+                    ::memcpy(&local_[localValIdx], sharedVal, valueSize_);
 #endif
-                r.readFence();
-                if (r.isReadSucceeded()) break;
-                r.prepareRetry();
+                    r.readFence();
+                    if (r.isReadSucceeded()) break;
+                    r.prepareRetry();
+                }
             }
         }
         // read local data.
