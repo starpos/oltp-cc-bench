@@ -11,6 +11,7 @@
 #include "arch.hpp"
 #include "vector_payload.hpp"
 #include "cache_line_size.hpp"
+#include "write_set.hpp"
 
 
 namespace cybozu {
@@ -239,17 +240,30 @@ private:
     ILockState state_;
 
 public:
-    ILock(Mutex &mutex, uint32_t ordId) : mutex_(&mutex), ordId_(ordId), state_() {
-        state_.init();
+    ILock() : mutex_(nullptr), ordId_(UINT32_MAX), state_() {
+    }
+    ILock(Mutex &mutex, uint32_t ordId) {
+        init(mutex, ordId);
     }
     ~ILock() {
         unlock();
     }
 
+    void init(Mutex &mutex, uint32_t ordId) {
+        mutex_ = &mutex;
+        ordId_ = ordId;
+        state_.init();
+    }
+
     ILock(const ILock&) = delete;
-    ILock(ILock&&) = default;
+    ILock(ILock&& rhs) : ILock() {
+        swap(rhs);
+    }
     ILock& operator=(const ILock&) = delete;
-    ILock& operator=(ILock&&) = default;
+    ILock& operator=(ILock&& rhs) {
+        swap(rhs);
+        return *this;
+    }
     bool operator<(const ILock& rhs) const {
         return getMutexId() < rhs.getMutexId();
     }
@@ -663,6 +677,12 @@ private:
         st1.protected_ = true;
         return true;
     }
+
+    void swap(ILock& rhs) {
+        std::swap(mutex_, rhs.mutex_);
+        std::swap(ordId_, rhs.ordId_);
+        std::swap(state_, rhs.state_);
+    }
 };
 
 
@@ -672,8 +692,9 @@ class ILockSet
 public:
     using Lock = ILock<PQLock>;
 
-    //using Vec = std::vector<Lock>;
-    using Vec = VectorWithPayload<Lock>;
+    using OpEntryL = OpEntry<Lock>;
+    using Vec = std::vector<OpEntryL>;
+
 #if 1
     using Map = SingleThreadUnorderedMap<uintptr_t, size_t>;
 #else
@@ -686,43 +707,24 @@ private:
     // each item consists of (1) Lock object, (2) pointer to shared value, and (3) local value.
     // (2) and (3) are stored in payload area.
     Vec vec_;
+    MemoryVector local_;
 
     // key: mutex pointer.  value: index in vec_.
-    Map map_;
+    Map index_;
 
     uint32_t ordId_;
     size_t valueSize_;
 
 public:
-    struct Payload {
-        void *sharedValue;
-        uint8_t localValue[0];
-
-        void loadLocalValue(void *value, size_t size) {
-            ::memcpy(value, localValue, size);
-        }
-        void storeLocalValue(const void *value, size_t size) {
-            ::memcpy(localValue, value, size);
-        }
-        void loadSharedValue(size_t size) {
-            ::memcpy(localValue, sharedValue, size);
-        }
-        void storeSharedValue(size_t size) {
-            ::memcpy(sharedValue, localValue, size);
-        }
-    };
-    size_t payloadSize() const {
-        return sizeof(uintptr_t) + valueSize_;
-    }
-
     // You must call this method before read/write operations.
     void init(uint32_t ordId, size_t valueSize) {
         ordId_ = ordId;
         valueSize_ = valueSize;
+        if (valueSize == 0) valueSize++;
 #ifdef MUTEX_ON_CACHELINE
-        vec_.setPayloadSize(payloadSize(), CACHE_LINE_SIZE);
+        local_.setSizes(valueSize, CACHE_LINE_SIZE);
 #else
-        vec_.setPayloadSize(payloadSize());
+        local_.setSizes(valueSize);
 #endif
     }
     /**
@@ -735,34 +737,22 @@ public:
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it = findInVec(key);
         if (it != vec_.end()) {
-            // read local version.
-#ifndef NO_PAYLOAD
-            ((Payload *)it->payload)->loadLocalValue(dst, valueSize_);
-#endif
+            copyValue(dst, getLocalValPtr(it->info));
             return;
         }
-        vec_.emplace_back(mutex, ordId_);
-
-        //Lock& lk = vec_.back();
-        Lock& lk = vec_.back().value;
-#ifndef NO_PAYLOAD
-        Payload *payload = (Payload *)vec_.back().payload;
-        payload->sharedValue = sharedVal;
-#endif
-
+        vec_.emplace_back(Lock(mutex, ordId_));
+        OpEntryL& ope = vec_.back();
+        ope.info.set(allocateLocalVal(), sharedVal);
+        Lock& lk = ope.lock;
+        void *localVal = getLocalValPtr(ope.info);
         lk.initInvisibleRead();
         for (;;) {
             lk.waitForInvisibleRead();
-            // read shared version.
-#ifndef NO_PAYLOAD
-            payload->loadSharedValue(valueSize_);
-#endif
+            copyValue(localVal, sharedVal);
             __atomic_thread_fence(__ATOMIC_ACQUIRE);
             if (lk.unchanged()) break;
         }
-#ifndef NO_PAYLOAD
-        payload->loadLocalValue(dst, valueSize_);
-#endif
+        copyValue(dst, localVal);
     }
     /**
      * You should use this function to read records
@@ -773,29 +763,22 @@ public:
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
-            vec_.emplace_back(mutex, ordId_);
-            //Lock& lk = vec_.back();
-            Lock& lk = vec_.back().value;
-#ifndef NO_PAYLOAD
-            Payload *payload = (Payload *)vec_.back().payload;
-            payload->sharedValue = sharedVal;
-            lk.readAndReadReserve(payload->sharedValue, payload->localValue, valueSize_);
-            payload->loadLocalValue(dst, valueSize_);
-#else
-            lk.readAndReadReserve(nullptr, nullptr, 0);
-#endif
+            vec_.emplace_back(Lock(mutex, ordId_));
+            OpEntryL& ope = vec_.back();
+            ope.info.set(allocateLocalVal(), sharedVal);
+            Lock& lk = ope.lock;
+            void *localVal = getLocalValPtr(ope.info);
+            lk.readAndReadReserve(sharedVal, localVal, valueSize_);
+            copyValue(dst, localVal);
             return true;
         }
-        Lock& lk = it0->value;
+        Lock& lk = it0->lock;
         if (lk.mode() == AccessMode::INVISIBLE_READ) {
             const uint32_t uVer = lk.state().uVer;
             lk.unlockAndReadReserve();
             if (lk.state().uVer != uVer) return false;
         }
-        // read local version.
-#ifndef NO_PAYLOAD
-        ((Payload *)it0->payload)->loadLocalValue(dst, valueSize_);
-#endif
+        copyValue(dst, getLocalValPtr(it0->info));
         return true;
     }
     /**
@@ -806,27 +789,19 @@ public:
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
-            vec_.emplace_back(mutex, ordId_);
-            //Lock& lk = vec_.back();
-            Lock& lk = vec_.back().value;
+            vec_.emplace_back(Lock(mutex, ordId_));
+            OpEntryL& ope = vec_.back();
+            Lock& lk = ope.lock;
             lk.blindWrite();
-
-            // write local version.
-#ifndef NO_PAYLOAD
-            Payload *payload = (Payload *)vec_.back().payload;
-            payload->sharedValue = sharedVal;
-            payload->storeLocalValue(src, valueSize_);
-#endif
+            ope.info.set(allocateLocalVal(), sharedVal);
+            copyValue(getLocalValPtr(ope.info), src);
             return true;
         }
-        Lock& lk = it0->value;
+        Lock& lk = it0->lock;
         if (lk.mode() == AccessMode::INVISIBLE_READ || lk.mode() == AccessMode::RESERVED_READ) {
             if (!lk.upgrade()) return false;
         }
-        // write local version.
-#ifndef NO_PAYLOAD
-        ((Payload *)it0->payload)->storeLocalValue(src, valueSize_);
-#endif
+        copyValue(getLocalValPtr(it0->info), src);
         return true;
     }
     /*
@@ -845,27 +820,20 @@ public:
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
-            vec_.emplace_back(mutex, ordId_);
-            //Lock& lk = vec_.back();
-            Lock& lk = vec_.back().value;
-#ifndef NO_PAYLOAD
-            Payload *payload = (Payload *)vec_.back().payload;
-            payload->sharedValue = sharedVal;
-            lk.readAndWriteReserve(payload->sharedValue, payload->localValue, valueSize_);
-            payload->loadLocalValue(dst, valueSize_); // read local copy.
-#else
-            lk.readAndWriteReserve(nullptr, nullptr, 0);
-#endif
+            vec_.emplace_back(Lock(mutex, ordId_));
+            OpEntryL& ope = vec_.back();
+            Lock& lk = ope.lock;
+            ope.info.set(allocateLocalVal(), sharedVal);
+            void *localVal = getLocalValPtr(ope.info);
+            lk.readAndWriteReserve(sharedVal, localVal, valueSize_);
+            copyValue(dst, localVal);
             return true;
         }
-        Lock& lk = it0->value;
+        Lock& lk = it0->lock;
         if (lk.mode() == AccessMode::INVISIBLE_READ || lk.mode() == AccessMode::RESERVED_READ) {
             if (!lk.upgrade()) return false;
         }
-#ifndef NO_PAYLOAD
-        Payload *payload = (Payload *)it0->payload;
-        payload->loadLocalValue(dst, valueSize_); // read local copy.
-#endif
+        copyValue(dst, getLocalValPtr(it0->info));
         return true;
     }
 
@@ -878,8 +846,19 @@ public:
      */
 
     void blindWriteReserveAll() {
-        for (auto& item : vec_) {
-            Lock& lk = item.value;
+#if 0
+        const size_t threshold = 4096 / sizeof(OpEntryL);
+        if (vec_.size() > threshold) {
+            std::sort(vec_.begin(), vec_.end(),
+                      [](const OpEntryL& a, const OpEntryL& b) {
+                          return a.lock.getMutexId() < b.lock.getMutexId();
+                      });
+        }
+        // index_ is invalidated here. Do not use it.
+#endif
+
+        for (OpEntryL& ope : vec_) {
+            Lock& lk = ope.lock;
             if (lk.mode() == AccessMode::BLIND_WRITE) {
                 lk.blindWriteReserve();
             }
@@ -887,11 +866,17 @@ public:
     }
     bool protectAll() {
 #if 0
-        std::sort(vec_.begin(), vec_.end());
-        // map_ is invalidated here. Do not use it.
+        const size_t threshold = 4096 / sizeof(OpEntryL);
+        if (vec_.size() > threshold) {
+            std::sort(vec_.begin(), vec_.end(),
+                      [](const OpEntryL& a, const OpEntryL& b) {
+                          return a.lock.getMutexId() < b.lock.getMutexId();
+                      });
+        }
+        // index_ is invalidated here. Do not use it.
 #endif
-        for (auto& item : vec_) {
-            Lock& lk = item.value;
+        for (OpEntryL& ope : vec_) {
+            Lock& lk = ope.lock;
             assert(lk.mode() != AccessMode::BLIND_WRITE);
             if (lk.mode() == AccessMode::WRITE) {
                 if (!lk.protect()) return false;
@@ -902,8 +887,8 @@ public:
         return true;
     }
     bool verifyAndUnlock() {
-        for (auto& item : vec_) {
-            Lock& lk = item.value;
+        for (OpEntryL& ope : vec_) {
+            Lock& lk = ope.lock;
             if (lk.mode() == AccessMode::INVISIBLE_READ ||
                 lk.mode() == AccessMode::RESERVED_READ) {
                 if (!lk.unchanged()) return false;
@@ -914,38 +899,37 @@ public:
         return true;
     }
     void updateAndUnlock() {
-        for (auto& item : vec_) {
-            Lock& lk = item.value;
+        for (OpEntryL& ope : vec_) {
+            Lock& lk = ope.lock;
             assert(lk.mode() != AccessMode::BLIND_WRITE);
             if (lk.mode() == AccessMode::WRITE) {
                 lk.update();
-#ifndef NO_PAYLOAD
-                Payload *payload = (Payload *)item.payload;
-                payload->storeSharedValue(valueSize_);
-#endif
+                // writeback.
+                copyValue(ope.info.sharedVal, getLocalValPtr(ope.info));
                 lk.unlock();
             }
         }
         clear();
     }
     void clear() {
-        map_.clear();
+        index_.clear();
         vec_.clear();
+        local_.clear();
     }
     bool isEmpty() const { return vec_.empty(); }
 
 private:
     typename Vec::iterator findInVec(uintptr_t key) {
         // at most 4KiB scan.
-        const size_t threshold = 4096 / (sizeof(Lock) + payloadSize());
+        const size_t threshold = 4096 / sizeof(OpEntryL);
         if (vec_.size() > threshold) {
             // create indexes.
-            for (size_t i = map_.size(); i < vec_.size(); i++) {
-                map_[vec_[i].value.getMutexId()] = i;
+            for (size_t i = index_.size(); i < vec_.size(); i++) {
+                index_[vec_[i].lock.getMutexId()] = i;
             }
             // use indexes.
-            Map::iterator it = map_.find(key);
-            if (it == map_.end()) {
+            Map::iterator it = index_.find(key);
+            if (it == index_.end()) {
                 return vec_.end();
             } else {
                 size_t idx = it->second;
@@ -954,9 +938,32 @@ private:
         }
         return std::find_if(
             vec_.begin(), vec_.end(),
-            [&](const auto& item) {
-                return item.value.getMutexId() == key;
+            [&](const OpEntryL& ope) {
+                return ope.lock.getMutexId() == key;
             });
+    }
+    void* getLocalValPtr(const LocalValInfo& info) {
+#ifdef NO_PAYLOAD
+        return nullptr;
+#else
+        if (info.localValIdx == UINT64_MAX) {
+            return nullptr;
+        } else {
+            return &local_[info.localValIdx];
+        }
+#endif
+    }
+    size_t allocateLocalVal() {
+        const size_t idx = local_.size();
+#ifndef NO_PAYLOAD
+        local_.resize(idx + 1);
+#endif
+        return idx;
+    }
+    void copyValue(void* dst, const void* src) {
+#ifndef NO_PAYLOAD
+        ::memcpy(dst, src, valueSize_);
+#endif
     }
 };
 
