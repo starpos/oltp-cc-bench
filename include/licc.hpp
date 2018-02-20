@@ -684,6 +684,7 @@ public:
 
 private:
     // each item consists of (1) Lock object, (2) pointer to shared value, and (3) local value.
+    // (2) and (3) are stored in payload area.
     Vec vec_;
 
     // key: mutex pointer.  value: index in vec_.
@@ -718,7 +719,11 @@ public:
     void init(uint32_t ordId, size_t valueSize) {
         ordId_ = ordId;
         valueSize_ = valueSize;
+#ifdef MUTEX_ON_CACHELINE
+        vec_.setPayloadSize(payloadSize(), CACHE_LINE_SIZE);
+#else
         vec_.setPayloadSize(payloadSize());
+#endif
     }
     /**
      * This is invisible read which does not modify the mutex so
