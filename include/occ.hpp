@@ -307,12 +307,18 @@ private:
     size_t valueSize_;
 
 public:
-    void init(size_t valueSize) {
+    void init(size_t valueSize, size_t nrReserve) {
         valueSize_ = valueSize;  // 0 can be allowed.
 
         // MemoryVector does not allow zero-size element.
         if (valueSize == 0) valueSize++;
         local_.setSizes(valueSize);
+
+        // For long transactions.
+        writeV_.reserve(nrReserve);
+        readV_.reserve(nrReserve);
+        lockV_.reserve(nrReserve);
+        local_.reserve(nrReserve);
     }
     void read(Mutex& mutex, void *sharedVal, void *localVal) {
         unused(sharedVal); unused(localVal);

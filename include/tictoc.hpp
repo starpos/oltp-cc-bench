@@ -388,12 +388,19 @@ class LocalSet
     size_t valueSize_;
 
 public:
-    void init(size_t valueSize) {
+    void init(size_t valueSize, size_t nrReserve) {
         valueSize_ = valueSize;
 
         // MemoryVector does not allow zero-size element.
         if (valueSize == 0) valueSize++;
         local_.setSizes(valueSize);
+
+        // for long transactions.
+        rs_.reserve(nrReserve);
+        ws_.reserve(nrReserve);
+        ls_.reserve(nrReserve);
+        flags_.reserve(nrReserve);
+        local_.reserve(nrReserve);
     }
 
     void read(Mutex& mutex, void *sharedVal, void *localVal) {

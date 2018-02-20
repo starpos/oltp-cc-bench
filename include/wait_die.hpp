@@ -273,10 +273,14 @@ class LockSet
 
 public:
     // Call this at first once.
-    void init(size_t valueSize) {
+    void init(size_t valueSize, size_t nrReserve) {
         valueSize_ = valueSize;
         if (valueSize == 0) valueSize++;
         local_.setSizes(valueSize);
+
+        vec_.reserve(nrReserve);
+        local_.reserve(nrReserve);
+        bwV_.reserve(nrReserve); // This may be too conservative and memory eater.
     }
     /* call this before read/write just after a transaction trial starts. */
     void setTxId(TxId txId) { txId_ = txId; }

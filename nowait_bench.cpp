@@ -46,7 +46,6 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
     cybozu::lock::NoWaitLockSet lockSet;
-    lockSet.init(shared.payload);
     std::vector<uint8_t> value(shared.payload);
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
 
@@ -63,6 +62,8 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     if (!isLongTx && shortTxMode == USE_MIX_TX) {
         isWriteV.resize(nrOp);
     }
+    lockSet.init(shared.payload, realNrOp);
+
 #if 0
     GetModeFunc<decltype(rand), Mode>
         getMode(boolRand, isWriteV, isLongTx,

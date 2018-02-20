@@ -41,10 +41,15 @@ class NoWaitLockSet
     std::vector<BlindWriteInfo> bwV_;
 
 public:
-    void init(size_t valueSize) {
+    void init(size_t valueSize, size_t nrReserve) {
         valueSize_ = valueSize;
         if (valueSize == 0) valueSize++;
         local_.setSizes(valueSize);
+
+        // for long transactions.
+        vec_.reserve(nrReserve);
+        local_.reserve(nrReserve);
+        bwV_.reserve(nrReserve);
     }
 
     bool read(Mutex& mutex, void* sharedVal, void* dst) {

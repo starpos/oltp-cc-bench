@@ -320,11 +320,12 @@ public:
     /**
      * You must call this at first.
      */
-    void init(size_t valueSize) {
+    void init(size_t valueSize, size_t nrReserve) {
         valueSize_ = valueSize;
 
         if (valueSize == 0) valueSize++;
         local_.setSizes(valueSize);
+        local_.reserve(nrReserve);
     }
 
     bool read(Mutex& mutex, const void* sharedVal, void* dst) {
@@ -677,11 +678,14 @@ public:
     /**
      * You must call this at first.
      */
-    void init(size_t valueSize) {
+    void init(size_t valueSize, size_t nrReserve) {
         valueSize_ = valueSize;
 
         if (valueSize == 0) valueSize++;
         local_.setSizes(valueSize);
+
+        vec_.reserve(nrReserve);
+        local_.reserve(nrReserve);
     }
 
     bool read(Mutex& mutex, const void* sharedVal, void* dst) {
