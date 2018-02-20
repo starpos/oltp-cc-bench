@@ -713,6 +713,9 @@ private:
     Vec vec_;
     MemoryVector local_;
 
+    std::vector<size_t> bwV_; /* index in vec_.
+                               * This is cache to speed up blindWriteReserveAll(). */
+
     // key: mutex pointer.  value: index in vec_.
     Map index_;
 
@@ -730,6 +733,7 @@ public:
         // Reserve for long transaction.
         vec_.reserve(nrReserve);
         local_.reserve(nrReserve);
+        bwV_.reserve(nrReserve);
     }
     /**
      * This is invisible read which does not modify the mutex so
@@ -799,6 +803,7 @@ public:
             lk.blindWrite();
             ope.info.set(allocateLocalVal(), sharedVal);
             copyValue(getLocalValPtr(ope.info), src);
+            bwV_.push_back(vec_.size() - 1);
             return true;
         }
         Lock& lk = it0->lock;
@@ -851,6 +856,7 @@ public:
 
     void blindWriteReserveAll() {
 #if 0
+        // If you use this optimization, do not use bwV_.
         const size_t threshold = 4096 / sizeof(OpEntryL);
         if (vec_.size() > threshold) {
             std::sort(vec_.begin(), vec_.end(),
@@ -861,12 +867,20 @@ public:
         // index_ is invalidated here. Do not use it.
 #endif
 
+#if 0
         for (OpEntryL& ope : vec_) {
             Lock& lk = ope.lock;
             if (lk.mode() == AccessMode::BLIND_WRITE) {
                 lk.blindWriteReserve();
             }
         }
+#else
+        for (size_t i : bwV_) {
+            Lock& lk = vec_[i].lock;
+            assert(lk.mode() == AccessMode::BLIND_WRITE);
+            lk.blindWriteReserve();
+        }
+#endif
     }
     bool protectAll() {
 #if 0
@@ -919,6 +933,7 @@ public:
         index_.clear();
         vec_.clear();
         local_.clear();
+        bwV_.clear();
     }
     bool isEmpty() const { return vec_.empty(); }
 
