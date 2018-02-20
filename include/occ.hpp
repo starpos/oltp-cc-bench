@@ -334,26 +334,28 @@ public:
         } else {
             // For blind-write, you must check write set also.
             WriteV::iterator itW = findInWriteSet(uintptr_t(&mutex));
-            if (itW == writeV_.end()) {
+            if (itW != writeV_.end()) {
+                // This is blind write, so we just read from local write set.
+                localValIdx = itW->localValIdx;
+            } else {
                 // allocate new local value area.
                 localValIdx = local_.size();
 #ifndef NO_PAYLOAD
                 local_.resize(localValIdx + 1);
 #endif
-            } else {
-                localValIdx = itW->localValIdx;
-            }
-            readV_.emplace_back();
-            OccReader& r = readV_.back();
-            r.set(&mutex, localValIdx);
-            for (;;) {
-                r.prepare();
-                // read shared data.
+
+                readV_.emplace_back();
+                OccReader& r = readV_.back();
+                r.set(&mutex, localValIdx);
+                for (;;) {
+                    r.prepare();
+                    // read shared data.
 #ifndef NO_PAYLOAD
-                ::memcpy(&local_[localValIdx], sharedVal, valueSize_);
+                    ::memcpy(&local_[localValIdx], sharedVal, valueSize_);
 #endif
-                r.readFence();
-                if (r.verifyAll()) break;
+                    r.readFence();
+                    if (r.verifyAll()) break;
+                }
             }
         }
         // read local data.
