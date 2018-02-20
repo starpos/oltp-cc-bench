@@ -1042,18 +1042,13 @@ public:
     }
     void allocate(size_t n) {
         deallocate();
-        if (n > 0) {
-            data = getAllocator().allocate(n);
-            size = n;
-        }
+        data = getAllocator().allocate(n);
+        size = n;
     }
     void deallocate() {
-        if (size > 0) {
-            assert(data != nullptr);
-            getAllocator().deallocate(data, size);
-            data = nullptr;
-            size = 0;
-        }
+        getAllocator().deallocate(data, size);
+        data = nullptr;
+        size = 0;
     }
 private:
     static Allocator& getAllocator() {

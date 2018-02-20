@@ -4,7 +4,6 @@
  */
 #pragma once
 #include "cybozu/array.hpp"
-#include <deque>
 #include <cassert>
 #include <cstdio>
 #include <unordered_map>
@@ -96,6 +95,7 @@ public:
         return p;
     }
     void deallocate(void *p, size_t size) {
+        if (p == nullptr) return;
         if (size > BulkSize) {
             ::free(p);
             return;
