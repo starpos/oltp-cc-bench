@@ -197,6 +197,8 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
             assert(lockSet.isEmpty());
             rand.setState(randState);
             //::printf("begin\n"); // QQQQQ
+            uint64_t ts[6];
+            ts[0] = cybozu::time::rdtscp();
             for (size_t i = 0; i < realNrOp; i++) {
                 //::printf("op %zu\n", i); // debug code
 #if 0
@@ -236,14 +238,33 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                     }
                 }
             }
+            ts[1] = cybozu::time::rdtscp();
             //::printf("try protect %zu\n", retry); // debug code
             lockSet.blindWriteReserveAll();
+            ts[2] = cybozu::time::rdtscp();
             if (!lockSet.protectAll()) goto abort;
+            ts[3] = cybozu::time::rdtscp();
             if (!lockSet.verifyAndUnlock()) goto abort;
+            ts[4] = cybozu::time::rdtscp();
             lockSet.updateAndUnlock();
+            ts[5] = cybozu::time::rdtscp();
             res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);
             //retryMap[retry]++;
+
+            if (isLongTx) {
+                ::printf("read %" PRIu64 "\t"
+                         "bw %" PRIu64 "\t"
+                         "protect %" PRIu64 "\t"
+                         "verify %" PRIu64 "\t"
+                         "update %" PRIu64 "\n"
+                         , ts[1] - ts[0]
+                         , ts[2] - ts[1]
+                         , ts[3] - ts[2]
+                         , ts[4] - ts[3]
+                         , ts[5] - ts[4]);
+            }
+
 #if 0
             nrSuccess++;
 #endif
