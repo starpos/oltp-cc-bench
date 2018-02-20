@@ -183,7 +183,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         const uint32_t ordId = epochTxIdGen.get();
 #endif
 
-        lockSet.init(ordId, shared.payload);
+        lockSet.init(ordId, shared.payload, realNrOp);
         //::printf("Tx begin\n"); // debug code
         size_t firstRecIdx;
 
@@ -369,7 +369,7 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         const uint32_t ordId = epochTxIdGen.get();
 #endif
 
-        lockSet.init(ordId, shared.payload);
+        lockSet.init(ordId, shared.payload, realNrOp);
         uint64_t t0;
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         auto randState = rand.getState();

@@ -704,8 +704,12 @@ public:
     using Mutex = IMutex<PQLock>;
 
 private:
-    // each item consists of (1) Lock object, (2) pointer to shared value, and (3) local value.
-    // (2) and (3) are stored in payload area.
+    /*
+     * For very long transactions, std::vector may not suitable
+     * because resize cost is too high. std::deque may be better.
+     * Here, this is prototype for benchmark,
+     * we must call std::vector::reserve() at init().
+     */
     Vec vec_;
     MemoryVector local_;
 
@@ -717,11 +721,15 @@ private:
 
 public:
     // You must call this method before read/write operations.
-    void init(uint32_t ordId, size_t valueSize) {
+    void init(uint32_t ordId, size_t valueSize, size_t nrReserve) {
         ordId_ = ordId;
         valueSize_ = valueSize;
         if (valueSize == 0) valueSize++;
         local_.setSizes(valueSize);
+
+        // Reserve for long transaction.
+        vec_.reserve(nrReserve);
+        local_.reserve(nrReserve);
     }
     /**
      * This is invisible read which does not modify the mutex so
