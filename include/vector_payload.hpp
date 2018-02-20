@@ -73,7 +73,7 @@ public:
             // shrink.
             nrElem_ = nrElem;
         } else if (nrElem > nrElem_) {
-            reserve(std::max(nrElem, nrElem_ * 2));
+            reserve(nrElem);
             assert(nrElem <= nrReserved_);
             nrElem_ = nrElem;
         } else {
@@ -299,7 +299,7 @@ public:
             nrElem_ = nrElem_;
         } else if (nrElem > nrElem_) {
             // grow.
-            reserve(std::max(nrElem, nrElem_ * 2));
+            reserve(nrElem);
             assert(nrElem <= nrReserved_);
             callCstrRange(nrElem_, nrElem);
             nrElem_ = nrElem;
@@ -581,7 +581,7 @@ public:
             callDstrRange(size, size_);
             size_ = size;
         } else if (size > size_) {
-            reserve(std::max(size, size_ * 2));
+            reserve(size);
             assert(size <= reservedSize_);
             callCstrRange(size_, size);
             size_ = size;
