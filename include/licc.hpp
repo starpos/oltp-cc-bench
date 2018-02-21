@@ -686,6 +686,14 @@ private:
 };
 
 
+/*
+ * LICC index does not lead to good performance.
+ * Its overhead is larger than its gain.
+ */
+//#define USE_LICC_INDEX_CACHE
+#undef USE_LICC_INDEX_CACHE
+
+
 template <typename PQLock>
 class ILockSet
 {
@@ -717,10 +725,12 @@ private:
      * Indexes of blind-writes/writes in vec_.
      * This is cache to speed up blindWriteReserveAll()/protect().
      */
+#ifdef USE_LICC_INDEX_CACHE
 #if 1
     std::vector<size_t> bwV_, wV_;
 #else
     SingleThreadDeque<size_t> bwV_, wV_;
+#endif
 #endif
 
     // key: mutex pointer.  value: index in vec_.
@@ -740,7 +750,7 @@ public:
         // Reserve for long transaction.
         vec_.reserve(nrReserve);
         local_.reserve(nrReserve);
-#if 1
+#ifdef USE_LICC_INDEX_CACHE
         bwV_.reserve(nrReserve);
         wV_.reserve(nrReserve);
 #endif
@@ -807,21 +817,25 @@ public:
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
-            const size_t idx = vec_.size();
             vec_.emplace_back(Lock(mutex, ordId_));
             OpEntryL& ope = vec_.back();
             Lock& lk = ope.lock;
             lk.blindWrite();
             ope.info.set(allocateLocalVal(), sharedVal);
             copyValue(getLocalValPtr(ope.info), src);
+#ifdef USE_LICC_INDEX_CACHE
+            const size_t idx = vec_.size() - 1;
             bwV_.push_back(idx);
             wV_.push_back(idx);
+#endif
             return true;
         }
         Lock& lk = it0->lock;
         if (lk.mode() == AccessMode::INVISIBLE_READ || lk.mode() == AccessMode::RESERVED_READ) {
             if (!lk.upgrade()) return false;
+#ifdef USE_LICC_INDEX_CACHE
             wV_.push_back(std::distance(vec_.begin(), it0));
+#endif
         }
         copyValue(getLocalValPtr(it0->info), src);
         return true;
@@ -842,7 +856,6 @@ public:
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
-            const size_t idx = vec_.size();
             vec_.emplace_back(Lock(mutex, ordId_));
             OpEntryL& ope = vec_.back();
             Lock& lk = ope.lock;
@@ -850,13 +863,18 @@ public:
             void *localVal = getLocalValPtr(ope.info);
             lk.readAndWriteReserve(sharedVal, localVal, valueSize_);
             copyValue(dst, localVal);
+#ifdef USE_LICC_INDEX_CACHE
+            const size_t idx = vec_.size() - 1;
             wV_.push_back(idx);
+#endif
             return true;
         }
         Lock& lk = it0->lock;
         if (lk.mode() == AccessMode::INVISIBLE_READ || lk.mode() == AccessMode::RESERVED_READ) {
             if (!lk.upgrade()) return false;
+#ifdef USE_LICC_INDEX_CACHE
             wV_.push_back(std::distance(vec_.begin(), it0));
+#endif
         }
         copyValue(dst, getLocalValPtr(it0->info));
         return true;
@@ -883,18 +901,18 @@ public:
         // index_ is invalidated here. Do not use it.
 #endif
 
-#if 0
+#ifdef USE_LICC_INDEX_CACHE
+        for (size_t i : bwV_) {
+            Lock& lk = vec_[i].lock;
+            assert(lk.mode() == AccessMode::BLIND_WRITE);
+            lk.blindWriteReserve();
+        }
+#else
         for (OpEntryL& ope : vec_) {
             Lock& lk = ope.lock;
             if (lk.mode() == AccessMode::BLIND_WRITE) {
                 lk.blindWriteReserve();
             }
-        }
-#else
-        for (size_t i : bwV_) {
-            Lock& lk = vec_[i].lock;
-            assert(lk.mode() == AccessMode::BLIND_WRITE);
-            lk.blindWriteReserve();
         }
 #endif
     }
@@ -909,17 +927,18 @@ public:
         }
         // index_ is invalidated here. Do not use it.
 #endif
-#if 0
-        for (OpEntryL& ope : vec_) {
-            Lock& lk = ope.lock;
+
+#ifdef USE_LICC_INDEX_CACHE
+        for (size_t i : wV_) {
+            Lock& lk = vec_[i].lock;
             assert(lk.mode() != AccessMode::BLIND_WRITE);
             if (lk.mode() == AccessMode::WRITE) {
                 if (!lk.protect()) return false;
             }
         }
 #else
-        for (size_t i : wV_) {
-            Lock& lk = vec_[i].lock;
+        for (OpEntryL& ope : vec_) {
+            Lock& lk = ope.lock;
             assert(lk.mode() != AccessMode::BLIND_WRITE);
             if (lk.mode() == AccessMode::WRITE) {
                 if (!lk.protect()) return false;
@@ -933,17 +952,29 @@ public:
     bool verifyAndUnlock() {
         for (OpEntryL& ope : vec_) {
             Lock& lk = ope.lock;
-            if (lk.mode() == AccessMode::INVISIBLE_READ ||
-                lk.mode() == AccessMode::RESERVED_READ) {
+            // read-modify-write entries have been checked at protectAll() already.
+            if (lk.mode() != AccessMode::WRITE) {
+                assert(lk.mode() == AccessMode::INVISIBLE_READ ||
+                       lk.mode() == AccessMode::RESERVED_READ);
                 if (!lk.unchanged()) return false;
-                // S2PL allow unlocking of read locks.
+                // S2PL allows unlocking of read locks here.
                 lk.unlock();
             }
         }
         return true;
     }
     void updateAndUnlock() {
-#if 0
+#ifdef USE_LICC_INDEX_CACHE
+        for (size_t i : wV_) {
+            OpEntryL& ope = vec_[i];
+            Lock& lk = ope.lock;
+            assert(lk.mode() != AccessMode::WRITE);
+            lk.update();
+            // writeback.
+            copyValue(ope.info.sharedVal, getLocalValPtr(ope.info));
+            lk.unlock();
+        }
+#else
         for (OpEntryL& ope : vec_) {
             Lock& lk = ope.lock;
             assert(lk.mode() != AccessMode::BLIND_WRITE);
@@ -954,16 +985,6 @@ public:
                 lk.unlock();
             }
         }
-#else
-        for (size_t i : wV_) {
-            OpEntryL& ope = vec_[i];
-            Lock& lk = ope.lock;
-            assert(lk.mode() != AccessMode::WRITE);
-            lk.update();
-            // writeback.
-            copyValue(ope.info.sharedVal, getLocalValPtr(ope.info));
-            lk.unlock();
-        }
 #endif
         clear();
     }
@@ -971,8 +992,10 @@ public:
         index_.clear();
         vec_.clear();
         local_.clear();
+#ifdef USE_LICC_INDEX_CACHE
         bwV_.clear();
         wV_.clear();
+#endif
     }
     bool isEmpty() const { return vec_.empty(); }
 
