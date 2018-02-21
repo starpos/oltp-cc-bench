@@ -162,6 +162,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 #endif
 
     ILockSet lockSet;
+    lockSet.init(shared.payload, realNrOp);
     std::vector<uint8_t> value(shared.payload);
 
     //std::unordered_map<size_t, size_t> retryMap;
@@ -187,7 +188,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         const uint32_t ordId = epochTxIdGen.get();
 #endif
 
-        lockSet.init(ordId, shared.payload, realNrOp);
+        lockSet.setOrdId(ordId);
         //::printf("Tx begin\n"); // debug code
         size_t firstRecIdx;
 
@@ -398,6 +399,8 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 
     std::vector<uint8_t> value(shared.payload);
     ILockSet lockSet;
+    lockSet.init(shared.payload, realNrOp);
+
 
     while (!start) _mm_pause();
     while (!quit) {
@@ -408,7 +411,7 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         const uint32_t ordId = epochTxIdGen.get();
 #endif
 
-        lockSet.init(ordId, shared.payload, realNrOp);
+        lockSet.setOrdId(ordId);
         uint64_t t0;
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         auto randState = rand.getState();

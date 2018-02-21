@@ -740,9 +740,8 @@ private:
     size_t valueSize_;
 
 public:
-    // You must call this method before read/write operations.
-    void init(uint32_t ordId, size_t valueSize, size_t nrReserve) {
-        ordId_ = ordId;
+    // You must call this method at first.
+    void init(size_t valueSize, size_t nrReserve) {
         valueSize_ = valueSize;
         if (valueSize == 0) valueSize++;
         local_.setSizes(valueSize);
@@ -755,6 +754,11 @@ public:
         wV_.reserve(nrReserve);
 #endif
     }
+    // You must call this method at beginning of each transaction.
+    void setOrdId(uint32_t ordId) {
+        ordId_ = ordId;
+    }
+
     /**
      * This is invisible read which does not modify the mutex so
      * it can be executed with low overhead.
