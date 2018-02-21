@@ -108,6 +108,9 @@ struct ILockShared
 };
 
 
+#undef MONITOR_LATENCY
+
+
 template <typename PQLock>
 Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
 {
@@ -197,8 +200,10 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
             assert(lockSet.isEmpty());
             rand.setState(randState);
             //::printf("begin\n"); // QQQQQ
+#ifdef MONITOR_LATENCY
             uint64_t ts[6];
             ts[0] = cybozu::time::rdtscp();
+#endif
             for (size_t i = 0; i < realNrOp; i++) {
                 //::printf("op %zu\n", i); // debug code
 #if 0
@@ -238,20 +243,31 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                     }
                 }
             }
+#ifdef MONITOR_LATENCY
             ts[1] = cybozu::time::rdtscp();
+#endif
             //::printf("try protect %zu\n", retry); // debug code
             lockSet.blindWriteReserveAll();
+#ifdef MONITOR_LATENCY
             ts[2] = cybozu::time::rdtscp();
+#endif
             if (!lockSet.protectAll()) goto abort;
+#ifdef MONITOR_LATENCY
             ts[3] = cybozu::time::rdtscp();
+#endif
             if (!lockSet.verifyAndUnlock()) goto abort;
+#ifdef MONITOR_LATENCY
             ts[4] = cybozu::time::rdtscp();
+#endif
             lockSet.updateAndUnlock();
+#ifdef MONITOR_LATENCY
             ts[5] = cybozu::time::rdtscp();
+#endif
             res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);
             //retryMap[retry]++;
 
+#ifdef MONITOR_LATENCY
             if (isLongTx) {
                 ::printf("read %" PRIu64 "\t"
                          "bw %" PRIu64 "\t"
@@ -264,6 +280,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                          , ts[4] - ts[3]
                          , ts[5] - ts[4]);
             }
+#endif
 
 #if 0
             nrSuccess++;

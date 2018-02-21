@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <map>
 #include <list>
+#include <deque>
 
 
 #define ALIGNED_SIZE 4096
@@ -210,3 +211,7 @@ using SingleThreadMap =
              T,
              std::less<Key>,
              LowOverheadAllocatorT<std::pair<const Key, T> > >;
+
+
+template <typename T>
+using SingleThreadDeque = std::deque<T, LowOverheadAllocatorT<T> >;

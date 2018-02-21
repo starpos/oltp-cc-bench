@@ -713,10 +713,15 @@ private:
     Vec vec_;
     MemoryVector local_;
 
-    std::vector<size_t> bwV_; /* Indexes of blind-writes in vec_.
-                               * This is cache to speed up blindWriteReserveAll(). */
-    std::vector<size_t> wV_; /* index in writes in vec_.
-                              * This is cache to speed up protect(). */
+    /*
+     * Indexes of blind-writes/writes in vec_.
+     * This is cache to speed up blindWriteReserveAll()/protect().
+     */
+#if 1
+    std::vector<size_t> bwV_, wV_;
+#else
+    SingleThreadDeque<size_t> bwV_, wV_;
+#endif
 
     // key: mutex pointer.  value: index in vec_.
     Map index_;
@@ -735,8 +740,10 @@ public:
         // Reserve for long transaction.
         vec_.reserve(nrReserve);
         local_.reserve(nrReserve);
+#if 1
         bwV_.reserve(nrReserve);
         wV_.reserve(nrReserve);
+#endif
     }
     /**
      * This is invisible read which does not modify the mutex so
