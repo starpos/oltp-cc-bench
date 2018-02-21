@@ -704,9 +704,9 @@ public:
     using Vec = std::vector<OpEntryL>;
 
 #if 1
-    using Map = SingleThreadUnorderedMap<uintptr_t, size_t>;
+    using UMap = SingleThreadUnorderedMap<uintptr_t, size_t>;
 #else
-    using Map = std::unordered_map<uintptr_t, size_t>;
+    using UMap = std::unordered_map<uintptr_t, size_t>;
 #endif
 
     using Mutex = IMutex<PQLock>;
@@ -734,7 +734,7 @@ private:
 #endif
 
     // key: mutex pointer.  value: index in vec_.
-    Map index_;
+    UMap index_;
 
     uint32_t ordId_;
     size_t valueSize_;
@@ -1013,7 +1013,7 @@ private:
                 index_[vec_[i].lock.getMutexId()] = i;
             }
             // use indexes.
-            Map::iterator it = index_.find(key);
+            UMap::iterator it = index_.find(key);
             if (it == index_.end()) {
                 return vec_.end();
             } else {
