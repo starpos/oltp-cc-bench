@@ -403,68 +403,52 @@ public:
         local_.reserve(nrReserve);
     }
 
-    void read(Mutex& mutex, void *sharedVal, void *localVal) {
-        unused(sharedVal); unused(localVal);
-        size_t localValIdx;
+    void read(Mutex& mutex, void *sharedVal, void *dst) {
+        unused(sharedVal); unused(dst);
+        size_t lvidx; // local value index.
         ReadSet::iterator itR = findInReadSet(uintptr_t(&mutex));
         if (itR != rs_.end()) {
-            localValIdx = itR->localValIdx;
+            lvidx = itR->localValIdx;
         } else {
             WriteSet::iterator itW = findInWriteSet(uintptr_t(&mutex));
             if (itW != ws_.end()) {
                 // This is blind-written entry.
-                localValIdx = itW->localValIdx;
+                lvidx = itW->localValIdx;
             } else {
                 // allocate new local value area.
-                localValIdx = local_.size();
-#ifndef NO_PAYLOAD
-                local_.resize(localValIdx + 1);
-#endif
+                lvidx = allocateLocalVal();
                 rs_.emplace_back();
                 Reader& r = rs_.back();
-                r.set(&mutex, localValIdx);
+                r.set(&mutex, lvidx);
                 r.prepare();
                 for (;;) {
-                    // read shared data.
-#ifndef NO_PAYLOAD
-                    ::memcpy(&local_[localValIdx], sharedVal, valueSize_);
-#endif
+                    copyValue(&local_[lvidx], sharedVal); // read shared
                     r.readFence();
                     if (r.isReadSucceeded()) break;
                     r.prepareRetry();
                 }
             }
         }
-        // read local data.
-#ifndef NO_PAYLOAD
-        ::memcpy(localVal, &local_[localValIdx], valueSize_);
-#endif
+        copyValue(dst, &local_[lvidx]); // read local
     }
-    void write(Mutex& mutex, void *sharedVal, void *localVal) {
-        unused(sharedVal); unused(localVal);
-        size_t localValIdx;
+    void write(Mutex& mutex, void *sharedVal, const void *src) {
+        unused(sharedVal); unused(src);
+        size_t lvidx;
         WriteSet::iterator itW = findInWriteSet(uintptr_t(&mutex));
         if (itW != ws_.end()) {
-            localValIdx = itW->localValIdx;
+            lvidx = itW->localValIdx;
         } else {
             ReadSet::iterator itR = findInReadSet(uintptr_t(&mutex));
             if (itR == rs_.end()) {
-                // allocate new local value area.
-                localValIdx = local_.size();
-#ifndef NO_PAYLOAD
-                local_.resize(localValIdx + 1);
-#endif
+                lvidx = allocateLocalVal();
             } else {
-                localValIdx = itR->localValIdx;
+                lvidx = itR->localValIdx;
             }
             ws_.emplace_back();
             Writer& w = ws_.back();
-            w.set(&mutex, sharedVal, localValIdx);
+            w.set(&mutex, sharedVal, lvidx);
         }
-        // write local data.
-#ifndef NO_PAYLOAD
-        ::memcpy(&local_[localValIdx], localVal, valueSize_);
-#endif
+        copyValue(&local_[lvidx], src); // write local
     }
     bool preCommit() {
         bool ret = cybozu::tictoc::preCommit(rs_, ws_, ls_, flags_, local_, valueSize_);
@@ -517,6 +501,18 @@ private:
     bool shouldUseIndex(const Vector& vec) const {
         const size_t threshold = 2048 * 2 / sizeof(typename Vector::value_type);
         return vec.size() > threshold;
+    }
+    void copyValue(void* dst, const void* src) {
+#ifndef NO_PAYLOAD
+        ::memcpy(dst, src, valueSize_);
+#endif
+    }
+    size_t allocateLocalVal() {
+        const size_t idx = local_.size();
+#ifndef NO_PAYLOAD
+        local_.resize(idx + 1);
+#endif
+        return idx;
     }
 };
 
