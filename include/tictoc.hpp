@@ -137,6 +137,7 @@ public:
         spinForUnlocked();
     }
     bool validate(uint64_t commitTs, bool isInWriteSet) {
+#if 0  // old algorithm until 20180222 (first check is missint...it's inefficient.)
         TsWord v1 = mutex_->loadAcquire();
         for (;;) {
             if (tsw_.wts != v1.wts || (v1.rts() <= commitTs && v1.lock && !isInWriteSet)) {
@@ -155,6 +156,41 @@ public:
             if (mutex_->compareAndSwap(v1, v2)) break;
         }
         return true;
+#else  // algorithm from 20180222
+        if (tsw_.rts() >= commitTs) {
+            // tsw_.rts() <= v1.rts is invariant so we can avoid checking.
+            assert(!isInWriteSet); // This is read-only.
+            return true;
+        }
+        TsWord v1 = mutex_->loadAcquire();
+        for (;;) {
+            if (tsw_.wts != v1.wts || (v1.rts() < commitTs && v1.lock && !isInWriteSet)) {
+                /* In the original tictoc paper,
+                   the predicate is
+                   (tsw_.wts != v1.wts || (v1.rts() <= commitTs && v1.lock && !isInWriteSet).
+                   If v1.rts() == commitTs, its read-only entry is valid
+                   because v1.wts() <= commitTs <= v1.rts() is satisfied. */
+                return false;
+            }
+            if (v1.rts() >= commitTs || isInWriteSet) {
+                /* In the original tictoc paper,
+                 * the predicate is (v1.rts() > commitTs).
+                 * However, if v1.rts() == commitTs then extend is not necessary.
+                 * If isInWriteSet then it is not also
+                 * because updateAndUnlock() will update the tsword.. */
+                return true;
+            }
+            // Try to extend rts.
+            uint64_t delta = commitTs - v1.wts;
+            uint64_t shift = delta - (delta & 0x7fff);
+            TsWord v2 = v1;
+            v2.wts += shift;
+            v2.delta = delta - shift;
+            if (mutex_->compareAndSwap(v1, v2)) {
+                return true;
+            }
+        }
+#endif
     }
 private:
     void spinForUnlocked() {
