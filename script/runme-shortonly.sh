@@ -14,13 +14,14 @@ ninja
 #for th in 1 2 4 8 12 16 18 27 36 45 54 63 72 81 90 99 108 117 126 135 144; do
 #for th in 1 2 4 6 8 12 16 20 24 28 32; do
 #for th in 1 2 3 4 6 8 10 12 14 16; do
-for th in 1 2 3 4 8 12 16 20 24 32 40 48 56 64 72 80 88 96; do
+for th in 1 2 4 8 12 16 20 24 32 40 48 56 64 72 80 88 96; do
 #for th in 3 4 8 12 16 20 24 32 40 48 56 64 72 80 88 96; do
 #for th in 3; do
 #for th in 32; do
 #for amode in CUSTOM1 CORE; do
+#for amode in CUSTOM1; do
 for amode in CORE; do
-for rmw in 0 1; do
+for rmw in 0; do
 #for amode in CUSTOM1; do
   nrMuPerTh=4000
   workload=custom
@@ -29,20 +30,24 @@ for rmw in 0 1; do
   payload=8
   #amode=CORE
   #amode=CUSTOM1
+  nrOp=4
+  nrWr=2
   sm=0
 
-  ./nowait_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -payload $payload
-  ./leis_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -vector 0 -amode $amode -rmw $rmw -payload $payload
-  ./leis_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -vector 1 -amode $amode -rmw $rmw -payload $payload
-  ./occ_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
-  ./tictoc_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
-  ./wait_die_bench -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -payload $payload
-  ./licc_bench -mode licc-pcc -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
-  ./licc_bench -mode licc-occ -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -amode $amode -rmw $rmw -sm $sm -payload $payload
-  ./licc_bench -mode licc-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -pqlock 0 -amode $amode -rmw $rmw -sm $sm -payload $payload
-  ./licc_bench -mode licc-hybrid -th $th -mupt $nrMuPerTh -w $workload -p $period -loop $loop -pqlock 7 -amode $amode -rmw $rmw -sm $sm -payload $payload
+  shared_opt="-th $th -mupt $nrMuPerTh -nrop $nrOp -nrwr $nrWr -p $period -loop $loop -amode $amode -rmw $rmw -payload $payload -sm $sm"
+
+  ./nowait_bench $shared_opt
+  ./leis_bench $shared_opt -vector 0
+  ./leis_bench $shared_opt -vector 1
+  ./occ_bench $shared_opt
+  ./tictoc_bench $shared_opt
+  ./wait_die_bench $shared_opt
+  ./licc_bench $shared_opt -mode licc-pcc 
+  ./licc_bench $shared_opt -mode licc-occ 
+  ./licc_bench $shared_opt -mode licc-hybrid -pqlock 0
+  ./licc_bench $shared_opt -mode licc-hybrid -pqlock 7
 
 done
 done
-done | tee -a short-only.log.20180208a
+done | tee -a short-only.log.20180222c
 
