@@ -18,6 +18,7 @@ struct CmdLineOption : cybozu::Option
     size_t nrTh4LongTx; // number of threads running long transaction (0 means no long tx exists.)
     size_t nrOp; // Number of total operations of short transactions.
     size_t nrWr; // Number of write operations of short transactions.
+    size_t nrWr4Long; // Number of write operations of long transactions.
     int shortTxMode; // Short transaction mode. See enum TxMode.
     int longTxMode; // Long transaction mode. See enum TxMode.
     std::string amode; // affinity mode string.
@@ -38,11 +39,12 @@ struct CmdLineOption : cybozu::Option
         appendOpt(&nrTh4LongTx, 1, "th-long", "[size]: number of worker threads running long tx . 0 means no long tx.");
         appendOpt(&nrOp, 4, "nrop", "[num]: number of operations of short transactions (default:4).");
         appendOpt(&nrWr, 2, "nrwr", "[num]: number of write operations of short transactions (default:2).");
+        appendOpt(&nrWr4Long, 2, "nrwr-long", "[num]: number of write operations of long transactions (default:2).");
         appendOpt(&shortTxMode, 0, "sm", "[id]: short Tx mode "
                   "(0:last-writes, 1:first-writes, 2:read-only, 3:write-only, 4:half-and-half, 5:mix, "
                   "6:last-writes-hc, 7:first-writes-hc, 8:last-write-same, 9:first-write-same)");
         appendOpt(&longTxMode, 0, "lm", "[id]: long Tx mode "
-                  "(0:last-writes, 1:first-writes, 2:read-only, 4:half-and-half, "
+                  "(0:last-writes, 1:first-writes, 2:read-only, 4:half-and-half, 5:mix, "
                   "8:last-write-same, 9:first-write-same)");
         appendOpt(&amode, "CORE", "amode", "[MODE]: thread affinity mode (CORE, CUSTOM1, ...)");
         appendOpt(&payload, 0, "payload", "[bytes]: payload size (default:0).");
@@ -72,6 +74,9 @@ struct CmdLineOption : cybozu::Option
         if (nrOp < nrWr) {
             throw cybozu::Exception(NAME) << "nrOp must be >= nrWr.";
         }
+        if (longTxSize < nrWr4Long) {
+            throw cybozu::Exception(NAME) << "longTxSize must be >= nrWr4Long.";
+        }
         if (nrTh4LongTx > nrTh) {
             throw cybozu::Exception(NAME) << "nrTh4LongTx must be <= nrTh.";
         }
@@ -85,10 +90,10 @@ struct CmdLineOption : cybozu::Option
     virtual std::string str() const {
         return cybozu::util::formatString(
             "concurrency:%zu workload:%s nrMutex:%zu nrMuPerTh:%zu "
-            "sec:%zu longTxSize:%zu nrTh4LongTx:%zu nrOp:%zu nrWr:%zu shortTxMode:%d longTxMode:%d payload:%zu "
+            "sec:%zu longTxSize:%zu nrTh4LongTx:%zu nrOp:%zu nrWr:%zu nrWr4Long:%zu shortTxMode:%d longTxMode:%d payload:%zu "
             "amode:%s"
             , nrTh, workload.c_str(), getNrMu(), getNrMuPerTh()
-            , runSec, longTxSize, nrTh4LongTx, nrOp, nrWr, shortTxMode, longTxMode, payload
+            , runSec, longTxSize, nrTh4LongTx, nrOp, nrWr, nrWr4Long, shortTxMode, longTxMode, payload
             , amode.c_str());
     }
 };

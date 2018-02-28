@@ -98,6 +98,7 @@ struct ILockShared
     size_t longTxSize;
     size_t nrOp;
     size_t nrWr;
+    size_t nrWr4Long;
     int shortTxMode;
     int longTxMode;
     bool usesBackOff;
@@ -138,6 +139,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     std::vector<size_t> tmpV; // for fillModeVec
     const bool isLongTx = longTxSize != 0 && idx < shared.nrTh4LongTx;
     const size_t realNrOp = isLongTx ? longTxSize : nrOp;
+    const size_t realNrWr = isLongTx ? shared.nrWr4Long : nrWr;
     if (!isLongTx && shortTxMode == USE_MIX_TX) {
         isWriteV.resize(nrOp);
     }
@@ -212,8 +214,8 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                 IMode mode = getMode(i);
 #else
                 IMode mode = getMode<decltype(rand), IMode>(
-                    boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
-                    realNrOp, nrWr, i);
+                    rand, boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
+                    realNrOp, realNrWr, i);
 #endif
 #if 0
                 size_t key = getRecordIdx(i);
@@ -480,6 +482,7 @@ void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
     shared.longTxSize = opt.longTxSize;
     shared.nrOp = opt.nrOp;
     shared.nrWr = opt.nrWr;
+    shared.nrWr4Long = opt.nrWr4Long;
     shared.shortTxMode = opt.shortTxMode;
     shared.longTxMode = opt.longTxMode;
     shared.usesBackOff = opt.usesBackOff != 0;

@@ -525,7 +525,7 @@ public:
 
 
 template <typename Random, typename Mode>
-Mode getMode(BoolRandom<Random>& boolRand, const std::vector<bool>& isWriteV,
+Mode getMode(Random& rand, BoolRandom<Random>& boolRand, const std::vector<bool>& isWriteV,
              bool isLongTx, int shortTxMode, int longTxMode,
              size_t nrOp, size_t nrWr, size_t i)
 {
@@ -533,6 +533,12 @@ Mode getMode(BoolRandom<Random>& boolRand, const std::vector<bool>& isWriteV,
         switch (longTxMode) {
         case USE_HALF_AND_HALF_TX:
             return boolRand() ? Mode::X : Mode::S;
+        case USE_MIX_TX:
+            {
+                using RInt = typename Random::ResultType;
+                double ratio = (double)nrWr / (double)(nrOp) * (double)(RInt)(-1);
+                return (RInt)ratio > rand() ? Mode::X : Mode::S;
+            }
         case USE_READONLY_TX:
             return Mode::S;
         case USE_FIRST_WRITE_TX:

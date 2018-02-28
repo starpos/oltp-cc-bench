@@ -24,6 +24,7 @@ struct Shared
     size_t longTxSize;
     size_t nrOp;
     size_t nrWr;
+    size_t nrWr4Long;
     int shortTxMode;
     int longTxMode;
     bool usesBackOff;
@@ -75,6 +76,7 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 
     const bool isLongTx = longTxSize != 0 && idx < shared.nrTh4LongTx; // starvation setting.
     const size_t realNrOp = isLongTx ? longTxSize : nrOp;
+    const size_t realNrWr = isLongTx ? shared.nrWr4Long : nrWr;
     if (!isLongTx && shortTxMode == USE_MIX_TX) {
         isWriteV.resize(nrOp);
     }
@@ -119,8 +121,8 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                 Mode mode = getMode(i);
 #else
                 Mode mode = getMode<decltype(rand), Mode>(
-                    boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
-                    realNrOp, nrWr, i);
+                    rand, boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
+                    realNrOp, realNrWr, i);
 #endif
                 size_t key = getRecordIdx(
                     rand, isLongTx, shortTxMode, longTxMode,
@@ -387,6 +389,7 @@ int main(int argc, char *argv[]) try
         shared.longTxSize = opt.longTxSize;
         shared.nrOp = opt.nrOp;
         shared.nrWr = opt.nrWr;
+        shared.nrWr4Long = opt.nrWr4Long;
         shared.shortTxMode = opt.shortTxMode;
         shared.longTxMode = opt.longTxMode;
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;

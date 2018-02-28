@@ -282,6 +282,7 @@ struct TLockShared
     size_t longTxSize;
     size_t nrOp;
     size_t nrWr;
+    size_t nrWr4Long;
     int shortTxMode;
     int longTxMode;
 
@@ -395,7 +396,7 @@ Result1 tWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 #endif
             for (size_t i = 0; i < muIdV.size(); i++) {
                 Mode mode = getMode<decltype(rand), Mode>(
-                    boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
+                    rand, boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
                     nrOp, nrWr, i);
 #ifdef MONITOR
                 {
@@ -822,6 +823,7 @@ struct ILockShared
     size_t longTxSize;
     size_t nrOp;
     size_t nrWr;
+    size_t nrWr4Long;
     int shortTxMode;
     int longTxMode;
 
@@ -924,7 +926,7 @@ Result1 iWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 
             for (size_t i = 0; i < muIdV.size(); i++) {
                 IMode mode = getMode<decltype(rand), IMode>(
-                    boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
+                    rand, boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
                     nrOp, nrWr, i);
 
                 IMutex &mutex = muV[muIdV[i]];
@@ -1087,6 +1089,7 @@ Result1 iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQu
 
     const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
     const size_t realNrOp = isLongTx ? longTxSize : nrOp;
+    const size_t realNrWr = isLongTx ? shared.nrWr4Long : nrWr;
     if (!isLongTx && shortTxMode == USE_MIX_TX) {
         isWriteV.resize(nrOp);
     }
@@ -1129,8 +1132,8 @@ Result1 iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQu
                 IMode mode = getMode(i);
 #else
                 IMode mode = getMode<decltype(rand), IMode>(
-                    boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
-                    realNrOp, nrWr, i);
+                    rand, boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
+                    realNrOp, realNrWr, i);
 
 #endif
                 size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode,
@@ -1405,6 +1408,7 @@ void dispatch1(CmdLineOptionPlus& opt)
         shared.longTxSize = opt.longTxSize;
         shared.nrOp = opt.nrOp;
         shared.nrWr = opt.nrWr;
+        shared.nrWr4Long = opt.nrWr4Long;
         shared.shortTxMode = opt.shortTxMode;
         shared.longTxMode = opt.longTxMode;
         for (size_t i = 0; i < opt.nrLoop; i++) {
@@ -1417,6 +1421,7 @@ void dispatch1(CmdLineOptionPlus& opt)
         shared.longTxSize = opt.longTxSize;
         shared.nrOp = opt.nrOp;
         shared.nrWr = opt.nrWr;
+        shared.nrWr4Long = opt.nrWr4Long;
         shared.shortTxMode = opt.shortTxMode;
         shared.longTxMode = opt.longTxMode;
         for (size_t i = 0; i < opt.nrLoop; i++) {
