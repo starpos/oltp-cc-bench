@@ -39,7 +39,7 @@ struct CmdLineOption : cybozu::Option
         appendOpt(&nrTh4LongTx, 1, "th-long", "[size]: number of worker threads running long tx . 0 means no long tx.");
         appendOpt(&nrOp, 4, "nrop", "[num]: number of operations of short transactions (default:4).");
         appendOpt(&nrWr, 2, "nrwr", "[num]: number of write operations of short transactions (default:2).");
-        appendOpt(&nrWr4Long, 2, "nrwr-long", "[num]: number of write operations of long transactions (default:2).");
+        appendOpt(&nrWr4Long, 0, "nrwr-long", "[num]: number of write operations of long transactions (default:2).");
         appendOpt(&shortTxMode, 0, "sm", "[id]: short Tx mode "
                   "(0:last-writes, 1:first-writes, 2:read-only, 3:write-only, 4:half-and-half, 5:mix, "
                   "6:last-writes-hc, 7:first-writes-hc, 8:last-write-same, 9:first-write-same)");
