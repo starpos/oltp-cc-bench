@@ -25,12 +25,13 @@ do_expr() {
   loop=4
   payload=8
   rmw=0
+  nrWr4Long=2
 
   #for longTxSize in 100 150 200 250 300 350 400 600 800 1k 2k 3k 4k 6k 8k 10k 20k 30k 40k 60k 80k 100k 200k 300k 400k 600k 800k 1m;
   for longTxSize in 100 150 200 250 300 350 400 450 500 600 800 1k 10k 100k 1m;
   #for longTxSize in 100 150 200 250 300 350 400;
   do
-    shared_opt="-th $th -mu $nrMu -p $period -loop $loop -long-tx-size $longTxSize -payload $payload -rmw $rmw"
+    shared_opt="-th $th -mu $nrMu -p $period -loop $loop -long-tx-size $longTxSize -nrwr-long $nrWr4Long -payload $payload -rmw $rmw"
     ./occ_bench $shared_opt
     ./tictoc_bench $shared_opt
     ./licc_bench $shared_opt -mode licc-occ 
@@ -38,7 +39,7 @@ do_expr() {
 
   for longTxSize in 100 1k 4k 10k 20k 30k 40k 60k 80k 100k 200k 300k 400k 600k 800k 1m;
   do
-    shared_opt="-th $th -mu $nrMu -p $period -loop $loop -long-tx-size $longTxSize -payload $payload -rmw $rmw"
+    shared_opt="-th $th -mu $nrMu -p $period -loop $loop -long-tx-size $longTxSize -nrwr-long $nrWr4Long -payload $payload -rmw $rmw"
     ./licc_bench $shared_opt -mode licc-pcc 
     ./licc_bench $shared_opt -mode licc-hybrid
     ./wait_die_bench $shared_opt 

@@ -5,7 +5,7 @@ CXX=clang++-5.0
 #make clean
 #make CXX=$CXX DEBUG=0 LTO=1 MUTEX_ON_CACHELINE=0 -j
 
-if false; then
+if true; then
   make cmake_clean
   cmake -G Ninja . \
 -DCMAKE_CXX_COMPILER=clang++-5.0 \
