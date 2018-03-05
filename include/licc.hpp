@@ -103,6 +103,15 @@ struct ILockData
 };
 
 
+#if 0
+thread_local size_t cas_success = 0;
+thread_local size_t cas_total = 0;
+
+std::atomic<size_t> g_cas_success(0);
+std::atomic<size_t> g_cas_total(0);
+#endif
+
+
 template <typename PQLock>
 struct IMutex
 {
@@ -127,8 +136,13 @@ struct IMutex
     bool compareAndSwap(ILockData &before, const ILockData& after,
                         int mode0 = __ATOMIC_ACQ_REL, int mode1 = __ATOMIC_ACQUIRE) {
 #if 1
-        return __atomic_compare_exchange(
+        bool ret = __atomic_compare_exchange(
             &obj, (uint64_t *)&before, (uint64_t *)&after, false, mode0, mode1);
+#if 0
+        cas_success += ret;
+        cas_total++;
+#endif
+        return ret;
 #else // debug code.
         ILockData before0 = before;
         bool ret = __atomic_compare_exchange(

@@ -116,6 +116,11 @@ struct ILockShared
 template <typename PQLock>
 Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
 {
+#if 0
+    cybozu::lock::cas_success = 0;
+    cybozu::lock::cas_total = 0;
+#endif
+
     using IMutex = typename ILockTypes<PQLock>::IMutex;
     using ILockSet = typename ILockTypes<PQLock>::ILockSet;
 
@@ -336,6 +341,12 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     //}
     //::printf("%zu\n", tdiffTotal / count);
     //::printf("idx %zu factor %zu nrSuccess %zu nrAbort %zu\n", idx, factor, nrSuccess, nrAbort);
+
+#if 0
+    cybozu::lock::g_cas_success += cybozu::lock::cas_success;
+    cybozu::lock::g_cas_total += cybozu::lock::cas_total;
+#endif
+
     return res;
 }
 
@@ -477,6 +488,9 @@ void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
 #else
     shared.recV.setPayloadSize(opt.payload);
 #endif
+#if 0
+    ::printf("element size: %zu\n", shared.recV.elemSize());
+#endif
     shared.recV.resize(opt.getNrMu());
     shared.rmode = strToReadMode(opt.modeStr.c_str());
     shared.longTxSize = opt.longTxSize;
@@ -573,6 +587,10 @@ int main(int argc, char *argv[]) try
 #endif
 
     dispatch0(opt);
+#if 0
+    ::printf("CAS success %zu  total %zu\n"
+        , cybozu::lock::g_cas_success.load(), cybozu::lock::g_cas_total.load());
+#endif
 
 } catch (std::exception& e) {
     ::fprintf(::stderr, "exception: %s\n", e.what());

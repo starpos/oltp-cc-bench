@@ -934,10 +934,10 @@ public:
         }
     }
 
-private:
     size_t elemSize() const {
         return sizeof(T) + payloadSize_;
     }
+private:
     uintptr_t getAddress(size_t i, uintptr_t base = 0) const {
         if (base == 0) base = uintptr_t(data_);
         return base + (elemSize() * i);
