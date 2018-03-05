@@ -41,9 +41,23 @@ struct Shared
 };
 
 
+#if 0
+std::atomic<size_t> g_cas_success(0);
+std::atomic<size_t> g_cas_total(0);
+std::atomic<size_t> g_retry_total(0);
+std::atomic<size_t> g_tx_success(0);
+std::atomic<size_t> g_ts_total(0);
+#endif
+
+
 template <int txIdGenType>
 Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
+#if 0
+    cybozu::wait_die::cas_success = 0;
+    cybozu::wait_die::cas_total = 0;
+#endif
+
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
@@ -88,6 +102,12 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                 shortTxMode, longTxMode, realNrOp, nrWr);
 #endif
 
+#if 0
+    uint64_t ts_total = 0;
+    uint64_t nr_success = 0;
+    uint64_t retry_total = 0;
+#endif
+
     while (!start) _mm_pause();
     size_t count = 0; unused(count);
     while (!quit) {
@@ -111,11 +131,18 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         size_t firstRecIdx;
         uint64_t t0;
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
+#if 0
+        uint64_t ts[3];
+        ts[0] = cybozu::time::rdtscp();
+#endif
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
             if (quit) break; // to quit under starvation.
             assert(lockSet.empty());
             rand.setState(randState);
+#if 0
+            ts[1] = cybozu::time::rdtscp();
+#endif
             for (size_t i = 0; i < realNrOp; i++) {
 #if 0
                 Mode mode = getMode(i);
@@ -145,6 +172,13 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
             lockSet.updateAndUnlock();
             res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);
+#if 0
+            ts[2] = cybozu::time::rdtscp();
+            ts_total += ts[2] - ts[0];
+            nr_success++;
+            retry_total += retry;
+#endif
+            //::printf("last trial latency %" PRIu64 " total latency %" PRIu64 "\n", ts[2] - ts[1], ts[2] - ts[0]);
             break; // retry is not required.
 
           abort:
@@ -154,6 +188,17 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
             // continue
         }
     }
+
+#if 0
+    g_cas_success += cybozu::wait_die::cas_success;
+    g_cas_total += cybozu::wait_die::cas_total;
+    g_retry_total += retry_total;
+    g_tx_success += nr_success;
+    g_ts_total += ts_total;
+#endif
+    //::printf("average latency %f\n", (double)ts_total / (double)nr_success);
+    //::printf("average retry %f\n", (double)retry_total / (double)nr_success);
+
     return res;
 }
 
@@ -420,6 +465,15 @@ int main(int argc, char *argv[]) try
     } else {
         throw cybozu::Exception("bad workload.") << opt.workload;
     }
+
+#if 0
+    ::printf("CAS success %zu total %zu  rate %f\n"
+             , g_cas_success.load(), g_cas_total.load()
+             , (double)(g_cas_success.load()) / (double)g_cas_total.load());
+    ::printf("average retry %f\n", (double)g_retry_total.load() / (double)g_tx_success.load());
+    ::printf("average latency %f\n", (double)g_ts_total.load() / (double)g_tx_success.load());
+#endif
+
 } catch (std::exception& e) {
     ::fprintf(::stderr, "exeption: %s\n", e.what());
 } catch (...) {

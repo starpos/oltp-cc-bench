@@ -88,6 +88,12 @@ struct WaitDieData
 };
 
 
+#if 0
+thread_local size_t cas_success = 0;
+thread_local size_t cas_total = 0;
+#endif
+
+
 class WaitDieLock
 {
 public:
@@ -101,9 +107,14 @@ public:
             return __atomic_load_n(&wd.obj, __ATOMIC_RELAXED);
         }
         bool compareAndSwap(WaitDieData& expected, WaitDieData desired, int mode) {
-            return __atomic_compare_exchange_n(
+            bool ret = __atomic_compare_exchange_n(
                 &wd.obj, &expected.obj, desired.obj,
                 false, mode, __ATOMIC_RELAXED);
+#if 0
+            cas_success += ret;
+            cas_total++;
+#endif
+            return ret;
         }
     };
 
