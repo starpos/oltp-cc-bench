@@ -48,7 +48,7 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     const int longTxMode = shared.longTxMode;
 
     Result1 res;
-    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
 
     std::vector<uint8_t> value(shared.payload);
     cybozu::occ::LockSet lockSet;

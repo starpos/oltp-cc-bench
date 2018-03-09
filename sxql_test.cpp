@@ -24,7 +24,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     std::vector<SXQLock::Mutex>& muV = shared.muV;
 
     Result1 res;
-    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
 
     while (!start) _mm_pause();
     while (!quit) {

@@ -33,7 +33,7 @@ Result1 lockWorker(size_t idx, const bool& start, const bool& quit, bool& should
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
     Result1 res;
-    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
     std::vector<size_t> muIdV(nrOp);
     std::vector<Lock> lockV;
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
@@ -117,7 +117,7 @@ Result1 noWaitWorker(size_t idx, const bool& start, const bool& quit, bool& shou
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
     Result1 res;
-    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
     std::vector<size_t> muIdV(nrOp);
     std::vector<Lock> lockV;
     std::vector<size_t> tmpV; // for fillMuIdVecArray.

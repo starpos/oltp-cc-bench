@@ -319,7 +319,7 @@ Result1 tWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     TxIdGenerator localTxIdGen(&shared.globalTxIdGen);
 
     Result1 res;
-    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
     std::vector<size_t> muIdV(nrOp);
     std::vector<TLock> writeLocks;
     std::vector<TLock> readLocks;
@@ -589,7 +589,7 @@ Result1 readWorker(size_t idx, const bool& start, const bool& quit, bool& should
 
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
     Result1 res;
-    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
     std::vector<size_t> muIdV(4);
     std::vector<TLock> writeLocks;
     std::vector<TLock> readLocks;
@@ -676,7 +676,7 @@ Result1 contentionWorker(size_t idx, const bool& start, const bool& quit, std::v
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
     const bool isLongTx = false;
     Result1 res;
-    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
     assert(nrWr <= nrOp);
 
     std::vector<size_t> muIdV(nrOp);
@@ -861,7 +861,7 @@ Result1 iWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     const int longTxMode = shared.longTxMode;
 
     Result1 res;
-    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
     std::vector<size_t> muIdV(nrOp);
     std::vector<ILock> writeLocks;
     std::vector<ILock> readLocks;
@@ -1075,7 +1075,7 @@ Result1 iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQu
     const int longTxMode = shared.longTxMode;
 
     Result1 res;
-    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
 
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
 

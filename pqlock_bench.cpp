@@ -61,7 +61,7 @@ size_t worker(size_t idx, bool& start, bool& quit, std::vector<typename PQLock::
               std::vector<Resource>& resV, TxIdGen& txIdGen)
 {
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
-    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
 #if 0
     std::vector<size_t> muIdV(4);
 #else

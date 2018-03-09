@@ -138,7 +138,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     const bool usesRMW = shared.usesRMW;
 
     Result1 res;
-    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
     BoolRandom<decltype(rand)> boolRand(rand);
     std::vector<bool> isWriteV;
     std::vector<size_t> tmpV; // for fillModeVec
@@ -381,7 +381,7 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     const bool isLongTx = txSize > 10;
 
     Result2 res;
-    cybozu::util::Xoroshiro128Plus rand(::time(0) + idx);
+    cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
     BoolRandom<decltype(rand)> boolRand(rand);
     const size_t realNrOp = txSize;
 
