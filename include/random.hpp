@@ -169,9 +169,10 @@ private:
     State s_;
 
 public:
-    explicit Xoroshiro128Plus(uint64_t seed) {
+    explicit Xoroshiro128Plus(uint64_t seed, size_t nr = 0) {
         s_[0] = seed;
         s_[1] = SplitMix64(seed)();
+        jump(nr);
     }
     uint64_t operator()() {
         const uint64_t s0 = s_[0];
@@ -185,11 +186,27 @@ public:
     void fill(void *data, size_t size) {
         fillRandom<uint64_t>(*this, data, size);
     }
+    void jump(size_t nr) {
+        for (size_t i = 0; i < nr; i++) jumpOnce();
+    }
     State getState() const { return s_; }
     void setState(State s) { s_ = s; }
 private:
     uint64_t rotl(const uint64_t x, int k) {
         return (x << k) | (x >> (64 - k));
+    }
+    void jumpOnce() {
+	uint64_t s[2] = {0, 0};
+        for (uint64_t jump : {0xbeac0467eba5facb, 0xd86b048b86aa9922}) {
+	    for (size_t b = 0; b < 64; b++) {
+	        if (jump & UINT64_C(1) << b) {
+		    s[0] ^= s_[0];
+		    s[1] ^= s_[1];
+		}
+		operator()();
+	    }
+	}
+	::memcpy(&s_[0], &s[0], sizeof(s_));
     }
 };
 
