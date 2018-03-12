@@ -3,10 +3,12 @@
 #make clean
 #make CXX=clang++-5.0 DEBUG=0 MUTEX_ON_CACHELINE=1 LTO=1 -j
 
+CXX=clang++-6.0
+
 if true; then
   make cmake_clean
   cmake -G Ninja . \
--DCMAKE_CXX_COMPILER=clang++-5.0 \
+-DCMAKE_CXX_COMPILER=${CXX} \
 -DCMAKE_BUILD_TYPE=RelWithDebInfo \
 -DMUTEX_ON_CACHELINE=ON \
 -DLTO=ON
@@ -21,11 +23,13 @@ for th in 1 2 4 8 12 16 20 24 32 40 48 56 64 72 80 88 96; do
 #for th in 3; do
 #for th in 32; do
 #for amode in CUSTOM1 CORE; do
+for amode in CUSTOM1; do
+#for amode in CORE; do
+#for rmw in 0 1; do
+for rmw in 0; do
 #for amode in CUSTOM1; do
-for amode in CORE; do
-for rmw in 0 1; do
-#for amode in CUSTOM1; do
-  nrMuPerTh=1000
+for nrMuPerTh in 2000; do
+  #nrMuPerTh=1000
   workload=custom
   period=10
   loop=10
@@ -51,5 +55,7 @@ for rmw in 0 1; do
 
 done
 done
-done | tee -a short-only.log.20180301a
+done
+done | tee -a short-only.log.20180311a
 
+# 10 cc * 10 period * 10 loop * 2 rmw * 2 amode * 17 threads
