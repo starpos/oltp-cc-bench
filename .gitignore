@@ -28,3 +28,4 @@ cas_bench
 cas_bench2
 licc_bench
 sxql_test
+show_cpu_affinity
