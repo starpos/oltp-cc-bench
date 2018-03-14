@@ -2,6 +2,7 @@
 
 #include "cybozu/option.hpp"
 #include "cybozu/exception.hpp"
+#include "util.hpp"
 #include <string>
 
 struct CmdLineOption : cybozu::Option
