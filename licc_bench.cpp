@@ -8,6 +8,10 @@
 #include "tx_util.hpp"
 #include <algorithm>
 
+#ifdef USE_PARTITION
+#include "partitioned.hpp"
+#endif
+
 
 struct CmdLineOptionPlus : CmdLineOption
 {
@@ -93,7 +97,11 @@ struct ILockShared
 
     //std::vector<IMutex> muV;
     //std::vector<Record<IMutex> > recV;
+#ifdef USE_PARTITION
+    PartitionedVectorWithPayload<IMutex> recV;
+#else
     VectorWithPayload<IMutex> recV;
+#endif
     ReadMode rmode;
     size_t longTxSize;
     size_t nrOp;
@@ -128,7 +136,11 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
     //std::vector<IMutex>& muV = shared.muV;
-    VectorWithPayload<IMutex>& recV = shared.recV;
+    auto& recV = shared.recV;
+#ifdef USE_PARTITION
+    recV.allocate(idx);
+    recV.checkAndWait();
+#endif
     const ReadMode rmode = shared.rmode;
     const size_t longTxSize = shared.longTxSize;
     const size_t nrOp = shared.nrOp;
@@ -366,6 +378,10 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     //std::vector<IMutex>& muV = shared.muV;
     //std::vector<Record<IMutex> >& recV = shared.recV;
     auto& recV = shared.recV;
+#ifdef USE_PARTITION
+    recV.allocate(idx);
+    recV.checkAndWait();
+#endif
     const ReadMode rmode = shared.rmode;
 
     const size_t txSize = [&]() -> size_t {
@@ -482,16 +498,7 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 template <typename PQLock>
 void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
 {
-
-#ifdef MUTEX_ON_CACHELINE
-    shared.recV.setPayloadSize(opt.payload, CACHE_LINE_SIZE);
-#else
-    shared.recV.setPayloadSize(opt.payload);
-#endif
-#if 0
-    ::printf("element size: %zu\n", shared.recV.elemSize());
-#endif
-    shared.recV.resize(opt.getNrMu());
+    initRecordVector(shared.recV, opt);
     shared.rmode = strToReadMode(opt.modeStr.c_str());
     shared.longTxSize = opt.longTxSize;
     shared.nrOp = opt.nrOp;

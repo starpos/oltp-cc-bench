@@ -10,6 +10,9 @@
 #include "vector_payload.hpp"
 #include "cache_line_size.hpp"
 
+#ifdef USE_PARTITION
+#include "partitioned.hpp"
+#endif
 
 using Mutex = cybozu::occ::OccLock::Mutex;
 
@@ -18,7 +21,11 @@ std::vector<uint> CpuId_;
 
 struct Shared
 {
+#ifdef USE_PARTITION
+    PartitionedVectorWithPayload<Mutex> recV;
+#else
     VectorWithPayload<Mutex> recV;
+#endif
     size_t longTxSize;
     size_t nrOp;
     size_t nrWr;
@@ -40,7 +47,11 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
-    VectorWithPayload<Mutex>& recV = shared.recV;
+    auto& recV = shared.recV;
+#ifdef USE_PARTITION
+    recV.allocate(idx);
+    recV.checkAndWait();
+#endif
     const size_t longTxSize = shared.longTxSize;
     const size_t nrOp = shared.nrOp;
     const size_t nrWr = shared.nrWr;
@@ -218,12 +229,7 @@ int main(int argc, char *argv[]) try
 
     if (opt.workload == "custom") {
         Shared shared;
-#ifdef MUTEX_ON_CACHELINE
-        shared.recV.setPayloadSize(opt.payload, CACHE_LINE_SIZE);
-#else
-        shared.recV.setPayloadSize(opt.payload);
-#endif
-        shared.recV.resize(opt.getNrMu());
+        initRecordVector(shared.recV, opt);
         shared.longTxSize = opt.longTxSize;
         shared.nrOp = opt.nrOp;
         shared.nrWr = opt.nrWr;

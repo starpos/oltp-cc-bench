@@ -8,6 +8,10 @@
 #include "vector_payload.hpp"
 #include "cache_line_size.hpp"
 
+#ifdef USE_PARTITION
+#include "partitioned.hpp"
+#endif
+
 
 std::vector<uint> CpuId_;
 
@@ -15,7 +19,12 @@ std::vector<uint> CpuId_;
 template <typename LeisLockType>
 struct Shared
 {
-    VectorWithPayload<typename LeisLockType::Mutex> recV;
+    using Mutex = typename LeisLockType::Mutex;
+#ifdef USE_PARTITION
+    PartitionedVectorWithPayload<Mutex> recV;
+#else
+    VectorWithPayload<Mutex> recV;
+#endif
     size_t longTxSize;
     size_t nrOp;
     size_t nrWr;
@@ -37,7 +46,11 @@ Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
-    VectorWithPayload<Mutex>& recV = shared.recV;
+    auto& recV = shared.recV;
+#ifdef USE_PARTITION
+    recV.allocate(idx);
+    recV.checkAndWait();
+#endif
     const size_t longTxSize = shared.longTxSize;
     const size_t nrOp = shared.nrOp;
     const size_t nrWr = shared.nrWr;
@@ -229,13 +242,7 @@ template <typename Lock>
 void dispatch1(const CmdLineOptionPlus& opt)
 {
     Shared<Lock> shared;
-
-#ifdef MUTEX_ON_CACHELINE
-    shared.recV.setPayloadSize(opt.payload, CACHE_LINE_SIZE);
-#else
-    shared.recV.setPayloadSize(opt.payload);
-#endif
-    shared.recV.resize(opt.getNrMu());
+    initRecordVector(shared.recV, opt);
     shared.longTxSize = opt.longTxSize;
     shared.nrOp = opt.nrOp;
     shared.nrWr = opt.nrWr;

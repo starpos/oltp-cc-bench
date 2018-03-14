@@ -17,7 +17,7 @@
 #include "cybozu/exception.hpp"
 #include "time.hpp"
 #include "arch.hpp"
-
+#include "cache_line_size.hpp"
 
 
 void sleepMs(size_t ms)
@@ -702,4 +702,24 @@ void backOff(uint64_t& t0, size_t retry, Random& rand)
         t2 = cybozu::time::rdtscp();
     }
     t0 = t2;
+}
+
+
+template <typename Vec, typename Opt>
+void initRecordVector(Vec& v, const Opt& opt)
+{
+#ifdef USE_PARTITION
+#ifdef MUTEX_ON_CACHELINE
+    v.setSizes(opt.nrTh, opt.getNrMuPerTh(), opt.payload, CACHE_LINE_SIZE);
+#else
+    v.setSizes(opt.nrTh, opt.getNrMuPerTh(), opt.payload);
+#endif
+#else
+#ifdef MUTEX_ON_CACHELINE
+    v.setPayloadSize(opt.payload, CACHE_LINE_SIZE);
+#else
+    v.setPayloadSize(opt.payload);
+#endif
+    v.resize(opt.getNrMu());
+#endif
 }

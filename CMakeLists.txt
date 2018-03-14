@@ -16,8 +16,10 @@ set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Ofast -DNDEBUG -g")
 # For rtags
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Variables
 set(MUTEX_ON_CACHELINE ON CACHE BOOL "mutex on cacheline")
 set(NO_PAYLOAD OFF CACHE BOOL "payload size 0")
+set(PARTITION OFF CACHE BOOL "Shared records are partitioned for NUMA etc")
 set(LTO ON CACHE BOOL "use LTO")
 
 
@@ -51,6 +53,10 @@ endif()
 message(STATUS "NO_PAYLOAD: " ${NO_PAYLOAD})
 if(NO_PAYLOAD)
 	list(APPEND cflagItems " -DNO_PAYLOAD")
+endif()
+message(STATUS "PARTITION: " ${PARTITION})
+if(PARTITION)
+	list(APPEND cflagItems " -DUSE_PARTITION")
 endif()
 message(STATUS "LTO: " ${LTO})
 if(LTO)

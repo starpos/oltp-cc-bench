@@ -9,6 +9,11 @@
 #include "wait_die.hpp"
 #include "tx_util.hpp"
 
+#ifdef USE_PARTITION
+#include "partitioned.hpp"
+#endif
+
+
 using Lock = cybozu::wait_die::WaitDieLock;
 using Mutex = Lock::Mutex;
 using Mode = Lock::Mode;
@@ -20,7 +25,11 @@ EpochGenerator epochGen_;
 
 struct Shared
 {
+#ifdef USE_PARTITION
+    PartitionedVectorWithPayload<Mutex> recV;
+#else
     VectorWithPayload<Mutex> recV;
+#endif
     size_t longTxSize;
     size_t nrOp;
     size_t nrWr;
@@ -61,7 +70,11 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
-    VectorWithPayload<Mutex>& recV = shared.recV;
+    auto& recV = shared.recV;
+#ifdef USE_PARTITION
+    recV.allocate(idx);
+    recV.checkAndWait();
+#endif
     const size_t longTxSize = shared.longTxSize;
     const size_t nrOp = shared.nrOp;
     const size_t nrWr = shared.nrWr;
@@ -211,7 +224,11 @@ Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
-    VectorWithPayload<Mutex>& recV = shared.recV;
+    auto& recV = shared.recV;
+#ifdef USE_PARTITION
+    recV.allocate(idx);
+    recV.checkAndWait();
+#endif
 
     const size_t txSize = [&]() -> size_t {
         if (idx == 0) {
@@ -425,12 +442,7 @@ int main(int argc, char *argv[]) try
 
     if (opt.workload == "custom") {
         Shared shared;
-#ifdef MUTEX_ON_CACHELINE
-        shared.recV.setPayloadSize(opt.payload, CACHE_LINE_SIZE);
-#else
-        shared.recV.setPayloadSize(opt.payload);
-#endif
-        shared.recV.resize(opt.getNrMu());
+        initRecordVector(shared.recV, opt);
         shared.longTxSize = opt.longTxSize;
         shared.nrOp = opt.nrOp;
         shared.nrWr = opt.nrWr;
@@ -447,12 +459,7 @@ int main(int argc, char *argv[]) try
         }
     } else if (opt.workload == "custom3") {
         Shared shared;
-#ifdef MUTEX_ON_CACHELINE
-        shared.recV.setPayloadSize(opt.payload, CACHE_LINE_SIZE);
-#else
-        shared.recV.setPayloadSize(opt.payload);
-#endif
-        shared.recV.resize(opt.getNrMu());
+        initRecordVector(shared.recV, opt);
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         shared.writePct = opt.writePct;
         shared.usesRMW = opt.usesRMW != 0;
