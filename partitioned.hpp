@@ -18,6 +18,7 @@ class PartitionedVectorWithPayload
     size_t sizePerNode_;
     size_t payloadSize_;
     size_t alignmentSize_;
+    size_t totalSize_;
 public:
     PartitionedVectorWithPayload() = default;
     void setSizes(size_t nrNode, size_t sizePerNode, size_t payloadSize, size_t alignmentSize = sizeof(uintptr_t)) {
@@ -26,6 +27,7 @@ public:
         sizePerNode_ = sizePerNode;
         payloadSize_ = payloadSize;
         alignmentSize_ = alignmentSize;
+        totalSize_ = nrNode * sizePerNode;
     }
     /*
      * Each worker thread must call this to allocate memory
@@ -57,7 +59,9 @@ public:
         return (*v)[posInNode];
     }
     size_t size() const {
-        return vv_.size() * sizePerNode_;
+        assert(nrNode_ = vv_.size());
+        assert(nrNode * sizePerNode_ == totalSize_);
+        return totalSize_;
     }
 
     bool isReady() const {
@@ -74,6 +78,7 @@ public:
     }
 private:
     void getRealPos(size_t pos, size_t& nodeId, size_t& posInNode) const {
+        assert(pos < totalSize_);
         nodeId = pos / sizePerNode_;
         assert(nodeId < nrNode_);
         posInNode = pos % sizePerNode_;
