@@ -83,7 +83,7 @@ struct CmdLineOption : cybozu::Option
         }
     }
     size_t getNrMuPerTh() const {
-        return nrMuPerTh > 0 ? nrMuPerTh : nrMu / nrTh;
+        return nrMuPerTh > 0 ? nrMuPerTh : (nrMu / nrTh == 0 ? 1 : nrMu / nrTh);
     }
     size_t getNrMu() const {
         return nrMuPerTh > 0 ? nrMuPerTh * nrTh : nrMu;

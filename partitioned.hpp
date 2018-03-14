@@ -35,9 +35,12 @@ public:
         std::lock_guard<std::mutex> lk(mu_);
         assert(nodeId < vv_.size());
         VecPtr& v = vv_[nodeId];
-        v.reset(new Vec());
-        v->setPayloadSize(payloadSize_, alignmentSize_);
-        v->resize(sizePerNode_);
+        // This will be reused.
+        if (!v) {
+            v.reset(new Vec());
+            v->setPayloadSize(payloadSize_, alignmentSize_);
+            v->resize(sizePerNode_);
+        }
     }
     DataWithPayload<T>& operator[](size_t pos) {
         size_t nodeId, posInNode;
