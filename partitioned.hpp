@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include "vector_payload.hpp"
 #include "arch.hpp"
+#include "div.hpp"
 
 
 template <typename T>
@@ -83,10 +84,12 @@ private:
 #if 0
         nodeId = pos / sizePerNode_;
         posInNode = pos % sizePerNode_;
-#else
+#elif 0
         const ldiv_t d = ::ldiv(pos, sizePerNode_);
         nodeId = d.quot;
         posInNode = d.rem;
+#else
+        div(pos, sizePerNode_, nodeId, posInNode);
 #endif
         assert(nodeId < nrNode_);
     }
