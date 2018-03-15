@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <mutex>
+#include <cstdlib>
 #include "vector_payload.hpp"
 #include "arch.hpp"
 
@@ -79,8 +80,14 @@ public:
 private:
     void getRealPos(size_t pos, size_t& nodeId, size_t& posInNode) const {
         assert(pos < totalSize_);
+#if 0
         nodeId = pos / sizePerNode_;
-        assert(nodeId < nrNode_);
         posInNode = pos % sizePerNode_;
+#else
+        const ldiv_t d = ::ldiv(pos, sizePerNode_);
+        nodeId = d.quot;
+        posInNode = d.rem;
+#endif
+        assert(nodeId < nrNode_);
     }
 };
