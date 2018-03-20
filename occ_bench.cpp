@@ -36,6 +36,7 @@ struct Shared
     bool usesRMW;
     size_t nrTh4LongTx;
     size_t payload;
+    size_t nrMuPerTh;
 };
 
 
@@ -140,6 +141,104 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     return res;
 }
 
+
+Result1 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+{
+    unused(shouldQuit);
+    cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
+
+    auto& recV = shared.recV;
+#ifdef USE_PARTITION
+    recV.allocate(idx);
+    recV.checkAndWait();
+#endif
+    const size_t longTxSize = shared.longTxSize;
+    const size_t nrOp = shared.nrOp;
+    const size_t nrWr = shared.nrWr;
+    const int shortTxMode = shared.shortTxMode;
+    const int longTxMode = shared.longTxMode;
+
+    Result1 res;
+    cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
+
+    std::vector<uint8_t> value(shared.payload);
+    cybozu::occ::LockSet lockSet;
+
+    std::vector<size_t> tmpV; // for fillMuIdVecArray.
+
+    // USE_MIX_TX
+    std::vector<bool> isWriteV(nrOp);
+    std::vector<size_t> tmpV2; // for fillModeVec.
+
+    // USE_LONG_TX_2
+    BoolRandom<decltype(rand)> boolRand(rand);
+
+    const bool isLongTx = longTxSize != 0 && idx < shared.nrTh4LongTx; // starvation setting.
+    const size_t realNrOp = isLongTx ? longTxSize : nrOp;
+    const size_t realNrWr = isLongTx ? shared.nrWr4Long : nrWr;
+    if (!isLongTx && shortTxMode == USE_MIX_TX) {
+        isWriteV.resize(nrOp);
+    }
+    lockSet.init(shared.payload, realNrOp);
+
+    const size_t keyBase = shared.nrMuPerTh * idx;
+
+    while (!start) _mm_pause();
+    while (!quit) {
+        if (!isLongTx && shortTxMode == USE_MIX_TX) {
+            fillModeVec(isWriteV, rand, nrWr, tmpV2);
+        }
+        size_t firstRecIdx = 0;
+        uint64_t t0 = 0;
+        if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
+        auto randState = rand.getState();
+        for (size_t retry = 0;; retry++) {
+            if (quit) break; // to quit under starvation.
+            // Try to run transaction.
+            assert(lockSet.empty());
+            rand.setState(randState);
+            for (size_t i = 0; i < realNrOp; i++) {
+                const bool isWrite = bool(
+                    getMode<decltype(rand), Mode>(
+                        rand, boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
+                        realNrOp, realNrWr, i));
+
+#if 0
+                const size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode,
+                                                recV.size(), realNrOp, i, firstRecIdx);
+#else
+                // Access to local area only.
+                const size_t key = keyBase + rand() % shared.nrMuPerTh;
+#endif
+                auto& item = recV[key];
+                Mutex& mutex = item.value;
+                void *payload = item.payload;
+                if (shared.usesRMW || !isWrite) {
+                    lockSet.read(mutex, payload, &value[0]);
+                }
+                if (isWrite) {
+                    lockSet.write(mutex, payload, &value[0]);
+                }
+            }
+
+            // commit phase.
+            lockSet.lock();
+            if (!lockSet.verify()) {
+                lockSet.clear();
+                res.incAbort(isLongTx);
+                if (shared.usesBackOff) backOff(t0, retry, rand);
+                continue;
+            }
+            lockSet.updateAndUnlock();
+            res.incCommit(isLongTx);
+            res.addRetryCount(isLongTx, retry);
+            break;
+        }
+    }
+    return res;
+}
+
+
 void runTest()
 {
 #if 0
@@ -217,6 +316,24 @@ struct CmdLineOptionPlus : CmdLineOption
 };
 
 
+template <typename Opt>
+void initShared(Shared& shared, const Opt& opt)
+{
+    initRecordVector(shared.recV, opt);
+    shared.longTxSize = opt.longTxSize;
+    shared.nrOp = opt.nrOp;
+    shared.nrWr = opt.nrWr;
+    shared.nrWr4Long = opt.nrWr4Long;
+    shared.shortTxMode = opt.shortTxMode;
+    shared.longTxMode = opt.longTxMode;
+    shared.usesBackOff = opt.usesBackOff ? 1 : 0;
+    shared.usesRMW = opt.usesRMW ? 1 : 0;
+    shared.nrTh4LongTx = opt.nrTh4LongTx;
+    shared.payload = opt.payload;
+    shared.nrMuPerTh = opt.getNrMuPerTh();
+}
+
+
 int main(int argc, char *argv[]) try
 {
     CmdLineOptionPlus opt("occ_bench: benchmark with silo-occ.");
@@ -229,20 +346,17 @@ int main(int argc, char *argv[]) try
 
     if (opt.workload == "custom") {
         Shared shared;
-        initRecordVector(shared.recV, opt);
-        shared.longTxSize = opt.longTxSize;
-        shared.nrOp = opt.nrOp;
-        shared.nrWr = opt.nrWr;
-        shared.nrWr4Long = opt.nrWr4Long;
-        shared.shortTxMode = opt.shortTxMode;
-        shared.longTxMode = opt.longTxMode;
-        shared.usesBackOff = opt.usesBackOff ? 1 : 0;
-        shared.usesRMW = opt.usesRMW ? 1 : 0;
-        shared.nrTh4LongTx = opt.nrTh4LongTx;
-        shared.payload = opt.payload;
+        initShared(shared, opt);
         for (size_t i = 0; i < opt.nrLoop; i++) {
             Result1 res;
             runExec(opt, shared, worker2, res);
+        }
+    } else if (opt.workload == "local") {
+        Shared shared;
+        initShared(shared, opt);
+        for (size_t i = 0; i < opt.nrLoop; i++) {
+            Result1 res;
+            runExec(opt, shared, worker3, res);
         }
     } else {
         throw cybozu::Exception("bad workload.") << opt.workload;
