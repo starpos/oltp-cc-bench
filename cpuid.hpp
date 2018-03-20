@@ -95,7 +95,9 @@ std::vector<CpuTopology> getCpuTopologies()
 }
 
 
-enum class CpuAffinityMode : uint8_t { NONE, NODE, CORE, THREAD, LOCAL, CUSTOM1, SOCKET1, };
+enum class CpuAffinityMode : uint8_t {
+    NONE, NODE, CORE, THREAD, LOCAL, CUSTOM1, SOCKET1, CORE_LOCAL,
+};
 
 
 const std::pair<CpuAffinityMode, const char*> affinityModeTable_[] =
@@ -107,6 +109,7 @@ const std::pair<CpuAffinityMode, const char*> affinityModeTable_[] =
     {CpuAffinityMode::LOCAL, "LOCAL"},
     {CpuAffinityMode::CUSTOM1, "CUSTOM1"},
     {CpuAffinityMode::SOCKET1, "SOCKET1"},
+    {CpuAffinityMode::CORE_LOCAL, "CORE_LOCAL"},
 };
 
 
@@ -233,6 +236,10 @@ std::vector<uint> getCpuIdList(CpuAffinityMode amode)
     } else if (amode == CpuAffinityMode::SOCKET1) {
         less = [](const CpuTopology& a, const CpuTopology& b) {
             return std::make_tuple(a.socket, a.thread, a.node, a.core) < std::make_tuple(b.socket, b.thread, b.node, b.core);
+        };
+    } else if (amode == CpuAffinityMode::CORE_LOCAL) {
+        less = [](const CpuTopology& a, const CpuTopology& b) {
+            return std::make_tuple(a.thread, a.socket, a.node, a.core) < std::make_tuple(b.thread, b.socket, b.node, b.core);
         };
     } else {
         less = [](const CpuTopology& a, const CpuTopology& b) {
