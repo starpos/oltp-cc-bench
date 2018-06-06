@@ -1,6 +1,6 @@
 #!/bin/sh
 
-CXX=clang++-5.0
+CXX=clang++-6.0
 
 #make clean
 #make CXX=$CXX DEBUG=0 MUTEX_ON_CACHELINE=1 LTO=1 -j
@@ -8,9 +8,10 @@ CXX=clang++-5.0
 if true; then
   make cmake_clean
   cmake -G Ninja . \
--DCMAKE_CXX_COMPILER=clang++-5.0 \
+-DCMAKE_CXX_COMPILER=${CXX} \
 -DCMAKE_BUILD_TYPE=RelWithDebInfo \
 -DMUTEX_ON_CACHELINE=ON \
+-DPARTITION=OFF \
 -DLTO=ON
 ninja
 fi
@@ -51,4 +52,4 @@ for backoff in 0 1; do
 done
 }
  
-do_expr | tee -a high-conflicts.log.20180301b
+do_expr | tee -a high-conflicts.log.20180606a
