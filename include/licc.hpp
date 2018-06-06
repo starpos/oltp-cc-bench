@@ -12,6 +12,7 @@
 #include "vector_payload.hpp"
 #include "cache_line_size.hpp"
 #include "write_set.hpp"
+#include "inline.hpp"
 
 
 namespace cybozu {
@@ -259,7 +260,7 @@ public:
     ILock(Mutex &mutex, uint32_t ordId) {
         init(mutex, ordId);
     }
-    ~ILock() {
+    INLINE ~ILock() {
         unlock();
     }
 
@@ -285,7 +286,7 @@ public:
     void initInvisibleRead() {
         state_.mode = AccessMode::INVISIBLE_READ;
     }
-    void waitForInvisibleRead() {
+    INLINE void waitForInvisibleRead() {
         ILockData ld;
         for (;;) {
             // with read fence.
@@ -306,7 +307,7 @@ private:
     static const uint PREPARE_MAX = 4;
 
     template <uint type>
-    void waitFor(ILockData& ld0) {
+    INLINE void waitFor(ILockData& ld0) {
         ILockData ld1;
         ILockState st0 = state_;
         ILockState st1;
@@ -344,7 +345,7 @@ public:
     /*
      * State change: EMPTY --> RESERVED_READ.
      */
-    void readAndReadReserve(const void *shared, void *local, size_t size) {
+    INLINE void readAndReadReserve(const void *shared, void *local, size_t size) {
         unused(shared); unused(local); unused(size);
         ILockData ld0 = mutex_->atomicLoad();
         ILockState st0 = state_;
@@ -404,7 +405,7 @@ public:
      * blindWriteReserve() will be called at the pre-commit phase
      * in blindWriteReserveAll().
      */
-    void blindWrite() {
+    INLINE void blindWrite() {
         assert(state_.mode == AccessMode::EMPTY);
         state_.mode = AccessMode::BLIND_WRITE;
     }
@@ -413,7 +414,7 @@ public:
      * State change: BLIND_WRITE --> WRITE.
      * This is called by the blindWriteReserveAll().
      */
-    void blindWriteReserve() {
+    INLINE void blindWriteReserve() {
         ILockData ld0 = mutex_->atomicLoad();
         ILockState st0 = state_;
         assert(st0.mode == AccessMode::BLIND_WRITE);
@@ -435,7 +436,7 @@ public:
      * This is called only when the state change INVISIBLE_READ --> RESERVED_READ.
      * You need not wait for unprotected here.
      */
-    void unlockAndReadReserve() {
+    INLINE void unlockAndReadReserve() {
         ILockData ld0 = mutex_->atomicLoad();
         ILockState st0 = state_;
         assert(st0.mode == AccessMode::INVISIBLE_READ);
@@ -457,7 +458,7 @@ public:
     /**
      * You need not wait for unprotected here.
      */
-    void unlockAndWriteReserve() {
+    INLINE void unlockAndWriteReserve() {
         ILockData ld0 = mutex_->atomicLoad();
         ILockState st0 = state_;
         assert(st0.mode != AccessMode::EMPTY);
@@ -475,7 +476,7 @@ public:
         }
     }
 
-    bool upgrade() {
+    INLINE bool upgrade() {
         assert(state_.mode == AccessMode::INVISIBLE_READ || state_.mode == AccessMode::RESERVED_READ);
         const ILockData ld0 = mutex_->atomicLoad();
         if (ld0.uVer != state_.uVer) return false;
@@ -483,7 +484,7 @@ public:
         return ld0.uVer == state_.uVer;
     }
 
-    bool protect() {
+    INLINE bool protect() {
         assert(state_.mode == AccessMode::WRITE);
         ILockData ld0 = mutex_->atomicLoad();
         ILockState st0 = state_;
@@ -498,7 +499,7 @@ public:
         }
     }
 
-    void unlock() {
+    INLINE void unlock() {
         if (!mutex_) return;
         ILockData ld0 = mutex_->atomicLoad();
         ILockState st0 = state_;
@@ -778,7 +779,7 @@ public:
      * it can be executed with low overhead.
      * However, this function does not preserve progress guarantee.
      */
-    void invisibleRead(Mutex& mutex, void *sharedVal, void *dst) {
+    INLINE void invisibleRead(Mutex& mutex, void *sharedVal, void *dst) {
         unused(sharedVal); unused(dst);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it = findInVec(key);
@@ -804,7 +805,7 @@ public:
      * You should use this function to read records
      * to preserve progress guarantee.
      */
-    bool reservedRead(Mutex& mutex, void *sharedVal, void *dst) {
+    INLINE bool reservedRead(Mutex& mutex, void *sharedVal, void *dst) {
         unused(sharedVal); unused(dst);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
@@ -830,7 +831,7 @@ public:
     /**
      * You should use this function to write records.
      */
-    bool write(Mutex& mutex, void *sharedVal, void *src) {
+    INLINE bool write(Mutex& mutex, void *sharedVal, void *src) {
         unused(sharedVal); unused(src);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
@@ -869,7 +870,7 @@ public:
      *
      * (2) is more efficient than (1).
      */
-    bool readForUpdate(Mutex& mutex, void *sharedVal, void *dst) {
+    INLINE bool readForUpdate(Mutex& mutex, void *sharedVal, void *dst) {
         unused(sharedVal); unused(dst);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
@@ -906,7 +907,7 @@ public:
      * The point between verifyAndUnlock() and updateAndUnlock() is the strictness point.
      */
 
-    void blindWriteReserveAll() {
+    INLINE void blindWriteReserveAll() {
 #if 0
         // If you use this optimization, do not use bwV_.
         const size_t threshold = 4096 / sizeof(OpEntryL);
@@ -934,7 +935,7 @@ public:
         }
 #endif
     }
-    bool protectAll() {
+    INLINE bool protectAll() {
 #if 0
         const size_t threshold = 4096 / sizeof(OpEntryL);
         if (vec_.size() > threshold) {
@@ -967,7 +968,7 @@ public:
         __atomic_thread_fence(__ATOMIC_ACQ_REL);
         return true;
     }
-    bool verifyAndUnlock() {
+    INLINE bool verifyAndUnlock() {
         for (OpEntryL& ope : vec_) {
             Lock& lk = ope.lock;
             // read-modify-write entries have been checked at protectAll() already.
@@ -981,7 +982,7 @@ public:
         }
         return true;
     }
-    void updateAndUnlock() {
+    INLINE void updateAndUnlock() {
 #ifdef USE_LICC_INDEX_CACHE
         for (size_t i : wV_) {
             OpEntryL& ope = vec_[i];
@@ -1006,7 +1007,7 @@ public:
 #endif
         clear();
     }
-    void clear() {
+    INLINE void clear() {
         index_.clear();
         vec_.clear();
         local_.clear();
@@ -1015,10 +1016,10 @@ public:
         wV_.clear();
 #endif
     }
-    bool isEmpty() const { return vec_.empty(); }
+    INLINE bool isEmpty() const { return vec_.empty(); }
 
 private:
-    typename Vec::iterator findInVec(uintptr_t key) {
+    INLINE typename Vec::iterator findInVec(uintptr_t key) {
         // at most 4KiB scan.
         const size_t threshold = 4096 / sizeof(OpEntryL);
         if (vec_.size() > threshold) {
@@ -1041,7 +1042,7 @@ private:
                 return ope.lock.getMutexId() == key;
             });
     }
-    void* getLocalValPtr(const LocalValInfo& info) {
+    INLINE void* getLocalValPtr(const LocalValInfo& info) {
 #ifdef NO_PAYLOAD
         return nullptr;
 #else
@@ -1052,14 +1053,14 @@ private:
         }
 #endif
     }
-    size_t allocateLocalVal() {
+    INLINE size_t allocateLocalVal() {
         const size_t idx = local_.size();
 #ifndef NO_PAYLOAD
         local_.resize(idx + 1);
 #endif
         return idx;
     }
-    void copyValue(void* dst, const void* src) {
+    INLINE void copyValue(void* dst, const void* src) {
 #ifndef NO_PAYLOAD
         ::memcpy(dst, src, valueSize_);
 #endif

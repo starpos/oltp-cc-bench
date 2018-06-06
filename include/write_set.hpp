@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cinttypes>
 #include "cache_line_size.hpp"
+#include "inline.hpp"
 
 
 /**
@@ -68,6 +69,8 @@ struct OpEntry
     OpEntry& operator=(OpEntry&& rhs) {
         swap(rhs);
         return *this;
+    }
+    INLINE ~OpEntry() noexcept {
     }
     void swap(OpEntry& rhs) {
         std::swap(lock, rhs.lock);

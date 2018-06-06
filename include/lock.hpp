@@ -21,6 +21,7 @@
 #include "util.hpp"
 #include "arch.hpp"
 #include "atomic_wrapper.hpp"
+#include "inline.hpp"
 
 
 namespace cybozu {
@@ -189,7 +190,7 @@ private:
     int v_;
 public:
     XSMutex() : v_(0) {}
-    void lock(Mode mode) {
+    INLINE void lock(Mode mode) {
         switch(mode) {
         case Mode::X:
             lockX(); return;
@@ -199,7 +200,7 @@ public:
             throw std::runtime_error("XSMutex: invalid mode");
         }
     }
-    bool tryLock(Mode mode) {
+    INLINE bool tryLock(Mode mode) {
         switch(mode) {
         case Mode::X:
             return tryLockX();
@@ -212,13 +213,13 @@ public:
     /**
      * S --> X
      */
-    bool tryUpgrade() {
+    INLINE bool tryUpgrade() {
         int v = load(v_);
         if (v > 1) return false;
         assert(v == 1);
         return compareExchange(v_, v, -1, __ATOMIC_RELAXED);
     }
-    void upgrade() {
+    INLINE void upgrade() {
         int v = load(v_);
         for (;;) {
             while (v > 1) {
@@ -231,7 +232,7 @@ public:
             }
         }
     }
-    void unlock(Mode mode) noexcept {
+    INLINE void unlock(Mode mode) noexcept {
         switch(mode) {
         case Mode::X:
             unlockX(); return;
@@ -352,14 +353,14 @@ public:
     XSLock(XSLock&& rhs) : XSLock() { swap(rhs); }
     XSLock& operator=(const XSLock&) = delete;
     XSLock& operator=(XSLock&& rhs) { swap(rhs); return *this; }
-    void lock(XSMutex *mutex, Mode mode) {
+    INLINE void lock(XSMutex *mutex, Mode mode) {
         assert(mode_ == Mode::Invalid);
         assert(mutex);
         mutex_ = mutex;
         mode_ = mode;
         mutex_->lock(mode);
     }
-    bool tryLock(XSMutex *mutex, Mode mode) {
+    INLINE bool tryLock(XSMutex *mutex, Mode mode) {
         assert(mode_ == Mode::Invalid);
         assert(mutex);
         mutex_ = mutex;
@@ -371,20 +372,20 @@ public:
     bool isShared() const {
         return mode_ == Mode::S;
     }
-    bool tryUpgrade() {
+    INLINE bool tryUpgrade() {
         assert(mutex_);
         assert(mode_ == Mode::S);
         if (!mutex_->tryUpgrade()) return false;
         mode_ = Mode::X;
         return true;
     }
-    void upgrade() {
+    INLINE void upgrade() {
         assert(mutex_);
         assert(mode_ == Mode::S);
         mutex_->upgrade();
         mode_ = Mode::X;
     }
-    void unlock() noexcept {
+    INLINE void unlock() noexcept {
         if (mode_ == Mode::Invalid) return;
         assert(mutex_);
         mutex_->unlock(mode_);

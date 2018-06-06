@@ -16,6 +16,7 @@
 #include "arch.hpp"
 #include "vector_payload.hpp"
 #include "allocator.hpp"
+#include "inline.hpp"
 
 
 namespace cybozu {
@@ -336,7 +337,7 @@ using Flags = std::vector<bool>; // isInWriteSet array.
  *   true: you must commit.
  *   false: you must abort.
  */
-bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags, MemoryVector& local, size_t valueSize)
+INLINE bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags, MemoryVector& local, size_t valueSize)
 {
     bool ret = false;
 
@@ -439,7 +440,7 @@ public:
         local_.reserve(nrReserve);
     }
 
-    void read(Mutex& mutex, void *sharedVal, void *dst) {
+    INLINE void read(Mutex& mutex, void *sharedVal, void *dst) {
         unused(sharedVal); unused(dst);
         size_t lvidx; // local value index.
         ReadSet::iterator itR = findInReadSet(uintptr_t(&mutex));
@@ -467,7 +468,7 @@ public:
         }
         copyValue(dst, &local_[lvidx]); // read local
     }
-    void write(Mutex& mutex, void *sharedVal, const void *src) {
+    INLINE void write(Mutex& mutex, void *sharedVal, const void *src) {
         unused(sharedVal); unused(src);
         size_t lvidx;
         WriteSet::iterator itW = findInWriteSet(uintptr_t(&mutex));
@@ -486,14 +487,14 @@ public:
         }
         copyValue(&local_[lvidx], src); // write local
     }
-    bool preCommit() {
+    INLINE bool preCommit() {
         bool ret = cybozu::tictoc::preCommit(rs_, ws_, ls_, flags_, local_, valueSize_);
         ridx_.clear();
         widx_.clear();
         local_.clear();
         return ret;
     }
-    void clear() {
+    INLINE void clear() {
         ws_.clear();
         rs_.clear();
         ls_.clear();
@@ -503,18 +504,18 @@ public:
         local_.clear();
     }
 private:
-    ReadSet::iterator findInReadSet(uintptr_t key) {
+    INLINE ReadSet::iterator findInReadSet(uintptr_t key) {
         return findInSet(
             key, rs_, ridx_,
             [](const Reader& r) { return r.getId(); });
     }
-    WriteSet::iterator findInWriteSet(uintptr_t key) {
+    INLINE WriteSet::iterator findInWriteSet(uintptr_t key) {
         return findInSet(
             key, ws_, widx_,
             [](const Writer& w) { return w.getId(); });
     }
     template <typename Vector, typename Map, typename Func>
-    typename Vector::iterator findInSet(uintptr_t key, Vector& vec, Map& map, Func&& func) {
+    INLINE typename Vector::iterator findInSet(uintptr_t key, Vector& vec, Map& map, Func&& func) {
         if (shouldUseIndex(vec)) {
             for (size_t i = map.size(); i < vec.size(); i++) {
                 map[func(vec[i])] = i;
@@ -543,7 +544,7 @@ private:
         ::memcpy(dst, src, valueSize_);
 #endif
     }
-    size_t allocateLocalVal() {
+    INLINE size_t allocateLocalVal() {
         const size_t idx = local_.size();
 #ifndef NO_PAYLOAD
         local_.resize(idx + 1);

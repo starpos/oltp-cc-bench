@@ -8,6 +8,7 @@
 #include <iterator>
 #include <cstddef>
 #include "allocator.hpp"
+#include "inline.hpp"
 
 
 struct MemoryElement
@@ -68,7 +69,7 @@ public:
      * The below functions are the same as std::vector.
      */
 
-    void resize(size_t nrElem) {
+    INLINE void resize(size_t nrElem) {
         if (nrElem < nrElem_) {
             // shrink.
             nrElem_ = nrElem;
@@ -80,7 +81,7 @@ public:
             // do nothing.
         }
     }
-    void reserve(size_t nrReserved) {
+    INLINE void reserve(size_t nrReserved) {
         if (data_ == nullptr) {
             data_ = allocateNewArray(nrReserved);
             nrReserved_ = nrReserved;
@@ -292,7 +293,7 @@ public:
      * The below functions are the same as std::vector.
      */
 
-    void resize(size_t nrElem) {
+    INLINE void resize(size_t nrElem) {
         if (nrElem < nrElem_) {
             // shrink.
             callDstrRange(nrElem, nrElem_);
@@ -307,7 +308,7 @@ public:
             // do nothing.
         }
     }
-    void reserve(size_t nrReserved) {
+    INLINE void reserve(size_t nrReserved) {
         if (data_ == nullptr) {
             data_ = allocateNewArray(nrReserved);
             nrReserved_ = nrReserved;
@@ -575,7 +576,7 @@ public:
      * The below functions are the same as std::vector.
      */
 
-    void resize(size_t size) {
+    INLINE void resize(size_t size) {
         if (size < size_) {
             // shrink.
             callDstrRange(size, size_);
@@ -590,7 +591,7 @@ public:
         }
     }
 
-    void reserve(size_t size) {
+    INLINE void reserve(size_t size) {
         if (data_ == nullptr) {
             data_ = allocateNewArray(size);
 #if 0

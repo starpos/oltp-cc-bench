@@ -10,6 +10,7 @@
 #include <map>
 #include <list>
 #include <deque>
+#include "inline.hpp"
 
 
 #define ALIGNED_SIZE 4096
@@ -75,7 +76,7 @@ public:
     ~LowOverheadMemoryAllocator() noexcept {
     }
 #endif
-    void *allocate(size_t size) {
+    INLINE void *allocate(size_t size) {
         if (size == 0) return nullptr;
         if (size > BulkSize) {
             void *p = ::malloc(size);
@@ -95,7 +96,7 @@ public:
         assert(p != nullptr);
         return p;
     }
-    void deallocate(void *p, size_t size) {
+    INLINE void deallocate(void *p, size_t size) {
         if (p == nullptr) return;
         if (size > BulkSize) {
             ::free(p);

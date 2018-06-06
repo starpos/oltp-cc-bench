@@ -14,6 +14,8 @@
 #include "vector_payload.hpp"
 #include "allocator.hpp"
 #include "write_set.hpp"
+#include "inline.hpp"
+
 
 namespace cybozu {
 namespace lock {
@@ -368,7 +370,7 @@ public:
             return false;
         }
     }
-    bool write(Mutex& mutex, void* sharedVal, const void* src) {
+    INLINE bool write(Mutex& mutex, void* sharedVal, const void* src) {
         typename Map::iterator it = map_.lower_bound(&mutex);
         if (it == map_.end() || it->first != &mutex) {
             // Blind write.
@@ -593,7 +595,7 @@ public:
         ::printf("%p %s END\n", this, prefix);
     }
 private:
-    size_t allocateLocalVal() {
+    INLINE size_t allocateLocalVal() {
         const size_t idx = local_.size();
 #ifndef NO_PAYLOAD
         local_.resize(idx + 1);
@@ -729,7 +731,7 @@ public:
             return false;
         }
     }
-    bool write(Mutex& mutex, void* sharedVal, const void* src) {
+    INLINE bool write(Mutex& mutex, void* sharedVal, const void* src) {
         typename Vec::iterator it = find(&mutex);
         if (it == vec_.end()) {
             // Blind write.
@@ -947,7 +949,7 @@ private:
             });
 #endif
     }
-    size_t allocateLocalVal() {
+    INLINE size_t allocateLocalVal() {
         const size_t idx = local_.size();
 #ifndef NO_PAYLOAD
         local_.resize(idx + 1);

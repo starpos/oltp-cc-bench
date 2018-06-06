@@ -18,6 +18,7 @@
 #include "time.hpp"
 #include "arch.hpp"
 #include "cache_line_size.hpp"
+#include "inline.hpp"
 
 
 void sleepMs(size_t ms)
@@ -92,7 +93,7 @@ void fillMuIdVecArray(std::vector<size_t>& muIdV, Random& rand, size_t max, std:
 }
 
 template <typename Random>
-void fillModeVec(std::vector<bool>& isWriteV, Random& rand, size_t nrWrite, std::vector<size_t>& tmpV)
+INLINE void fillModeVec(std::vector<bool>& isWriteV, Random& rand, size_t nrWrite, std::vector<size_t>& tmpV)
 {
     const size_t max = isWriteV.size();
     assert(nrWrite <= max);
@@ -525,9 +526,9 @@ public:
 
 
 template <typename Random, typename Mode>
-Mode getMode(Random& rand, BoolRandom<Random>& boolRand, const std::vector<bool>& isWriteV,
-             bool isLongTx, int shortTxMode, int longTxMode,
-             size_t nrOp, size_t nrWr, size_t i)
+INLINE Mode getMode(Random& rand, BoolRandom<Random>& boolRand, const std::vector<bool>& isWriteV,
+                    bool isLongTx, int shortTxMode, int longTxMode,
+                    size_t nrOp, size_t nrWr, size_t i)
 {
     if (isLongTx) {
         switch (longTxMode) {
@@ -631,8 +632,8 @@ public:
 #endif
 
 template <typename Random>
-size_t getRecordIdx(Random& rand, bool isLongTx, int shortTxMode, int longTxMode,
-                    size_t nrMu, size_t nrOp, size_t i, size_t& firstRecIdx)
+INLINE size_t getRecordIdx(Random& rand, bool isLongTx, int shortTxMode, int longTxMode,
+                           size_t nrMu, size_t nrOp, size_t i, size_t& firstRecIdx)
 {
     unused(longTxMode);
     if (isLongTx) {

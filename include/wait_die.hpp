@@ -6,6 +6,7 @@
 #include "arch.hpp"
 #include "vector_payload.hpp"
 #include "write_set.hpp"
+#include "inline.hpp"
 
 
 namespace cybozu {
@@ -296,7 +297,7 @@ public:
     /* call this before read/write just after a transaction trial starts. */
     void setTxId(TxId txId) { txId_ = txId; }
 
-    bool read(Mutex& mutex, void *sharedVal, void *dst) {
+    INLINE bool read(Mutex& mutex, void *sharedVal, void *dst) {
         Vec::iterator it = find(uintptr_t(&mutex));
         if (it != vec_.end()) {
             Lock& lk = it->lock;
@@ -319,7 +320,7 @@ public:
         copyValue(dst, sharedVal); // read shared data.
         return true;
     }
-    bool write(Mutex& mutex, void *sharedVal, void *src) {
+    INLINE bool write(Mutex& mutex, void *sharedVal, void *src) {
         Vec::iterator it = find(uintptr_t(&mutex));
         if (it != vec_.end()) {
             Lock& lk = it->lock;
@@ -341,7 +342,7 @@ public:
         copyValue(getLocalValPtr(ope.info), src); // write local data.
         return true;
     }
-    bool readForUpdate(Mutex& mutex, void *sharedVal, void *dst) {
+    INLINE bool readForUpdate(Mutex& mutex, void *sharedVal, void *dst) {
         Vec::iterator it = find(uintptr_t(&mutex));
         if (it != vec_.end()) {
             // Found.
@@ -379,7 +380,7 @@ public:
         return true;
     }
 
-    bool blindWriteLockAll() {
+    INLINE bool blindWriteLockAll() {
         for (BlindWriteInfo& bwInfo : bwV_) {
             OpEntryL& ope = vec_[bwInfo.idx];
             assert(ope.lock.mode() == Mode::INVALID);
@@ -390,7 +391,7 @@ public:
         }
         return true;
     }
-    void updateAndUnlock() {
+    INLINE void updateAndUnlock() {
         // serialization point.
 
         for (OpEntryL& ope : vec_) {
@@ -411,7 +412,7 @@ public:
         local_.clear();
         bwV_.clear();
     }
-    void unlock() {
+    INLINE void unlock() {
         vec_.clear(); // unlock.
         index_.clear();
         local_.clear();
@@ -421,7 +422,7 @@ public:
         return vec_.empty() && index_.empty();
     }
 private:
-    Vec::iterator find(uintptr_t key) {
+    INLINE Vec::iterator find(uintptr_t key) {
         // at most 4KiB scan.
         const size_t threshold = 4096 / sizeof(OpEntryL);
         if (vec_.size() > threshold) {
@@ -458,7 +459,7 @@ private:
         ::memcpy(dst, src, valueSize_);
 #endif
     }
-    size_t allocateLocalVal() {
+    INLINE size_t allocateLocalVal() {
         const size_t idx = local_.size();
 #ifndef NO_PAYLOAD
         local_.resize(idx + 1);

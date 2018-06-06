@@ -4,6 +4,7 @@
  */
 #include "lock.hpp"
 #include "atomic_wrapper.hpp"
+#include "inline.hpp"
 
 
 namespace cybozu {
@@ -586,12 +587,12 @@ private:
     Node node_; /* list node. */
 
 public:
-    PQMcsLock3() : mutex_(nullptr), node_() {
+    INLINE PQMcsLock3() : mutex_(nullptr), node_() {
     }
-    PQMcsLock3(Mutex *mutex, uint32_t order) : PQMcsLock3() {
+    INLINE PQMcsLock3(Mutex *mutex, uint32_t order) : PQMcsLock3() {
         lock(mutex, order);
     }
-    ~PQMcsLock3() noexcept {
+    INLINE ~PQMcsLock3() noexcept {
         unlock();
     }
     PQMcsLock3(const PQMcsLock3& rhs) = delete;
@@ -603,7 +604,7 @@ public:
     PQMcsLock3(PQMcsLock3&& rhs) : PQMcsLock3() { swap(rhs); }
     PQMcsLock3& operator=(PQMcsLock3&& rhs) { swap(rhs); return *this; }
 
-    void lock(Mutex *mutex, uint32_t order) {
+    INLINE void lock(Mutex *mutex, uint32_t order) {
         assert(mutex);
         mutex_ = mutex;
         store(node_.order, order);
@@ -647,7 +648,7 @@ public:
         // Now I hold the lock.
     }
 
-    void unlock() {
+    INLINE void unlock() {
         assert(mutex_);
         uintptr_t tailWithBit = load(mutex_->tailWithBit);
         while (tailWithBit == 0 && mutex_->priQ.empty()) {
@@ -685,7 +686,7 @@ public:
     /**
      * Only the thread that hold the lock can call this method.
      */
-    uint32_t getTopPriorityInWaitQueue() {
+    INLINE uint32_t getTopPriorityInWaitQueue() {
         assert(mutex_);
         uintptr_t tailWithBit = load(mutex_->tailWithBit);
         assert(tailWithBit != 1);

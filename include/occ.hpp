@@ -12,6 +12,7 @@
 #include "arch.hpp"
 #include "vector_payload.hpp"
 #include "allocator.hpp"
+#include "inline.hpp"
 
 
 #define USE_OCC_MCS
@@ -113,8 +114,8 @@ private:
     LockData lockD_;
     bool updated_;
 public:
-    OccLock() : mutex_(), lockD_(), updated_(false) {}
-    explicit OccLock(Mutex *mutex) : OccLock() {
+    INLINE OccLock() : mutex_(), lockD_(), updated_(false) {}
+    INLINE explicit OccLock(Mutex *mutex) : OccLock() {
         lock(mutex);
     }
     ~OccLock() noexcept {
@@ -127,7 +128,7 @@ public:
     bool operator<(const OccLock& rhs) const {
         return uintptr_t(mutex_) < uintptr_t(rhs.mutex_);
     }
-    void lock(Mutex *mutex) {
+    INLINE void lock(Mutex *mutex) {
         if (mutex_) throw std::runtime_error("OccLock::lock: already locked");
         mutex_ = mutex;
 
@@ -143,7 +144,7 @@ public:
             }
         }
     }
-    void unlock() {
+    INLINE void unlock() {
         if (!mutex_) return;
 
         LockData lockD = lockD_;
@@ -320,7 +321,7 @@ public:
         lockV_.reserve(nrReserve);
         local_.reserve(nrReserve);
     }
-    void read(Mutex& mutex, void *sharedVal, void *localVal) {
+    INLINE void read(Mutex& mutex, void *sharedVal, void *localVal) {
         unused(sharedVal); unused(localVal);
         size_t localValIdx;
         ReadV::iterator itR = findInReadSet(uintptr_t(&mutex));
@@ -358,7 +359,7 @@ public:
         ::memcpy(localVal, &local_[localValIdx], valueSize_);
 #endif
     }
-    void write(Mutex& mutex, void *sharedVal, void *localVal) {
+    INLINE void write(Mutex& mutex, void *sharedVal, void *localVal) {
         unused(sharedVal); unused(localVal);
         size_t localValIdx;
         WriteV::iterator itW = findInWriteSet(uintptr_t(&mutex));
@@ -384,7 +385,7 @@ public:
         ::memcpy(&local_[localValIdx], localVal, valueSize_);
 #endif
     }
-    void lock() {
+    INLINE void lock() {
         std::sort(writeV_.begin(), writeV_.end());
         for (WriteEntry& w : writeV_) {
             lockV_.emplace_back(w.mutex);
@@ -392,7 +393,7 @@ public:
         // Serialization point.
         __atomic_thread_fence(__ATOMIC_ACQ_REL);
     }
-    bool verify() {
+    INLINE bool verify() {
         const bool useIndex = shouldUseIndex(writeV_);
         if (!useIndex) {
             std::sort(writeV_.begin(), writeV_.end());
@@ -411,7 +412,7 @@ public:
         }
         return true;
     }
-    void updateAndUnlock() {
+    INLINE void updateAndUnlock() {
         assert(lockV_.size() == writeV_.size());
         auto itLk = lockV_.begin();
         auto itW = writeV_.begin();
@@ -428,7 +429,7 @@ public:
         }
         clear();
     }
-    void clear() {
+    INLINE void clear() {
         lockV_.clear();
         readV_.clear();
         readM_.clear();
@@ -445,12 +446,12 @@ public:
             local_.empty();
     }
 private:
-    ReadV::iterator findInReadSet(uintptr_t key) {
+    INLINE ReadV::iterator findInReadSet(uintptr_t key) {
         return findInSet(
             key, readV_, readM_,
             [](const OccReader& r) { return r.getMutexId(); });
     }
-    WriteV::iterator findInWriteSet(uintptr_t key) {
+    INLINE WriteV::iterator findInWriteSet(uintptr_t key) {
         return findInSet(
             key, writeV_, writeM_,
             [](const WriteEntry& w) { return w.getMutexId(); });
@@ -459,7 +460,7 @@ private:
      * func: uintptr_t(const Vector::value_type&)
      */
     template <typename Vector, typename Map, typename Func>
-    typename Vector::iterator findInSet(uintptr_t key, Vector& vec, Map& map, Func&& func) {
+    INLINE typename Vector::iterator findInSet(uintptr_t key, Vector& vec, Map& map, Func&& func) {
         if (shouldUseIndex(vec)) {
             // create indexes.
             for (size_t i = map.size(); i < vec.size(); i++) {
