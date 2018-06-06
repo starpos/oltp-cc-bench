@@ -7,6 +7,7 @@
 #include <string>
 #include <map>
 #include <list>
+#include <functional>
 #include "process.hpp"
 
 
