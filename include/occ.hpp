@@ -391,7 +391,9 @@ public:
             lockV_.emplace_back(w.mutex);
         }
         // Serialization point.
+#if 1
         __atomic_thread_fence(__ATOMIC_ACQ_REL);
+#endif
     }
     INLINE bool verify() {
         const bool useIndex = shouldUseIndex(writeV_);

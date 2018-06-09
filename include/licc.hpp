@@ -1044,6 +1044,7 @@ private:
     }
     INLINE void* getLocalValPtr(const LocalValInfo& info) {
 #ifdef NO_PAYLOAD
+        unused(info);
         return nullptr;
 #else
         if (info.localValIdx == UINT64_MAX) {
@@ -1063,6 +1064,8 @@ private:
     INLINE void copyValue(void* dst, const void* src) {
 #ifndef NO_PAYLOAD
         ::memcpy(dst, src, valueSize_);
+#else
+        unused(dst); unused(src);
 #endif
     }
 };

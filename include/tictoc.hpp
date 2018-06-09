@@ -388,6 +388,8 @@ INLINE bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags, Memo
             // writeback
 #ifndef NO_PAYLOAD
             ::memcpy(itW->sharedVal, &local[itW->localValIdx], valueSize);
+#else
+            unused(valueSize);
 #endif
             itLk->updateAndUnlock(commitTs);
             ++itLk;
@@ -542,6 +544,8 @@ private:
     void copyValue(void* dst, const void* src) {
 #ifndef NO_PAYLOAD
         ::memcpy(dst, src, valueSize_);
+#else
+        unused(dst); unused(src);
 #endif
     }
     INLINE size_t allocateLocalVal() {
