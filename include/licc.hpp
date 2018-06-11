@@ -965,7 +965,7 @@ public:
         }
 #endif
         // Here is serialization point.
-        __atomic_thread_fence(__ATOMIC_ACQ_REL);
+        SERIALIZATION_POINT_BARRIER();
         return true;
     }
     INLINE bool verifyAndUnlock() {

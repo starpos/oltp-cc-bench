@@ -55,3 +55,16 @@ void releaseMemoryBarrier() {
 void acquireMemoryBarrier() {
     __atomic_thread_fence(__ATOMIC_ACQUIRE);
 }
+
+
+#define COMPILER_FENCE() __asm__ volatile("" ::: "memory")
+
+/*
+ * In x86_64, CAS and load is not reordered.
+ * In aarch64, ldar/stlr is not reordered.
+ * So in the both architectures,
+ * it is not required explicit
+ * instruction memory barriers at serialization point
+ * for several OCC protocols.
+ */
+#define SERIALIZATION_POINT_BARRIER() COMPILER_FENCE()

@@ -350,7 +350,7 @@ INLINE bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags, Memo
     }
 
     // Serialization point.
-    __atomic_thread_fence(__ATOMIC_ACQ_REL);
+    SERIALIZATION_POINT_BARRIER();
 
     // Calculate isInWriteSet for all the readers.
     assert(flags.empty());
