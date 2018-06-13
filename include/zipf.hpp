@@ -11,6 +11,7 @@
 #include <random>
 #include <vector>
 #include "random.hpp"
+#include "inline.hpp"
 
 class Zipf
 {
@@ -66,13 +67,15 @@ private:
  */
 class FastZipf
 {
-    cybozu::util::Xoroshiro128Plus rand_;
+    //cybozu::util::Xoroshiro128Plus rand_;
+    cybozu::util::Xoroshiro128Plus& rand_;
     const size_t nr_;
     const double alpha_, zetan_, eta_;
     const double threshold_;
 public:
-    FastZipf(double theta, size_t nr)
-        : rand_(cybozu::util::Random<uint64_t>()())
+    FastZipf(cybozu::util::Xoroshiro128Plus& rand, double theta, size_t nr)
+        //: rand_(cybozu::util::Random<uint64_t>()())
+        : rand_(rand)
         , nr_(nr)
         , alpha_(1.0 / (1.0 - theta))
         , zetan_(zeta(nr, theta))
@@ -81,7 +84,7 @@ public:
         assert(0.0 <= theta);
         assert(theta < 1.0); // 1.0 can not be specified.
     }
-    size_t operator()() {
+    INLINE size_t operator()() {
         double u = rand_() / (double)UINT64_MAX;
 #if 1
         double uz = u * zetan_;

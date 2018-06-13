@@ -4,6 +4,7 @@
 #include "cybozu/exception.hpp"
 #include "util.hpp"
 #include <string>
+#include <cstdlib>
 
 struct CmdLineOption : cybozu::Option
 {
@@ -24,6 +25,8 @@ struct CmdLineOption : cybozu::Option
     int longTxMode; // Long transaction mode. See enum TxMode.
     std::string amode; // affinity mode string.
     size_t payload; // size of value payload.
+    bool usesZipf;
+    double zipfTheta; // theta parameter for zipf distribution.
     bool verbose; // verbose mode.
 
     constexpr static const char *NAME = "CmdLineOption";
@@ -49,6 +52,8 @@ struct CmdLineOption : cybozu::Option
                   "8:last-write-same, 9:first-write-same)");
         appendOpt(&amode, "CORE", "amode", "[MODE]: thread affinity mode (CORE, CUSTOM1, ...)");
         appendOpt(&payload, 0, "payload", "[bytes]: payload size (default:0).");
+        appendBoolOpt(&usesZipf, "zipf", ": uses uniform distribution.");
+        appendOpt(&zipfTheta, 0.0, "theta", "[double]: 0.0 <= theta < 1.0");
         appendBoolOpt(&verbose, "v", ": puts verbose messages.");
         appendHelp("h", ": put this message.");
     }
@@ -81,6 +86,11 @@ struct CmdLineOption : cybozu::Option
         if (nrTh4LongTx > nrTh) {
             throw cybozu::Exception(NAME) << "nrTh4LongTx must be <= nrTh.";
         }
+        if (usesZipf) {
+            if (zipfTheta < 0.0 || zipfTheta >= 1.0) {
+                throw cybozu::Exception(NAME) << "zipfTheta must be >= 0.0 and < 1.0";
+            }
+        }
     }
     size_t getNrMuPerTh() const {
         return nrMuPerTh > 0 ? nrMuPerTh : (nrMu / nrTh == 0 ? 1 : nrMu / nrTh);
@@ -92,9 +102,9 @@ struct CmdLineOption : cybozu::Option
         return cybozu::util::formatString(
             "concurrency:%zu workload:%s nrMutex:%zu nrMuPerTh:%zu "
             "sec:%zu longTxSize:%zu nrTh4LongTx:%zu nrOp:%zu nrWr:%zu nrWr4Long:%zu shortTxMode:%d longTxMode:%d payload:%zu "
-            "amode:%s"
+            "amode:%s usesZipf:%d zipfTheta:%f"
             , nrTh, workload.c_str(), getNrMu(), getNrMuPerTh()
             , runSec, longTxSize, nrTh4LongTx, nrOp, nrWr, nrWr4Long, shortTxMode, longTxMode, payload
-            , amode.c_str());
+            , amode.c_str(), usesZipf, zipfTheta);
     }
 };

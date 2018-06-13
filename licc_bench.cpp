@@ -7,6 +7,7 @@
 #include "time.hpp"
 #include "tx_util.hpp"
 #include <algorithm>
+#include "zipf.hpp"
 
 #ifdef USE_PARTITION
 #include "partitioned.hpp"
@@ -114,6 +115,8 @@ struct ILockShared
     bool usesRMW;
     size_t nrTh4LongTx;
     size_t payload;
+    bool usesZipf;
+    double zipfTheta;
 };
 
 
@@ -151,6 +154,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
+    FastZipf fastZipf(rand, shared.zipfTheta, recV.size());
     BoolRandom<decltype(rand)> boolRand(rand);
     std::vector<bool> isWriteV;
     std::vector<size_t> tmpV; // for fillModeVec
@@ -237,7 +241,9 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 #if 0
                 size_t key = getRecordIdx(i);
 #elif 1
-                size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode, recV.size(), realNrOp, i, firstRecIdx);
+                size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode,
+                                          recV.size(), realNrOp, i, firstRecIdx,
+                                          shared.usesZipf, fastZipf);
 #else
                 size_t key = rand() % recV.size();
 #endif
@@ -511,6 +517,8 @@ void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
     shared.usesRMW = opt.usesRMW != 0;
     shared.nrTh4LongTx = opt.nrTh4LongTx;
     shared.payload = opt.payload;
+    shared.usesZipf = opt.usesZipf;
+    shared.zipfTheta = opt.zipfTheta;
 }
 
 

@@ -9,6 +9,7 @@
 #include "cpuid.hpp"
 #include "vector_payload.hpp"
 #include "cache_line_size.hpp"
+#include "zipf.hpp"
 
 #ifdef USE_PARTITION
 #include "partitioned.hpp"
@@ -37,6 +38,8 @@ struct Shared
     size_t nrTh4LongTx;
     size_t payload;
     size_t nrMuPerTh;
+    bool usesZipf;
+    double zipfTheta;
 };
 
 
@@ -61,6 +64,7 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
+    FastZipf fastZipf(rand, shared.zipfTheta, recV.size());
 
     std::vector<uint8_t> value(shared.payload);
     cybozu::occ::LockSet lockSet;
@@ -112,7 +116,8 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                         realNrOp, realNrWr, i));
 #endif
                 const size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode,
-                                                recV.size(), realNrOp, i, firstRecIdx);
+                                                recV.size(), realNrOp, i, firstRecIdx,
+                                                shared.usesZipf, fastZipf);
                 auto& item = recV[key];
                 Mutex& mutex = item.value;
                 void *payload = item.payload;
@@ -331,6 +336,8 @@ void initShared(Shared& shared, const Opt& opt)
     shared.nrTh4LongTx = opt.nrTh4LongTx;
     shared.payload = opt.payload;
     shared.nrMuPerTh = opt.getNrMuPerTh();
+    shared.usesZipf = opt.usesZipf;
+    shared.zipfTheta = opt.zipfTheta;
 }
 
 

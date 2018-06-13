@@ -5,6 +5,7 @@
 #include "measure_util.hpp"
 #include "arch.hpp"
 #include "vector_payload.hpp"
+#include "zipf.hpp"
 
 #include "wait_die.hpp"
 #include "tx_util.hpp"
@@ -41,6 +42,8 @@ struct Shared
     bool usesRMW;
     size_t nrTh4LongTx;
     size_t payload;
+    bool usesZipf;
+    double zipfTheta;
 
     GlobalTxIdGenerator globalTxIdGen;
     SimpleTxIdGenerator simpleTxIdGen;
@@ -83,6 +86,8 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
+    FastZipf fastZipf(rand, shared.zipfTheta, recV.size());
+
     cybozu::wait_die::LockSet lockSet;
 
     std::vector<uint8_t> value(shared.payload);
@@ -166,7 +171,8 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 #endif
                 size_t key = getRecordIdx(
                     rand, isLongTx, shortTxMode, longTxMode,
-                    recV.size(), realNrOp, i, firstRecIdx);
+                    recV.size(), realNrOp, i, firstRecIdx,
+                    shared.usesZipf, fastZipf);
                 auto& item = recV[key];
                 Mutex& mutex = item.value;
                 if (mode == Mode::S) {
@@ -453,6 +459,9 @@ int main(int argc, char *argv[]) try
         shared.nrTh4LongTx = opt.nrTh4LongTx;
         shared.usesRMW = opt.usesRMW != 0;
         shared.payload = opt.payload;
+        shared.usesZipf = opt.usesZipf;
+        shared.zipfTheta = opt.zipfTheta;
+
         for (size_t i = 0; i < opt.nrLoop; i++) {
             dispatch1(opt, shared);
             epochGen_.reset();
@@ -464,6 +473,7 @@ int main(int argc, char *argv[]) try
         shared.writePct = opt.writePct;
         shared.usesRMW = opt.usesRMW != 0;
         shared.payload = opt.payload;
+
         for (size_t i = 0; i < opt.nrLoop; i++) {
             Result2 res;
             runExec(opt, shared, worker3, res);

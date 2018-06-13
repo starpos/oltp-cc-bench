@@ -9,6 +9,7 @@
 #include "cpuid.hpp"
 #include "vector_payload.hpp"
 #include "cache_line_size.hpp"
+#include "zipf.hpp"
 
 #ifdef USE_PARTITION
 #include "partitioned.hpp"
@@ -36,6 +37,8 @@ struct Shared
     bool usesRMW;
     size_t nrTh4LongTx;
     size_t payload;
+    bool usesZipf;
+    double zipfTheta;
 };
 
 
@@ -60,6 +63,7 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
+    FastZipf fastZipf(rand, shared.zipfTheta, recV.size());
     cybozu::tictoc::LocalSet localSet;
     std::vector<uint8_t> value(shared.payload);
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
@@ -110,7 +114,8 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                         realNrOp, realNrWr, i));
 #endif
                 const size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode,
-                                               recV.size(), realNrOp, i, firstRecIdx);
+                                                recV.size(), realNrOp, i, firstRecIdx,
+                                                shared.usesZipf, fastZipf);
                 auto& item = recV[key];
                 Mutex& mutex = item.value;
                 if (shared.usesRMW || !isWrite) {
@@ -239,6 +244,8 @@ int main(int argc, char *argv[]) try
         shared.usesRMW = opt.usesRMW ? 1 : 0;
         shared.nrTh4LongTx = opt.nrTh4LongTx;
         shared.payload = opt.payload;
+        shared.usesZipf = opt.usesZipf;
+        shared.zipfTheta = opt.zipfTheta;
         for (size_t i = 0; i < opt.nrLoop; i++) {
             Result1 res;
             runExec(opt, shared, worker2, res);

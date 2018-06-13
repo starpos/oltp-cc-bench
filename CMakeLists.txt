@@ -68,6 +68,8 @@ if(architecture STREQUAL x86_64)
 	#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcx16")
 endif()
 
+#list(APPEND cflagItems " -ffast-math")
+
 if((NOT compilerType STREQUAL clang) AND (gcc_major_version GREATER_EQUAL 7))
 	set(useAtomicLibrary ON)
 else()

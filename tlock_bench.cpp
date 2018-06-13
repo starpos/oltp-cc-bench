@@ -12,6 +12,7 @@
 #include "trlock.hpp"
 #include "cmdline_option.hpp"
 #include "arch.hpp"
+#include "zipf.hpp"
 
 
 using Spinlock = cybozu::lock::TtasSpinlockT<0>;
@@ -1076,6 +1077,7 @@ Result1 iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQu
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
+    FastZipf fastZipf(rand, 0.0, muV.size());
 
     std::vector<size_t> tmpV; // for fillMuIdVecArray.
 
@@ -1137,7 +1139,8 @@ Result1 iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQu
 
 #endif
                 size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode,
-                                          muV.size(), realNrOp, i, firstRecIdx);
+                                          muV.size(), realNrOp, i, firstRecIdx,
+                                          false, fastZipf);
                 IMutex &mutex = muV[key];
 
 #if 0

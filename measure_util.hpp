@@ -19,6 +19,7 @@
 #include "arch.hpp"
 #include "cache_line_size.hpp"
 #include "inline.hpp"
+#include "zipf.hpp"
 
 
 void sleepMs(size_t ms)
@@ -633,7 +634,8 @@ public:
 
 template <typename Random>
 INLINE size_t getRecordIdx(Random& rand, bool isLongTx, int shortTxMode, int longTxMode,
-                           size_t nrMu, size_t nrOp, size_t i, size_t& firstRecIdx)
+                           size_t nrMu, size_t nrOp, size_t i, size_t& firstRecIdx,
+                           bool usesZipf, FastZipf& fastZipf)
 {
     unused(longTxMode);
     if (isLongTx) {
@@ -683,6 +685,7 @@ INLINE size_t getRecordIdx(Random& rand, bool isLongTx, int shortTxMode, int lon
             }
         }
     }
+    if (usesZipf) return fastZipf();
     return rand() % nrMu;
 }
 
