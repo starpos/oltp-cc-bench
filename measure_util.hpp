@@ -712,7 +712,7 @@ void backOff(uint64_t& t0, size_t retry, Random& rand)
     auto randState = rand.getState();
     randState += retry;
     rand.setState(randState);
-    uint64_t waitTic = rand() % (tdiff << std::min<size_t>(retry + 1, 10));
+    uint64_t waitTic = rand() % (tdiff << std::min<size_t>(retry + 1, 4));
     //uint64_t waitTic = rand() % (tdiff << 18);
     uint64_t t2 = t1;
     while (t2 - t1 < waitTic) {
