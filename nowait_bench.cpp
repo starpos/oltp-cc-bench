@@ -43,7 +43,7 @@ struct Shared
     double zipfTheta;
 };
 
-Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
@@ -88,10 +88,10 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
                 shortTxMode, longTxMode, realNrOp, nrWr);
 #endif
 
-
-    while (!start) _mm_pause();
+    storeRelease(ready, 1);
+    while (!loadAcquire(start)) _mm_pause();
     size_t count = 0; unused(count);
-    while (!quit) {
+    while (!loadAcquire(quit)) {
         if (!isLongTx && shortTxMode == USE_MIX_TX) {
             fillModeVec(isWriteV, rand, nrWr, tmpV2);
         }
@@ -100,7 +100,7 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (quit) break; // to quit under starvation.
+            if (loadAcquire(quit)) break; // to quit under starvation.
             assert(lockSet.empty());
             rand.setState(randState);
             for (size_t i = 0; i < realNrOp; i++) {

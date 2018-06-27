@@ -63,7 +63,7 @@ std::atomic<size_t> g_ts_total(0);
 
 
 template <int txIdGenType>
-Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
 #if 0
     cybozu::wait_die::cas_success = 0;
@@ -126,9 +126,10 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     uint64_t retry_total = 0;
 #endif
 
-    while (!start) _mm_pause();
+    storeRelease(ready, 1);
+    while (!loadAcquire(start)) _mm_pause();
     size_t count = 0; unused(count);
-    while (!quit) {
+    while (!loadAcquire(quit)) {
         if (!isLongTx && shortTxMode == USE_MIX_TX) {
             fillModeVec(isWriteV, rand, nrWr, tmpV2);
         }
@@ -155,7 +156,7 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 #endif
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (quit) break; // to quit under starvation.
+            if (loadAcquire(quit)) break; // to quit under starvation.
             assert(lockSet.empty());
             rand.setState(randState);
 #if 0
@@ -225,7 +226,7 @@ Result1 worker2(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 /**
  * Long transactions with several transaction sizes.
  */
-Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+Result2 worker3(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
@@ -278,9 +279,10 @@ Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQui
 
     const size_t realNrOp = txSize;
 
-    while (!start) _mm_pause();
+    storeRelease(ready, 1);
+    while (!loadAcquire(start)) _mm_pause();
     size_t count = 0; unused(count);
-    while (!quit) {
+    while (!loadAcquire(quit)) {
 #if 0
         const uint64_t txId = localTxIdGen.get();
 #else
@@ -291,7 +293,7 @@ Result2 worker3(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (quit) break; // to quit under starvation.
+            if (loadAcquire(quit)) break; // to quit under starvation.
             assert(lockSet.empty());
             rand.setState(randState);
             boolRand.reset();

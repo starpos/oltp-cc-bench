@@ -295,7 +295,7 @@ struct TLockShared
 
 
 template <int txIdGenType, typename PQLock>
-Result1 tWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, TLockShared<PQLock>& shared)
+Result1 tWorker(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, TLockShared<PQLock>& shared)
 {
     using Mutex = typename TLockTypes<PQLock>::Mutex;
     using TLock = typename TLockTypes<PQLock>::TLock;
@@ -353,9 +353,10 @@ Result1 tWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         }
     }
 
-    while (!start) _mm_pause();
+    storeRelease(ready, 1);
+    while (!loadAcquire(start)) _mm_pause();
     size_t count = 0; unused(count);
-    while (!quit) {
+    while (!loadAcquire(quit)) {
         if (isLongTx) {
             if (longTxSize > muV.size() * 5 / 1000) {
                 fillMuIdVecArray(muIdV, rand, muV.size(), tmpV);
@@ -384,7 +385,7 @@ Result1 tWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         }
 
         for (size_t retry = 0;; retry++) {
-            if (quit) break; // to quit under starvation.
+            if (loadAcquire(quit)) break; // to quit under starvation.
             assert(writeLocks.empty());
             assert(readLocks.empty());
             assert(writeSet.empty());
@@ -1055,7 +1056,7 @@ Result1 iWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQui
  * Using ILock.
  */
 template <int txIdGenType, typename PQLock>
-Result1 iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
+Result1 iWorker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
 {
     using IMutex = typename ILockTypes<PQLock>::IMutex;
     using IMode = typename ILockTypes<PQLock>::IMode;
@@ -1103,9 +1104,10 @@ Result1 iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQu
 
     cybozu::lock::ILockSet<PQLock> lockSet;
 
-    while (!start) _mm_pause();
+    storeRelease(ready, 1);
+    while (!loadAcquire(start)) _mm_pause();
     size_t count = 0; unused(count);
-    while (!quit) {
+    while (!loadAcquire(quit)) {
         if (!isLongTx && shortTxMode == USE_MIX_TX) {
             fillModeVec(isWriteV, rand, nrWr, tmpV2);
         }
@@ -1127,7 +1129,7 @@ Result1 iWorker2(size_t idx, const bool& start, const bool& quit, bool& shouldQu
 
         size_t firstRecIdx;
         for (size_t retry = 0;; retry++) {
-            if (quit) break; // to quit under starvation.
+            if (loadAcquire(quit)) break; // to quit under starvation.
 
             for (size_t i = 0; i < realNrOp; i++) {
 #if 0

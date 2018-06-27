@@ -16,7 +16,7 @@ struct Shared
 };
 
 
-Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
@@ -26,8 +26,9 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
 
-    while (!start) _mm_pause();
-    while (!quit) {
+    storeRelease(ready, 1);
+    while (!loadAcquire(start)) _mm_pause();
+    while (!loadAcquire(quit)) {
         //const SXQLock::Mode mode = (rand() & 0x1) ? SXQLock::Mode::X : SXQLock::Mode::S;
         const SXQLock::Mode mode = (rand() % 128 < 16) ? SXQLock::Mode::X : SXQLock::Mode::S;
         //const SXQLock::Mode mode = SXQLock::Mode::X;

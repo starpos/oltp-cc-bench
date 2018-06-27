@@ -18,12 +18,13 @@ struct Shared
 };
 
 
-Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+Result1 worker(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
-    while (!start) _mm_pause();
+    storeRelease(ready, 1);
+    while (!loadAcquire(start)) _mm_pause();
     size_t c = 0;
     Result1 res;
     uint64_t v1, v2;
@@ -36,7 +37,7 @@ Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
     }
 
     v1 = __atomic_load_n(obj, __ATOMIC_RELAXED);
-    while (!quit) {
+    while (!loadAcquire(quit)) {
         v2 = v1 + 1;
         if (!__atomic_compare_exchange(obj, &v1, &v2, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
             continue;

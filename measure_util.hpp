@@ -20,6 +20,7 @@
 #include "cache_line_size.hpp"
 #include "inline.hpp"
 #include "zipf.hpp"
+#include "atomic_wrapper.hpp"
 
 
 void sleepMs(size_t ms)
@@ -368,6 +369,17 @@ struct Result2
 };
 
 
+void waitForAllTrue(const std::vector<uint8_t>& v)
+{
+    for (;;) {
+        if (std::all_of(v.cbegin(), v.cend(), [](uint8_t b) { return b != 0; })) {
+            break;
+        }
+        sleepMs(100);
+    }
+}
+
+
 template <typename SharedData, typename Worker, typename Result>
 void runExec(const CmdLineOption& opt, SharedData& shared, Worker&& worker, Result& res)
 {
@@ -376,15 +388,17 @@ void runExec(const CmdLineOption& opt, SharedData& shared, Worker&& worker, Resu
     bool start = false;
     bool quit = false;
     bool shouldQuit = false;
+    std::vector<uint8_t> readyV(nrTh, 0);
     cybozu::thread::ThreadRunnerSet thS;
     std::vector<Result> resV(nrTh);
     for (size_t i = 0; i < nrTh; i++) {
         thS.add([&,i]() {
-                resV[i] = worker(i, start, quit, shouldQuit, shared);
-            });
+            resV[i] = worker(i, readyV[i], start, quit, shouldQuit, shared);
+        });
     }
     thS.start();
-    start = true;
+    waitForAllTrue(readyV);
+    storeRelease(start, true);
     size_t sec = 0;
     for (size_t i = 0; i < opt.runSec; i++) {
         if (opt.verbose) {
@@ -394,7 +408,7 @@ void runExec(const CmdLineOption& opt, SharedData& shared, Worker&& worker, Resu
         sec++;
         if (shouldQuit) break;
     }
-    quit = true;
+    storeRelease(quit, true);
     thS.join();
     for (size_t i = 0; i < nrTh; i++) {
         if (opt.verbose) {

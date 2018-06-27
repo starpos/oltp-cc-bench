@@ -41,7 +41,7 @@ struct Shared
 
 
 template <bool UseMap, typename LeisLockType>
-Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, Shared<LeisLockType>& shared)
+Result1 worker(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, Shared<LeisLockType>& shared)
 {
     using Mutex = typename LeisLockType::Mutex;
     using Mode = typename Mutex::Mode;
@@ -89,9 +89,10 @@ Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
                 shortTxMode, longTxMode, realNrOp, nrWr);
 #endif
 
-    while (!start) _mm_pause();
+    storeRelease(ready, 1);
+    while (!loadAcquire(start)) _mm_pause();
     size_t count = 0; unused(count);
-    while (!quit) {
+    while (!loadAcquire(quit)) {
         if (!isLongTx && shortTxMode == USE_MIX_TX) {
             fillModeVec(isWriteV, rand, nrWr, tmpV2);
         }
@@ -100,7 +101,7 @@ Result1 worker(size_t idx, const bool& start, const bool& quit, bool& shouldQuit
         assert(llSet.empty());
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (quit) break; // to quit under starvation.
+            if (loadAcquire(quit)) break; // to quit under starvation.
             rand.setState(randState); // Retries will reproduce the same access pattern.
             for (size_t i = 0; i < realNrOp; i++) {
 #if 0

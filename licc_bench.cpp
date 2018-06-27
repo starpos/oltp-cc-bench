@@ -125,7 +125,7 @@ struct ILockShared
 
 
 template <typename PQLock>
-Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
+Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
 {
 #if 0
     cybozu::lock::cas_success = 0;
@@ -198,8 +198,9 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     size_t factor = 1;
 #endif
 
-    while (!start) _mm_pause();
-    while (!quit) {
+    storeRelease(ready, 1);
+    while (!loadAcquire(start)) _mm_pause();
+    while (!loadAcquire(quit)) {
         if (!isLongTx && shortTxMode == USE_MIX_TX) {
             fillModeVec(isWriteV, rand, nrWr, tmpV);
         }
@@ -221,7 +222,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         }
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (quit) break; // to quit under starvation.
+            if (loadAcquire(quit)) break; // to quit under starvation.
             assert(lockSet.isEmpty());
             rand.setState(randState);
             //::printf("begin\n"); // QQQQQ
@@ -373,7 +374,7 @@ Result1 worker0(size_t idx, const bool& start, const bool& quit, bool& shouldQui
  * This worker is for short-long-long workload.
  */
 template <typename PQLock>
-Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
+Result2 worker1(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
 {
     using IMutex = typename ILockTypes<PQLock>::IMutex;
     using ILockSet = typename ILockTypes<PQLock>::ILockSet;
@@ -436,9 +437,9 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     ILockSet lockSet;
     lockSet.init(shared.payload, realNrOp);
 
-
-    while (!start) _mm_pause();
-    while (!quit) {
+    storeRelease(ready, 1);
+    while (!loadAcquire(start)) _mm_pause();
+    while (!loadAcquire(quit)) {
 #if 0
         ordIdGen.epochId = epochGen.get();
         const uint32_t ordId = ordIdGen.ordId;
@@ -451,7 +452,7 @@ Result2 worker1(size_t idx, const bool& start, const bool& quit, bool& shouldQui
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (quit) break; // to quit under starvation.
+            if (loadAcquire(quit)) break; // to quit under starvation.
             assert(lockSet.isEmpty());
             rand.setState(randState);
             boolRand.reset();
