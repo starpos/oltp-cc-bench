@@ -117,6 +117,7 @@ struct ILockShared
     size_t payload;
     bool usesZipf;
     double zipfTheta;
+    double zipfZetan;
 };
 
 
@@ -154,7 +155,7 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
-    FastZipf fastZipf(rand, shared.zipfTheta, recV.size());
+    FastZipf fastZipf(rand, shared.zipfTheta, recV.size(), shared.zipfZetan);
     BoolRandom<decltype(rand)> boolRand(rand);
     std::vector<bool> isWriteV;
     std::vector<size_t> tmpV; // for fillModeVec
@@ -520,6 +521,11 @@ void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
     shared.payload = opt.payload;
     shared.usesZipf = opt.usesZipf;
     shared.zipfTheta = opt.zipfTheta;
+    if (opt.usesZipf) {
+        shared.zipfZetan = FastZipf::zeta(opt.getNrMu(), shared.zipfTheta);
+    } else {
+        shared.zipfZetan = 1.0;
+    }
 }
 
 

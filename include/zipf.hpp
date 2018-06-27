@@ -67,14 +67,12 @@ private:
  */
 class FastZipf
 {
-    //cybozu::util::Xoroshiro128Plus rand_;
     cybozu::util::Xoroshiro128Plus& rand_;
     const size_t nr_;
     const double alpha_, zetan_, eta_;
     const double threshold_;
 public:
     FastZipf(cybozu::util::Xoroshiro128Plus& rand, double theta, size_t nr)
-        //: rand_(cybozu::util::Random<uint64_t>()())
         : rand_(rand)
         , nr_(nr)
         , alpha_(1.0 / (1.0 - theta))
@@ -84,6 +82,20 @@ public:
         assert(0.0 <= theta);
         assert(theta < 1.0); // 1.0 can not be specified.
     }
+    /**
+     * Use this constructor if zeta is pre-calculated.
+     */
+    FastZipf(cybozu::util::Xoroshiro128Plus& rand, double theta, size_t nr, double zetan)
+        : rand_(rand)
+        , nr_(nr)
+        , alpha_(1.0 / (1.0 - theta))
+        , zetan_(zetan)
+        , eta_((1.0 - ::pow(2.0 / (double)nr, 1.0 - theta)) / (1.0 - zeta(2, theta) / zetan_))
+        , threshold_(1.0 + ::pow(0.5, theta)) {
+        assert(0.0 <= theta);
+        assert(theta < 1.0); // 1.0 can not be specified.
+    }
+
     INLINE size_t operator()() {
         double u = rand_() / (double)UINT64_MAX;
 #if 1
@@ -94,7 +106,7 @@ public:
         return (size_t)((double)nr_ * ::pow(eta_ * u - eta_ + 1.0, alpha_));
     }
     uint64_t rand() { return rand_(); }
-private:
+
     static double zeta(size_t nr, double theta) {
         double ans = 0.0;
         for (size_t i = 0; i < nr; i++) {

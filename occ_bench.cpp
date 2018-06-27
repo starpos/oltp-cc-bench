@@ -40,6 +40,7 @@ struct Shared
     size_t nrMuPerTh;
     bool usesZipf;
     double zipfTheta;
+    double zipfZetan;
 };
 
 
@@ -64,7 +65,7 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
-    FastZipf fastZipf(rand, shared.zipfTheta, recV.size());
+    FastZipf fastZipf(rand, shared.zipfTheta, recV.size(), shared.zipfZetan);
 
     std::vector<uint8_t> value(shared.payload);
     cybozu::occ::LockSet lockSet;
@@ -340,6 +341,11 @@ void initShared(Shared& shared, const Opt& opt)
     shared.nrMuPerTh = opt.getNrMuPerTh();
     shared.usesZipf = opt.usesZipf;
     shared.zipfTheta = opt.zipfTheta;
+    if (opt.usesZipf) {
+        shared.zipfZetan = FastZipf::zeta(opt.getNrMu(), shared.zipfTheta);
+    } else {
+        shared.zipfZetan = 1.0;
+    }
 }
 
 

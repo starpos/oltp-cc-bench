@@ -37,6 +37,7 @@ struct Shared
     bool usesRMW;
     bool usesZipf;
     double zipfTheta;
+    double zipfZetan;
 };
 
 
@@ -62,7 +63,7 @@ Result1 worker(size_t idx, uint8_t& ready, const bool& start, const bool& quit, 
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
-    FastZipf fastZipf(rand, shared.zipfTheta, recV.size());
+    FastZipf fastZipf(rand, shared.zipfTheta, recV.size(), shared.zipfZetan);
 
     cybozu::lock::LeisLockSet<UseMap, LeisLockType> llSet;
     std::vector<uint8_t> value(shared.payload);
@@ -262,7 +263,11 @@ void dispatch1(const CmdLineOptionPlus& opt)
     shared.usesRMW = opt.usesRMW ? 1 : 0;
     shared.usesZipf = opt.usesZipf;
     shared.zipfTheta = opt.zipfTheta;
-
+    if (shared.usesZipf) {
+        shared.zipfZetan = FastZipf::zeta(opt.getNrMu(), shared.zipfTheta);
+    } else {
+        shared.zipfZetan = 1.0;
+    }
     for (size_t i = 0; i < opt.nrLoop; i++) {
         Result1 res;
         if (opt.useVector != 0) {

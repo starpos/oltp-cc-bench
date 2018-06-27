@@ -44,6 +44,7 @@ struct Shared
     size_t payload;
     bool usesZipf;
     double zipfTheta;
+    double zipfZetan;
 
     GlobalTxIdGenerator globalTxIdGen;
     SimpleTxIdGenerator simpleTxIdGen;
@@ -86,7 +87,7 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
-    FastZipf fastZipf(rand, shared.zipfTheta, recV.size());
+    FastZipf fastZipf(rand, shared.zipfTheta, recV.size(), shared.zipfZetan);
 
     cybozu::wait_die::LockSet lockSet;
 
@@ -463,7 +464,11 @@ int main(int argc, char *argv[]) try
         shared.payload = opt.payload;
         shared.usesZipf = opt.usesZipf;
         shared.zipfTheta = opt.zipfTheta;
-
+        if (shared.usesZipf) {
+            shared.zipfZetan = FastZipf::zeta(opt.getNrMu(), shared.zipfTheta);
+        } else {
+            shared.zipfZetan = 1.0;
+        }
         for (size_t i = 0; i < opt.nrLoop; i++) {
             dispatch1(opt, shared);
             epochGen_.reset();
