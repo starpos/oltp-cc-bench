@@ -297,7 +297,7 @@ public:
         if (nrElem < nrElem_) {
             // shrink.
             callDstrRange(nrElem, nrElem_);
-            nrElem_ = nrElem_;
+            nrElem_ = nrElem;
         } else if (nrElem > nrElem_) {
             // grow.
             reserve(nrElem);
