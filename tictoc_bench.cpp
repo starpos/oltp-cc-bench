@@ -35,6 +35,7 @@ struct Shared
     int longTxMode;
     bool usesBackOff;
     bool usesRMW;
+    bool nowait;
     size_t nrTh4LongTx;
     size_t payload;
     bool usesZipf;
@@ -83,6 +84,7 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
         isWriteV.resize(nrOp);
     }
     localSet.init(shared.payload, realNrOp);
+    localSet.setNowait(shared.nowait);
 
 #if 0
     GetModeFunc<decltype(rand), Mode>
@@ -210,15 +212,17 @@ struct CmdLineOptionPlus : CmdLineOption
 
     int usesBackOff; // 0 or 1.
     int usesRMW; // 0 or 1.
+    int nowait;  // 0 or 1.
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff (0:off, 1:on)");
         appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write (0:w, 1:rmw, default:1)");
+        appendOpt(&nowait, 0, "nowait", "[0 or 1]: use nowait optimization for write lock.");
     }
     std::string str() const {
         return cybozu::util::formatString(
-            "mode:tictoc %s backoff:%d rmw:%d"
-            , base::str().c_str(), usesBackOff ? 1 : 0, usesRMW ? 1 : 0);
+            "mode:tictoc %s backoff:%d rmw:%d nowait:%d"
+            , base::str().c_str(), usesBackOff ? 1 : 0, usesRMW ? 1 : 0, nowait ? 1 : 0);
     }
 };
 
@@ -244,6 +248,7 @@ int main(int argc, char *argv[]) try
         shared.longTxMode = opt.longTxMode;
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         shared.usesRMW = opt.usesRMW ? 1 : 0;
+        shared.nowait = opt.nowait ? 1 : 0;
         shared.nrTh4LongTx = opt.nrTh4LongTx;
         shared.payload = opt.payload;
         shared.usesZipf = opt.usesZipf;

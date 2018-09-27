@@ -337,16 +337,22 @@ using Flags = std::vector<bool>; // isInWriteSet array.
  *   true: you must commit.
  *   false: you must abort.
  */
-INLINE bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags, MemoryVector& local, size_t valueSize)
+INLINE bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags, MemoryVector& local, size_t valueSize, bool nowait)
 {
     bool ret = false;
+    uint64_t commitTs = 0;
 
     // Lock Write Set.
     std::sort(ws.begin(), ws.end());
     assert(ls.empty());
     ls.reserve(ws.size());
     for (Writer& w : ws) {
-        ls.emplace_back(w.mutex);
+        if (nowait) {
+            ls.emplace_back();
+            if (!ls.back().tryLock(w.mutex)) goto fin;
+        } else {
+            ls.emplace_back(w.mutex);
+        }
     }
 
     // Serialization point.
@@ -364,7 +370,6 @@ INLINE bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags, Memo
     }
 
     // Compute the Commit Timestamp.
-    uint64_t commitTs = 0;
     for (Lock& lk : ls) {
         commitTs = std::max(commitTs, lk.rts() + 1);
     }
@@ -425,8 +430,10 @@ class LocalSet
 
     MemoryVector local_; // stores local values of read/write set.
     size_t valueSize_;
+    bool nowait_;
 
 public:
+    LocalSet() : rs_(), ws_(), ls_(), flags_(), ridx_(), widx_(), local_(), valueSize_(), nowait_(false) {}
     void init(size_t valueSize, size_t nrReserve) {
         valueSize_ = valueSize;
 
@@ -441,6 +448,7 @@ public:
         flags_.reserve(nrReserve);
         local_.reserve(nrReserve);
     }
+    void setNowait(bool nowait) { nowait_ = nowait; }
 
     INLINE void read(Mutex& mutex, void *sharedVal, void *dst) {
         unused(sharedVal); unused(dst);
@@ -490,7 +498,7 @@ public:
         copyValue(&local_[lvidx], src); // write local
     }
     INLINE bool preCommit() {
-        bool ret = cybozu::tictoc::preCommit(rs_, ws_, ls_, flags_, local_, valueSize_);
+        bool ret = cybozu::tictoc::preCommit(rs_, ws_, ls_, flags_, local_, valueSize_, nowait_);
         ridx_.clear();
         widx_.clear();
         local_.clear();
