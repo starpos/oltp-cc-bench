@@ -130,6 +130,7 @@ public:
     }
     INLINE void lock(Mutex *mutex) {
         if (mutex_) throw std::runtime_error("OccLock::lock: already locked");
+        assert(mutex != nullptr);
         mutex_ = mutex;
 
         lockD_ = mutex_->load();
@@ -140,7 +141,26 @@ public:
             if (mutex_->compareAndSwap(lockD_, lockD)) {
                 lockD_ = lockD;
                 updated_ = false;
-                break;
+                return;
+            }
+        }
+    }
+    INLINE bool tryLock(Mutex *mutex) {
+        if (mutex_) throw std::runtime_error("OccLock::tryLock: already locked");
+        assert(mutex);
+
+        lockD_ = mutex->load();
+        for (;;) {
+            if (lockD_.isLocked()) {
+                return false;
+            }
+            LockData lockD = lockD_;
+            lockD.setLock();
+            if (mutex->compareAndSwap(lockD_, lockD)) {
+                lockD_ = lockD;
+                updated_ = false;
+                mutex_ = mutex;
+                return true;
             }
         }
     }
@@ -392,6 +412,16 @@ public:
         }
         // Serialization point.
         SERIALIZATION_POINT_BARRIER();
+    }
+    INLINE bool tryLock() {
+        std::sort(writeV_.begin(), writeV_.end());
+        for (WriteEntry& w : writeV_) {
+            lockV_.emplace_back();
+            if (!lockV_.back().tryLock(w.mutex)) return false;
+        }
+        // Serialization point.
+        SERIALIZATION_POINT_BARRIER();
+        return true;
     }
     INLINE bool verify() {
         const bool useIndex = shouldUseIndex(writeV_);

@@ -35,6 +35,7 @@ struct Shared
     int longTxMode;
     bool usesBackOff;
     bool usesRMW;
+    bool nowait;
     size_t nrTh4LongTx;
     size_t payload;
     size_t nrMuPerTh;
@@ -132,17 +133,21 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
             }
 
             // commit phase.
-            lockSet.lock();
-            if (!lockSet.verify()) {
-                lockSet.clear();
-                res.incAbort(isLongTx);
-                if (shared.usesBackOff) backOff(t0, retry, rand);
-                continue;
+            if (shared.nowait) {
+                if (!lockSet.tryLock()) goto abort;
+            } else {
+                lockSet.lock();
             }
+            if (!lockSet.verify()) goto abort;
             lockSet.updateAndUnlock();
             res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);
             break;
+        abort:
+            lockSet.clear();
+            res.incAbort(isLongTx);
+            if (shared.usesBackOff) backOff(t0, retry, rand);
+            // continue
         }
     }
     return res;
@@ -230,17 +235,21 @@ Result1 worker3(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
             }
 
             // commit phase.
-            lockSet.lock();
-            if (!lockSet.verify()) {
-                lockSet.clear();
-                res.incAbort(isLongTx);
-                if (shared.usesBackOff) backOff(t0, retry, rand);
-                continue;
+            if (shared.nowait) {
+                if (!lockSet.tryLock()) goto abort;
+            } else {
+                lockSet.lock();
             }
+            if (!lockSet.verify()) goto abort;
             lockSet.updateAndUnlock();
             res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);
             break;
+        abort:
+            lockSet.clear();
+            res.incAbort(isLongTx);
+            if (shared.usesBackOff) backOff(t0, retry, rand);
+            // continue;
         }
     }
     return res;
@@ -311,15 +320,17 @@ struct CmdLineOptionPlus : CmdLineOption
 
     int usesBackOff; // 0 or 1.
     int usesRMW; // 0 or 1.
+    int nowait; // 0 or 1.
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff (0:off, 1:on)");
         appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write (0:w, 1:rmw, default:1)");
+        appendOpt(&nowait, 0, "nowait", "[0 or 1]: use nowait optimization.");
     }
     std::string str() const {
         return cybozu::util::formatString(
-            "mode:silo-occ %s backoff:%d rmw:%d"
-            , base::str().c_str(), usesBackOff ? 1 : 0, usesRMW ? 1 : 0);
+            "mode:silo-occ %s backoff:%d rmw:%d nowait:%d"
+            , base::str().c_str(), usesBackOff ? 1 : 0, usesRMW ? 1 : 0, nowait ? 1 : 0);
     }
 };
 
@@ -336,6 +347,7 @@ void initShared(Shared& shared, const Opt& opt)
     shared.longTxMode = opt.longTxMode;
     shared.usesBackOff = opt.usesBackOff ? 1 : 0;
     shared.usesRMW = opt.usesRMW ? 1 : 0;
+    shared.nowait = opt.nowait ? 1 : 0;
     shared.nrTh4LongTx = opt.nrTh4LongTx;
     shared.payload = opt.payload;
     shared.nrMuPerTh = opt.getNrMuPerTh();
