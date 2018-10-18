@@ -23,10 +23,10 @@ struct LocalValInfo
     }
     LocalValInfo(const LocalValInfo&) = default;
     LocalValInfo& operator=(const LocalValInfo&) = default;
-    LocalValInfo(LocalValInfo&& rhs) : LocalValInfo() {
+    LocalValInfo(LocalValInfo&& rhs) noexcept : LocalValInfo() {
         swap(rhs);
     }
-    LocalValInfo& operator=(LocalValInfo&& rhs) {
+    LocalValInfo& operator=(LocalValInfo&& rhs) noexcept {
         swap(rhs);
         return *this;
     }
@@ -40,7 +40,7 @@ struct LocalValInfo
         sharedVal = nullptr;
     }
 
-    void swap(LocalValInfo& rhs) {
+    void swap(LocalValInfo& rhs) noexcept {
         std::swap(localValIdx, rhs.localValIdx);
         std::swap(sharedVal, rhs.sharedVal);
     }
@@ -58,21 +58,18 @@ struct OpEntry
 
     OpEntry() : lock(), info() {
     }
-    explicit OpEntry(Lock&& lock0) : OpEntry() {
-        lock = std::move(lock0);
+    explicit OpEntry(Lock&& lock0) : lock(std::move(lock0)), info() {
     }
     OpEntry(const OpEntry&) = delete;
     OpEntry& operator=(const OpEntry&) = delete;
-    OpEntry(OpEntry&& rhs) : OpEntry() {
+    OpEntry(OpEntry&& rhs) noexcept : OpEntry() {
         swap(rhs);
     }
-    OpEntry& operator=(OpEntry&& rhs) {
+    OpEntry& operator=(OpEntry&& rhs) noexcept {
         swap(rhs);
         return *this;
     }
-    INLINE ~OpEntry() noexcept {
-    }
-    void swap(OpEntry& rhs) {
+    void swap(OpEntry& rhs) noexcept {
         std::swap(lock, rhs.lock);
         std::swap(info, rhs.info);
     }

@@ -15,9 +15,9 @@ class PQNoneLock
 {
 public:
     struct Mutex {};
-    PQNoneLock() {}
+    PQNoneLock() = default;
     PQNoneLock(Mutex *, uint32_t) {}
-    ~PQNoneLock() noexcept {}
+    //~PQNoneLock() noexcept {}
     uint32_t getTopPriorityInWaitQueue() const { return UINT32_MAX; }
 };
 
@@ -225,9 +225,9 @@ public:
         unlock();
     }
     PQSpinLock(const PQSpinLock&) = delete;
-    PQSpinLock(PQSpinLock&& rhs) : PQSpinLock() { swap(rhs); }
+    PQSpinLock(PQSpinLock&& rhs) noexcept : PQSpinLock() { swap(rhs); }
     PQSpinLock& operator=(const PQSpinLock&) = delete;
-    PQSpinLock& operator=(PQSpinLock&& rhs) { swap(rhs); return *this; }
+    PQSpinLock& operator=(PQSpinLock&& rhs) noexcept { swap(rhs); return *this; }
     void lock(Mutex *mutex, uint32_t pri) {
         if (mutex_) throw std::runtime_error("PQSpinLock: already locked");
         mutex_ = mutex;
@@ -266,7 +266,7 @@ public:
         return mutex_->priQ.top()->pri;
     }
 private:
-    void swap(PQSpinLock& rhs) {
+    void swap(PQSpinLock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(node_, rhs.node_);
     }
@@ -341,10 +341,10 @@ public:
      * Move can be supported because locked object's node_ is
      * not included the shared structure.
      */
-    PQMcsLock2(PQMcsLock2&& rhs) : PQMcsLock2() {
+    PQMcsLock2(PQMcsLock2&& rhs) noexcept : PQMcsLock2() {
         swap(rhs);
     }
-    PQMcsLock2& operator=(PQMcsLock2&& rhs) {
+    PQMcsLock2& operator=(PQMcsLock2&& rhs) noexcept {
         swap(rhs);
         return *this;
     }
@@ -422,7 +422,7 @@ public:
     }
 
 private:
-    void swap(PQMcsLock2& rhs) {
+    void swap(PQMcsLock2& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(node_, rhs.node_);
     }
@@ -601,8 +601,8 @@ public:
      * Move can be supported because locked object's node_ is
      * not included the shared structure.
      */
-    PQMcsLock3(PQMcsLock3&& rhs) : PQMcsLock3() { swap(rhs); }
-    PQMcsLock3& operator=(PQMcsLock3&& rhs) { swap(rhs); return *this; }
+    PQMcsLock3(PQMcsLock3&& rhs) noexcept : PQMcsLock3() { swap(rhs); }
+    PQMcsLock3& operator=(PQMcsLock3&& rhs) noexcept { swap(rhs); return *this; }
 
     INLINE void lock(Mutex *mutex, uint32_t order) {
         assert(mutex);
@@ -704,7 +704,7 @@ private:
      * Do not call this in lock() function.
      * Executing lock() function, node_ will be shared by multiple threads.
      */
-    void swap(PQMcsLock3& rhs) {
+    void swap(PQMcsLock3& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(node_, rhs.node_);
     }
@@ -767,9 +767,9 @@ public:
         unlock();
     }
     PQPosixLock(const PQPosixLock&) = delete;
-    PQPosixLock(PQPosixLock&& rhs) : PQPosixLock() { swap(rhs); }
+    PQPosixLock(PQPosixLock&& rhs) noexcept : PQPosixLock() { swap(rhs); }
     PQPosixLock& operator=(const PQPosixLock&) = delete;
-    PQPosixLock& operator=(PQPosixLock&& rhs) { swap(rhs); return *this; }
+    PQPosixLock& operator=(PQPosixLock&& rhs) noexcept { swap(rhs); return *this; }
     void lock(Mutex *mutex, uint32_t pri) {
         if (mutex_) throw std::runtime_error("PQPosixLock: already locked.");
         mutex_ = mutex;
@@ -806,7 +806,7 @@ public:
         }
     }
 private:
-    void swap(PQPosixLock& rhs) {
+    void swap(PQPosixLock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(node_, rhs.node_);
     }

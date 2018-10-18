@@ -271,11 +271,11 @@ public:
     }
 
     ILock(const ILock&) = delete;
-    ILock(ILock&& rhs) : ILock() {
+    ILock(ILock&& rhs) noexcept : ILock() {
         swap(rhs);
     }
     ILock& operator=(const ILock&) = delete;
-    ILock& operator=(ILock&& rhs) {
+    ILock& operator=(ILock&& rhs) noexcept {
         swap(rhs);
         return *this;
     }
@@ -693,7 +693,7 @@ private:
         return true;
     }
 
-    void swap(ILock& rhs) {
+    void swap(ILock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(ordId_, rhs.ordId_);
         std::swap(state_, rhs.state_);

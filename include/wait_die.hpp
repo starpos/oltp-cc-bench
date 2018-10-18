@@ -130,9 +130,9 @@ public:
         unlock();
     }
     WaitDieLock(const WaitDieLock& ) = delete;
-    WaitDieLock(WaitDieLock&& rhs) : WaitDieLock() { swap(rhs); }
+    WaitDieLock(WaitDieLock&& rhs) noexcept : WaitDieLock() { swap(rhs); }
     WaitDieLock& operator=(const WaitDieLock& rhs) = delete;
-    WaitDieLock& operator=(WaitDieLock&& rhs) { swap(rhs); return *this; }
+    WaitDieLock& operator=(WaitDieLock&& rhs) noexcept { swap(rhs); return *this; }
 
     /**
      * This is for blind-write.
@@ -233,7 +233,7 @@ private:
         mode_ = Mode::INVALID;
         txId_ = 0;
     }
-    void swap(WaitDieLock& rhs) {
+    void swap(WaitDieLock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(mode_, rhs.mode_);
         std::swap(txId_, rhs.txId_);

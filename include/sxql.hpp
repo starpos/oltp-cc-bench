@@ -240,9 +240,9 @@ public:
     }
 
     SXQLock(const SXQLock&) = delete;
-    SXQLock(SXQLock&& rhs) : SXQLock() { swap(rhs); }
+    SXQLock(SXQLock&& rhs) noexcept : SXQLock() { swap(rhs); }
     SXQLock& operator=(const SXQLock&) = delete;
-    SXQLock& operator=(SXQLock&& rhs) { swap(rhs); return *this; }
+    SXQLock& operator=(SXQLock&& rhs) noexcept { swap(rhs); return *this; }
 
     std::string str() const {
         return cybozu::util::formatString("SXQLock mutex:%p mode:%hhu", mutex_, mode_);
@@ -697,7 +697,7 @@ private:
         mutex_ = nullptr;
         mode_ = Mode::Invalid;
     }
-    void swap(SXQLock& rhs) {
+    void swap(SXQLock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(mode_, rhs.mode_);
         std::swap(nodeP_, rhs.nodeP_);

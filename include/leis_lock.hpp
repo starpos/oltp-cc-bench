@@ -84,9 +84,9 @@ public:
         verify();
     }
     LockWithMcs(const LockWithMcs&) = delete;
-    LockWithMcs(LockWithMcs&& rhs) : LockWithMcs() { swap(rhs); verify(); }
+    LockWithMcs(LockWithMcs&& rhs) noexcept : LockWithMcs() { swap(rhs); verify(); }
     LockWithMcs& operator=(const LockWithMcs&) = delete;
-    LockWithMcs& operator=(LockWithMcs&& rhs) { swap(rhs); verify(); return *this; }
+    LockWithMcs& operator=(LockWithMcs&& rhs) noexcept { swap(rhs); verify(); return *this; }
 
     // debug
     void verify() const {
@@ -225,7 +225,7 @@ private:
             v = mutex_->atomicLoad();
         }
     }
-    void swap(LockWithMcs& rhs) {
+    void swap(LockWithMcs& rhs) noexcept {
         rhs.verify();
         std::swap(mutex_, rhs.mutex_);
         std::swap(mode_, rhs.mode_);
@@ -276,9 +276,9 @@ struct OpEntryForLeis
     }
     OpEntryForLeis(const OpEntryForLeis&) = delete;
     OpEntryForLeis& operator=(const OpEntryForLeis&) = delete;
-    OpEntryForLeis(OpEntryForLeis&& rhs) : OpEntryForLeis() { swap(rhs); }
-    OpEntryForLeis& operator=(OpEntryForLeis&& rhs) { swap(rhs); return *this; }
-    void swap(OpEntryForLeis& rhs) {
+    OpEntryForLeis(OpEntryForLeis&& rhs) noexcept : OpEntryForLeis() { swap(rhs); }
+    OpEntryForLeis& operator=(OpEntryForLeis&& rhs) noexcept { swap(rhs); return *this; }
+    void swap(OpEntryForLeis& rhs) noexcept {
         std::swap(lock, rhs.lock);
         std::swap(info, rhs.info);
         std::swap(isShared, rhs.isShared);

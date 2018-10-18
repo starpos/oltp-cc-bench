@@ -102,8 +102,8 @@ public:
     size_t localValIdx;
 
     Reader() : mutex_() {}
-    Reader(Reader&& rhs) : Reader() { swap(rhs); }
-    Reader& operator=(Reader&& rhs) { swap(rhs); return *this; }
+    Reader(Reader&& rhs) noexcept : Reader() { swap(rhs); }
+    Reader& operator=(Reader&& rhs) noexcept { swap(rhs); return *this; }
 
     void set(Mutex *mutex, size_t localValIdx0) {
         mutex_ = mutex;
@@ -201,7 +201,7 @@ private:
             _mm_pause();
         }
     }
-    void swap(Reader& rhs) {
+    void swap(Reader& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(tsw_, rhs.tsw_);
         std::swap(localValIdx, rhs.localValIdx);
@@ -219,8 +219,8 @@ public:
 
     Writer() : mutex() {}
     explicit Writer(Mutex *mutex0) : mutex(mutex0) {}
-    Writer(Writer&& rhs) : Writer() { swap(rhs); }
-    Writer& operator=(Writer&& rhs) { swap(rhs); return *this; }
+    Writer(Writer&& rhs) noexcept : Writer() { swap(rhs); }
+    Writer& operator=(Writer&& rhs) noexcept { swap(rhs); return *this; }
 
     void set(Mutex *mutex0, void *sharedVal0, size_t localValIdx0) {
         mutex = mutex0;
@@ -236,7 +236,7 @@ public:
     operator uintptr_t() const { return getId(); }
     bool operator<(const Writer& rhs) { return getId() < rhs.getId(); }
 private:
-    void swap(Writer& rhs) {
+    void swap(Writer& rhs) noexcept {
         std::swap(mutex, rhs.mutex);
         std::swap(localValIdx, rhs.localValIdx);
         std::swap(sharedVal, rhs.sharedVal);
@@ -256,8 +256,8 @@ public:
     ~Lock() noexcept {
         unlock();
     }
-    Lock(Lock&& rhs) : Lock() { swap(rhs); }
-    Lock& operator=(Lock&& rhs) { swap(rhs); return *this; }
+    Lock(Lock&& rhs) noexcept : Lock() { swap(rhs); }
+    Lock& operator=(Lock&& rhs) noexcept { swap(rhs); return *this; }
 
     uintptr_t getId() const {
         uintptr_t ret;
@@ -316,7 +316,7 @@ public:
         mutex_ = nullptr;
     }
 private:
-    void swap(Lock& rhs) {
+    void swap(Lock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(tsw_, rhs.tsw_);
     }

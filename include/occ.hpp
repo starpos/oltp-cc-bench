@@ -122,9 +122,9 @@ public:
         unlock();
     }
     OccLock(const OccLock&) = delete;
-    OccLock(OccLock&& rhs) : OccLock() { swap(rhs); }
+    OccLock(OccLock&& rhs) noexcept : OccLock() { swap(rhs); }
     OccLock& operator=(const OccLock&) = delete;
-    OccLock& operator=(OccLock&& rhs) { swap(rhs); return *this; }
+    OccLock& operator=(OccLock&& rhs) noexcept { swap(rhs); return *this; }
     bool operator<(const OccLock& rhs) const {
         return uintptr_t(mutex_) < uintptr_t(rhs.mutex_);
     }
@@ -181,7 +181,7 @@ public:
         return uintptr_t(mutex_);
     }
 private:
-    void swap(OccLock& rhs) {
+    void swap(OccLock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(lockD_, rhs.lockD_);
     }
@@ -216,9 +216,9 @@ public:
 
     OccReader() : mutex_(), lockD_() {}
     OccReader(const OccReader&) = delete;
-    OccReader(OccReader&& rhs) : OccReader() { swap(rhs); }
+    OccReader(OccReader&& rhs) noexcept : OccReader() { swap(rhs); }
     OccReader& operator=(const OccReader&) = delete;
-    OccReader& operator=(OccReader&& rhs) { swap(rhs); return *this; }
+    OccReader& operator=(OccReader&& rhs) noexcept { swap(rhs); return *this; }
 
     void set(const Mutex *mutex, size_t localValIdx0) {
         mutex_ = mutex;
@@ -259,7 +259,7 @@ public:
         return uintptr_t(mutex_);
     }
 private:
-    void swap(OccReader& rhs) {
+    void swap(OccReader& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(lockD_, rhs.lockD_);
         std::swap(localValIdx, rhs.localValIdx);
@@ -277,9 +277,9 @@ struct WriteEntry
     WriteEntry() : mutex(), sharedVal(), localValIdx() {
     }
     WriteEntry(const WriteEntry&) = delete;
-    WriteEntry(WriteEntry&& rhs) : WriteEntry() { swap(rhs); }
+    WriteEntry(WriteEntry&& rhs) noexcept : WriteEntry() { swap(rhs); }
     WriteEntry& operator=(const WriteEntry&) = delete;
-    WriteEntry& operator=(WriteEntry&& rhs) { swap(rhs); return *this; }
+    WriteEntry& operator=(WriteEntry&& rhs) noexcept { swap(rhs); return *this; }
 
     bool operator<(const WriteEntry& rhs) const {
         return getMutexId() < rhs.getMutexId();
@@ -293,7 +293,7 @@ struct WriteEntry
         return uintptr_t(mutex);
     }
 private:
-    void swap(WriteEntry& rhs) {
+    void swap(WriteEntry& rhs) noexcept {
         std::swap(mutex, rhs.mutex);
         std::swap(sharedVal, rhs.sharedVal);
         std::swap(localValIdx, rhs.localValIdx);

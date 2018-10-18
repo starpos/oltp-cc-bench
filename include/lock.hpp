@@ -350,9 +350,9 @@ public:
         unlock();
     }
     XSLock(const XSLock&) = delete;
-    XSLock(XSLock&& rhs) : XSLock() { swap(rhs); }
+    XSLock(XSLock&& rhs) noexcept : XSLock() { swap(rhs); }
     XSLock& operator=(const XSLock&) = delete;
-    XSLock& operator=(XSLock&& rhs) { swap(rhs); return *this; }
+    XSLock& operator=(XSLock&& rhs) noexcept { swap(rhs); return *this; }
     INLINE void lock(XSMutex *mutex, Mode mode) {
         assert(mode_ == Mode::Invalid);
         assert(mutex);
@@ -406,7 +406,7 @@ private:
         mutex_ = nullptr;
         mode_ = Mode::Invalid;
     }
-    void swap(XSLock& rhs) {
+    void swap(XSLock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(mode_, rhs.mode_);
     }
