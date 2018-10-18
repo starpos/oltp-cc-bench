@@ -69,10 +69,10 @@ struct Mutex
     }
 #endif
     TsWord load() const {
-        return (TsWord)__atomic_load_n(&tsw.obj, __ATOMIC_RELAXED);
+        return __atomic_load_n(&tsw.obj, __ATOMIC_RELAXED);
     }
     TsWord loadAcquire() const {
-        return (TsWord)__atomic_load_n(&tsw.obj, __ATOMIC_ACQUIRE);
+        return __atomic_load_n(&tsw.obj, __ATOMIC_ACQUIRE);
     }
     // This is used in the write-lock phase.
     // Full fence is set at the last point of the phase.

@@ -48,6 +48,7 @@ struct Shared
 enum class Mode : bool { S = false, X = true, };
 
 
+template <bool nowait>
 Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
@@ -133,7 +134,7 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
             }
 
             // commit phase.
-            if (shared.nowait) {
+            if (nowait) {
                 if (!lockSet.tryLock()) goto abort;
             } else {
                 lockSet.lock();
@@ -154,6 +155,7 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 }
 
 
+template <bool nowait>
 Result1 worker3(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
@@ -235,7 +237,7 @@ Result1 worker3(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
             }
 
             // commit phase.
-            if (shared.nowait) {
+            if (nowait) {
                 if (!lockSet.tryLock()) goto abort;
             } else {
                 lockSet.lock();
@@ -361,6 +363,26 @@ void initShared(Shared& shared, const Opt& opt)
 }
 
 
+void dispatch2(const CmdLineOptionPlus& opt, Shared& shared, Result1& res)
+{
+    if (shared.nowait) {
+        runExec(opt, shared, worker2<1>, res);
+    } else {
+        runExec(opt, shared, worker2<0>, res);
+    }
+}
+
+
+void dispatch3(const CmdLineOptionPlus& opt, Shared& shared, Result1& res)
+{
+    if (shared.nowait) {
+        runExec(opt, shared, worker3<1>, res);
+    } else {
+        runExec(opt, shared, worker3<0>, res);
+    }
+}
+
+
 int main(int argc, char *argv[]) try
 {
     CmdLineOptionPlus opt("occ_bench: benchmark with silo-occ.");
@@ -376,14 +398,14 @@ int main(int argc, char *argv[]) try
         initShared(shared, opt);
         for (size_t i = 0; i < opt.nrLoop; i++) {
             Result1 res;
-            runExec(opt, shared, worker2, res);
+            dispatch2(opt, shared, res);
         }
     } else if (opt.workload == "local") {
         Shared shared;
         initShared(shared, opt);
         for (size_t i = 0; i < opt.nrLoop; i++) {
             Result1 res;
-            runExec(opt, shared, worker3, res);
+            dispatch3(opt, shared, res);
         }
     } else {
         throw cybozu::Exception("bad workload.") << opt.workload;
