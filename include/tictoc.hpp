@@ -94,6 +94,18 @@ struct Mutex
 };
 
 
+#if 0
+#define USE_TICTOC_RTS_COUNT
+#else
+//#undef USE_TICTOC_RTS_COUNT
+#endif
+
+#ifdef USE_TICTOC_RTS_COUNT
+thread_local size_t update_rts_count_ = 0;
+thread_local size_t read_count_ = 0;
+#endif
+
+
 class Reader
 {
     Mutex *mutex_;
@@ -161,6 +173,9 @@ public:
         if (tsw_.rts() >= commitTs) {
             // tsw_.rts() <= v1.rts is invariant so we can avoid checking.
             assert(!isInWriteSet); // This is read-only.
+#ifdef USE_TICTOC_RTS_COUNT
+            read_count_++;
+#endif
             return true;
         }
         TsWord v1 = mutex_->loadAcquire();
@@ -179,6 +194,9 @@ public:
                  * However, if v1.rts() == commitTs then extend is not necessary.
                  * If isInWriteSet then it is not also
                  * because updateAndUnlock() will update the tsword.. */
+#ifdef USE_TICTOC_RTS_COUNT
+                read_count_++;
+#endif
                 return true;
             }
             // Try to extend rts.
@@ -188,6 +206,10 @@ public:
             v2.wts += shift;
             v2.delta = delta - shift;
             if (mutex_->compareAndSwap(v1, v2)) {
+#ifdef USE_TICTOC_RTS_COUNT
+                read_count_++;
+                update_rts_count_++;
+#endif
                 return true;
             }
         }

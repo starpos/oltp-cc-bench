@@ -142,6 +142,11 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
             if (shared.usesBackOff) backOff(t0, retry, rand);
         }
     }
+#ifdef USE_TICTOC_RTS_COUNT
+    ::printf("rts_ratio_of_%zu: %zu/%zu\n"
+             , idx, cybozu::tictoc::update_rts_count_
+             , cybozu::tictoc::read_count_);
+#endif
     return res;
 }
 
