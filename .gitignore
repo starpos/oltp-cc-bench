@@ -26,6 +26,7 @@ atomic_inc
 nowait_bench
 cas_bench
 cas_bench2
+cas_bench3
 licc_bench
 sxql_test
 show_cpu_affinity
