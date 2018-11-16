@@ -5,6 +5,7 @@ GPATH
 GRTAGS
 GSYMS
 GTAGS
+*.log*
 
 CMakeCache.txt
 CMakeFiles/
