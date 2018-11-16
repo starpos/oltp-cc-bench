@@ -28,7 +28,7 @@ Int0 exchange(Int0& m, Int1 v, int mode) {
 }
 
 template <typename Int0, typename Int1>
-bool compareExchange(Int0& m, Int0& before, Int1 after, int mode) {
+bool compareExchange(Int0& m, Int0& before, Int1 after, int mode = __ATOMIC_ACQ_REL) {
     return __atomic_compare_exchange_n(&m, &before, (Int0)after, false, mode, __ATOMIC_RELAXED);
 }
 
