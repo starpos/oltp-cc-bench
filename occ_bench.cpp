@@ -139,7 +139,11 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
             } else {
                 lockSet.lock();
             }
+#if 1
             if (!lockSet.verify()) goto abort;
+#else
+            if (!lockSet.verifyWithHealing()) goto abort;
+#endif
             lockSet.updateAndUnlock();
             res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);

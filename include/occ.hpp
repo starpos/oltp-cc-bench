@@ -212,6 +212,7 @@ private:
     const Mutex *mutex_;
     LockData lockD_;
 public:
+    const void *sharedVal;
     size_t localValIdx;  // local data index.
 
     OccReader() : mutex_(), lockD_() {}
@@ -220,8 +221,9 @@ public:
     OccReader& operator=(const OccReader&) = delete;
     OccReader& operator=(OccReader&& rhs) noexcept { swap(rhs); return *this; }
 
-    void set(const Mutex *mutex, size_t localValIdx0) {
+    void set(const Mutex *mutex, const void *sharedVal0, size_t localValIdx0) {
         mutex_ = mutex;
+        sharedVal = sharedVal0;
         localValIdx = localValIdx0;
     }
 
@@ -235,6 +237,11 @@ public:
             if (!lockD_.isLocked()) break;
             _mm_pause();
         }
+    }
+    bool tryPrepare() {
+        assert(mutex_);
+        lockD_ = mutex_->loadAcquire();
+        return !lockD_.isLocked();
     }
     /**
      * Call this just after read the resource.
@@ -362,22 +369,33 @@ public:
 
                 readV_.emplace_back();
                 OccReader& r = readV_.back();
-                r.set(&mutex, localValIdx);
-                for (;;) {
-                    r.prepare();
-                    // read shared data.
-#ifndef NO_PAYLOAD
-                    ::memcpy(&local_[localValIdx], sharedVal, valueSize_);
-#endif
-                    r.readFence();
-                    if (r.verifyAll()) break;
-                }
+                r.set(&mutex, sharedVal, localValIdx);
+                readToLocal(r);
             }
         }
         // read local data.
 #ifndef NO_PAYLOAD
         ::memcpy(localVal, &local_[localValIdx], valueSize_);
 #endif
+    }
+    INLINE void readToLocal(OccReader& r) {
+        for (;;) {
+            r.prepare();
+            // read shared data.
+#ifndef NO_PAYLOAD
+            ::memcpy(&local_[r.localValIdx], r.sharedVal, valueSize_);
+#endif
+            r.readFence();
+            if (r.verifyAll()) break;
+        }
+    }
+    INLINE bool tryReadToLocal(OccReader& r, bool inWriteSet) {
+        if (!r.tryPrepare()) return false;
+#ifndef NO_PAYLOAD
+        ::memcpy(&local_[r.localValIdx], r.sharedVal, valueSize_);
+#endif
+        r.readFence();
+        return inWriteSet ? r.verifyVersion() : r.verifyAll();
     }
     INLINE void write(Mutex& mutex, void *sharedVal, void *localVal) {
         unused(sharedVal); unused(localVal);
@@ -439,6 +457,39 @@ public:
             }
             const bool valid = inWriteSet ? r.verifyVersion() : r.verifyAll();
             if (!valid) return false;
+        }
+        return true;
+    }
+    /**
+     * This is very limited healing.
+     */
+    INLINE bool verifyWithHealing() {
+        const bool useIndex = shouldUseIndex(writeV_);
+        if (!useIndex) {
+            std::sort(writeV_.begin(), writeV_.end());
+        }
+        bool isHealed = true;
+        while (isHealed) {
+            isHealed = false;
+            for (OccReader& r : readV_) {
+                bool inWriteSet;
+                if (useIndex) {
+                    inWriteSet = findInWriteSet(r.getMutexId()) != writeV_.end();
+                } else {
+                    WriteEntry w;
+                    w.set((Mutex *)r.getMutexId(), nullptr, 0);
+                    inWriteSet = std::binary_search(writeV_.begin(), writeV_.end(), w);
+                }
+                const bool valid = inWriteSet ? r.verifyVersion() : r.verifyAll();
+                if (!valid) {
+                    // do healing
+                    if (!tryReadToLocal(r, inWriteSet)) {
+                        // try read failed. (We can not wait for lock to avoid deadlock.)
+                        return false;
+                    }
+                    isHealed = true;
+                }
+            }
         }
         return true;
     }
