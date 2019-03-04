@@ -372,7 +372,7 @@ struct Result2
 void waitForAllTrue(const std::vector<uint8_t>& v)
 {
     for (;;) {
-        if (std::all_of(v.cbegin(), v.cend(), [](uint8_t b) { return b != 0; })) {
+        if (std::all_of(v.cbegin(), v.cend(), [](const uint8_t& b) { return loadAcquire(b) != 0; })) {
             break;
         }
         sleepMs(100);
