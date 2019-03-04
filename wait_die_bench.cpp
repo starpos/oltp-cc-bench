@@ -97,7 +97,7 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     PriorityIdGenerator<12> priIdGen;
     priIdGen.init(idx + 1);
     TxIdGenerator localTxIdGen(&shared.globalTxIdGen);
-    EpochTxIdGenerator<8, 2> epochTxIdGen(idx + 1, epochGen_);
+    EpochTxIdGenerator<9, 2> epochTxIdGen(idx + 1, epochGen_);
 
     // USE_MIX_TX
     std::vector<bool> isWriteV(nrOp);
@@ -257,7 +257,7 @@ Result2 worker3(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 #if 0
     TxIdGenerator localTxIdGen(&shared.globalTxIdGen);
 #else
-    EpochTxIdGenerator<8, 2> epochTxIdGen(idx + 1, epochGen_);
+    EpochTxIdGenerator<9, 2> epochTxIdGen(idx + 1, epochGen_);
 #if 0
     if (idx == 0) {
         epochTxIdGen.setOrderId(0);

@@ -172,7 +172,7 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     ordIdGen.workerId = idx;
     cybozu::lock::SimpleEpochGenerator epochGen;
 #else
-    EpochTxIdGenerator<8, 2> epochTxIdGen(idx + 1, epochGen_);
+    EpochTxIdGenerator<9, 2> epochTxIdGen(idx + 1, epochGen_);
 #endif
 
 #if 0
@@ -415,7 +415,7 @@ Result2 worker1(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     ordIdGen.workerId = idx + 1;
     cybozu::lock::SimpleEpochGenerator epochGen;
 #else
-    EpochTxIdGenerator<8, 2> epochTxIdGen(idx + 1, epochGen_);
+    EpochTxIdGenerator<9, 2> epochTxIdGen(idx + 1, epochGen_);
 #if 0
     if (idx == 0) {
         epochTxIdGen.setOrderId(0);
