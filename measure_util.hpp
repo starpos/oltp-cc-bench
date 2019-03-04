@@ -393,7 +393,13 @@ void runExec(const CmdLineOption& opt, SharedData& shared, Worker&& worker, Resu
     std::vector<Result> resV(nrTh);
     for (size_t i = 0; i < nrTh; i++) {
         thS.add([&,i]() {
-            resV[i] = worker(i, readyV[i], start, quit, shouldQuit, shared);
+            try {
+                resV[i] = worker(i, readyV[i], start, quit, shouldQuit, shared);
+            } catch (std::exception& e) {
+                ::fprintf(::stderr, "error workerid:%zu message:%s\n", i, e.what());
+            } catch (...) {
+                ::fprintf(::stderr, "unknown error workerid:%zu\n", i);
+            }
         });
     }
     thS.start();
