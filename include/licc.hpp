@@ -357,7 +357,7 @@ public:
                 waitFor<PREPARE_READ>(ld0);
                 continue;
             }
-            __atomic_thread_fence(__ATOMIC_ACQUIRE);
+            acquire_memory_barrier();
             // read shared memory.
 #ifndef NO_PAYLOAD
             ::memcpy(local, shared, size);
@@ -770,7 +770,7 @@ public:
 #endif
     }
     // You must call this method at beginning of each transaction.
-    void setOrdId(uint32_t ordId) {
+    void set_ord_id(uint32_t ordId) {
         ordId_ = ordId;
     }
 
@@ -779,13 +779,13 @@ public:
      * it can be executed with low overhead.
      * However, this function does not preserve progress guarantee.
      */
-    INLINE void invisibleRead(Mutex& mutex, void *sharedVal, void *dst) {
-        unused(sharedVal); unused(dst);
+    INLINE bool optimistic_read(Mutex& mutex, void *sharedVal, void *dst) {
+        unused(sharedVal, dst);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it = findInVec(key);
         if (it != vec_.end()) {
             copyValue(dst, getLocalValPtr(it->info));
-            return;
+            return true;
         }
         vec_.emplace_back(Lock(mutex, ordId_));
         OpEntryL& ope = vec_.back();
@@ -800,12 +800,13 @@ public:
             if (lk.unchanged()) break;
         }
         copyValue(dst, localVal);
+        return true;
     }
     /**
      * You should use this function to read records
      * to preserve progress guarantee.
      */
-    INLINE bool reservedRead(Mutex& mutex, void *sharedVal, void *dst) {
+    INLINE bool pessimistic_read(Mutex& mutex, void *sharedVal, void *dst) {
         unused(sharedVal); unused(dst);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
@@ -831,8 +832,8 @@ public:
     /**
      * You should use this function to write records.
      */
-    INLINE bool write(Mutex& mutex, void *sharedVal, void *src) {
-        unused(sharedVal); unused(src);
+    INLINE bool write(Mutex& mutex, void *sharedVal, const void *src) {
+        unused(sharedVal, src);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
@@ -870,8 +871,8 @@ public:
      *
      * (2) is more efficient than (1).
      */
-    INLINE bool readForUpdate(Mutex& mutex, void *sharedVal, void *dst) {
-        unused(sharedVal); unused(dst);
+    INLINE bool read_for_update(Mutex& mutex, void *sharedVal, void *dst) {
+        unused(sharedVal, dst);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it0 = findInVec(key);
         if (it0 == vec_.end()) {
@@ -901,13 +902,13 @@ public:
 
     /*
      * Pre-commit phase:
-     * You must call blindWriteReserveAll(), protectAll(), verifyAndUnlock(), updateAndUnlock()
+     * You must call reserve_all_blind_writes(), protect_all(), verify_and_unlock(), update_and_unlock()
      * in sequence.
-     * The point between protectAll() and verifyAndUnlock() is the serialization point.
-     * The point between verifyAndUnlock() and updateAndUnlock() is the strictness point.
+     * The point between protect_all() and verify_and_unlock() is the serialization point.
+     * The point between verify_and_unlock() and update_and_unlock() is the strictness point.
      */
 
-    INLINE void blindWriteReserveAll() {
+    INLINE void reserve_all_blind_writes() {
 #if 0
         // If you use this optimization, do not use bwV_.
         const size_t threshold = 4096 / sizeof(OpEntryL);
@@ -935,7 +936,7 @@ public:
         }
 #endif
     }
-    INLINE bool protectAll() {
+    INLINE bool protect_all() {
 #if 0
         const size_t threshold = 4096 / sizeof(OpEntryL);
         if (vec_.size() > threshold) {
@@ -968,7 +969,7 @@ public:
         SERIALIZATION_POINT_BARRIER();
         return true;
     }
-    INLINE bool verifyAndUnlock() {
+    INLINE bool verify_and_unlock() {
         for (OpEntryL& ope : vec_) {
             Lock& lk = ope.lock;
             // read-modify-write entries have been checked at protectAll() already.
@@ -982,7 +983,7 @@ public:
         }
         return true;
     }
-    INLINE void updateAndUnlock() {
+    INLINE void update_and_unlock() {
 #ifdef USE_LICC_INDEX_CACHE
         for (size_t i : wV_) {
             OpEntryL& ope = vec_[i];

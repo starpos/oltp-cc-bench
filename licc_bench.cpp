@@ -1,5 +1,9 @@
 #include <cstdio>
+#ifdef USE_LICC2
+#include "licc2.hpp"
+#else
 #include "licc.hpp"
+#endif
 #include "pqlock.hpp"
 #include "cmdline_option.hpp"
 #include "measure_util.hpp"
@@ -40,8 +44,6 @@ struct CmdLineOptionPlus : CmdLineOption
 };
 
 
-using ILockData = cybozu::lock::ILockData;
-
 enum class IMode : uint8_t {
     S = 0, X = 1, INVALID = 2,
 };
@@ -49,9 +51,15 @@ enum class IMode : uint8_t {
 template <typename PQLock>
 struct ILockTypes
 {
+#ifdef USE_LICC2
+    using ILock = cybozu::lock::licc2::Lock;
+    using IMutex = cybozu::lock::licc2::Mutex;
+    using ILockSet = cybozu::lock::licc2::LockSet;
+#else
     using ILock = cybozu::lock::ILock<PQLock>;
     using IMutex = cybozu::lock::IMutex<PQLock>;
     using ILockSet = cybozu::lock::ILockSet<PQLock>;
+#endif
 };
 
 
@@ -213,7 +221,7 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
         const uint32_t ordId = epochTxIdGen.get();
 #endif
 
-        lockSet.setOrdId(ordId);
+        lockSet.set_ord_id(ordId);
         //::printf("Tx begin\n"); // debug code
         size_t firstRecIdx;
 
@@ -224,7 +232,7 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
             if (loadAcquire(quit)) break; // to quit under starvation.
-            assert(lockSet.isEmpty());
+            assert(lockSet.is_empty());
             rand.setState(randState);
             //::printf("begin\n"); // QQQQQ
 #ifdef MONITOR_LATENCY
@@ -258,14 +266,14 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
                         (rmode == ReadMode::OCC) ||
                         (rmode == ReadMode::HYBRID && !isLongTx && retry == 0);
                     if (tryInvisibleRead) {
-                        lockSet.invisibleRead(mutex, sharedValue, &value[0]);
+                        if (!lockSet.optimistic_read(mutex, sharedValue, &value[0])) goto abort;
                     } else {
-                        if (!lockSet.reservedRead(mutex, sharedValue, &value[0])) goto abort;
+                        if (!lockSet.pessimistic_read(mutex, sharedValue, &value[0])) goto abort;
                     }
                 } else {
                     assert(mode == IMode::X);
                     if (usesRMW) {
-                        if (!lockSet.readForUpdate(mutex, sharedValue, &value[0])) goto abort;
+                        if (!lockSet.read_for_update(mutex, sharedValue, &value[0])) goto abort;
                         if (!lockSet.write(mutex, sharedValue, &value[0])) goto abort;
                     } else {
                         if (!lockSet.write(mutex, sharedValue, &value[0])) goto abort;
@@ -276,19 +284,19 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
             ts[1] = cybozu::time::rdtscp();
 #endif
             //::printf("try protect %zu\n", retry); // debug code
-            lockSet.blindWriteReserveAll();
+            lockSet.reserve_all_blind_writes();
 #ifdef MONITOR_LATENCY
             ts[2] = cybozu::time::rdtscp();
 #endif
-            if (!lockSet.protectAll()) goto abort;
+            if (!lockSet.protect_all()) goto abort;
 #ifdef MONITOR_LATENCY
             ts[3] = cybozu::time::rdtscp();
 #endif
-            if (!lockSet.verifyAndUnlock()) goto abort;
+            if (!lockSet.verify_and_unlock()) goto abort;
 #ifdef MONITOR_LATENCY
             ts[4] = cybozu::time::rdtscp();
 #endif
-            lockSet.updateAndUnlock();
+            lockSet.update_and_unlock();
 #ifdef MONITOR_LATENCY
             ts[5] = cybozu::time::rdtscp();
 #endif
@@ -448,13 +456,13 @@ Result2 worker1(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
         const uint32_t ordId = epochTxIdGen.get();
 #endif
 
-        lockSet.setOrdId(ordId);
+        lockSet.set_ord_id(ordId);
         uint64_t t0;
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
             if (loadAcquire(quit)) break; // to quit under starvation.
-            assert(lockSet.isEmpty());
+            assert(lockSet.is_empty());
             rand.setState(randState);
             boolRand.reset();
             for (size_t i = 0; i < realNrOp; i++) {
@@ -472,24 +480,24 @@ Result2 worker1(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
                         (rmode == ReadMode::OCC) ||
                         (rmode == ReadMode::HYBRID && !isLongTx && retry == 0);
                     if (tryInvisibleRead) {
-                        lockSet.invisibleRead(mutex, sharedValue, &value[0]);
+                        if (!lockSet.optimistic_read(mutex, sharedValue, &value[0])) goto abort;
                     } else {
-                        if (!lockSet.reservedRead(mutex, sharedValue, &value[0])) goto abort;
+                        if (!lockSet.pessimistic_read(mutex, sharedValue, &value[0])) goto abort;
                     }
                 } else {
                     assert(mode == IMode::X);
                     if (shared.usesRMW) {
-                        if (!lockSet.readForUpdate(mutex, sharedValue, &value[0])) goto abort;
+                        if (!lockSet.read_for_update(mutex, sharedValue, &value[0])) goto abort;
                         if (!lockSet.write(mutex, sharedValue, &value[0])) goto abort;
                     } else {
                         if (!lockSet.write(mutex, sharedValue, &value[0])) goto abort;
                     }
                 }
             }
-            lockSet.blindWriteReserveAll();
-            if (!lockSet.protectAll()) goto abort;
-            if (!lockSet.verifyAndUnlock()) goto abort;
-            lockSet.updateAndUnlock();
+            lockSet.reserve_all_blind_writes();
+            if (!lockSet.protect_all()) goto abort;
+            if (!lockSet.verify_and_unlock()) goto abort;
+            lockSet.update_and_unlock();
             res.incCommit(txSize);
             res.addRetryCount(txSize, retry);
             break;

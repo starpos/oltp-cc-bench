@@ -37,6 +37,27 @@
 
 #define CHECKx(cond) cybozu::util::checkCond(cond, __func__, __LINE__)
 
+
+#define BUG_P(fmt, ...) do {                                        \
+        ::fprintf(::stderr, "BUG: %s:%d " fmt "\n"                  \
+                  , __func__, __LINE__, __VA_ARGS__);               \
+        ::exit(1);                                                  \
+    } while (0)
+
+
+#define BUG() do {                                                  \
+        ::fprintf(::stderr, "BUG: %s:%d\n", __func__, __LINE__);    \
+        ::exit(1);                                                  \
+    } while (0)
+
+
+#define BUG_ON(cond) do {                       \
+        if (cond) {                             \
+            BUG();                              \
+        }                                       \
+    } while (0)
+
+
 #define DISABLE_COPY_AND_ASSIGN(ClassName)              \
     ClassName(const ClassName &rhs) = delete;           \
     ClassName &operator=(const ClassName &rhs) = delete
@@ -45,13 +66,9 @@
     ClassName(ClassName &&rhs) = delete;            \
     ClassName &operator=(ClassName &&rhs) = delete
 
-template <typename T>
-inline void unusedVar(T &)
-{
-}
 
-template <typename T>
-inline void unused(T&)
+template <typename... Args>
+void unused(Args&&...)
 {
 }
 

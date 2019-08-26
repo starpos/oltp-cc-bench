@@ -21,6 +21,7 @@ set(MUTEX_ON_CACHELINE ON CACHE BOOL "mutex on cacheline")
 set(NO_PAYLOAD OFF CACHE BOOL "payload size 0")
 set(PARTITION OFF CACHE BOOL "Shared records are partitioned for NUMA etc")
 set(LTO ON CACHE BOOL "use LTO")
+set(LICC2 OFF CACHE BOOL "use licc2 instead licc1")
 
 
 # Get compiler type.
@@ -62,6 +63,11 @@ message(STATUS "LTO: " ${LTO})
 if(LTO)
 	list(APPEND cflagItems " -flto=thin")
 endif()
+message(STATUS "LICC2: " ${LICC2})
+if(LICC2)
+	list(APPEND cflagItems " -DUSE_LICC2")
+endif()
+
 
 if(architecture STREQUAL x86_64)
 	list(APPEND cflagItems " -mcx16")

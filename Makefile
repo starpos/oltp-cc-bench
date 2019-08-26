@@ -33,7 +33,7 @@ endif
 #CFLAGS +=  -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free
 
 CFLAGS += -Wall -Wextra -I./include -I./cybozulib/include
-CXXFLAGS = -std=c++1z -pthread $(CFLAGS)
+CXXFLAGS = -std=c++17 -pthread $(CFLAGS)
 #LDFLAGS = -latomic
 LDFLAGS = -Wl,-R,'$$ORIGIN' -L./
 #LDLIBS = -ltcmalloc_minimal

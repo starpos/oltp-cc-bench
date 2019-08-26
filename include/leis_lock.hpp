@@ -182,12 +182,12 @@ public:
 
         if (mode_ == Mode::X) {
             int ret = mutex_->atomicFetchAdd(1, __ATOMIC_RELEASE);
-            unusedVar(ret);
+            unused(ret);
             assert(ret == -1);
         } else {
             assert(mode_ == Mode::S);
             int ret = mutex_->atomicFetchSub(1, __ATOMIC_RELEASE);
-            unusedVar(ret);
+            unused(ret);
             assert(ret >= 1);
         }
         mode_ = Mode::Invalid;
