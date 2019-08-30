@@ -10,21 +10,21 @@ using namespace cybozu::lock::licc2;
 
 
 template <typename C>
-void verify_possible(const C& lmc_v)
+void verify_possible(const C& moc_v)
 {
-    static_assert(std::is_same<typename C::value_type, LockMutexCreator>::value);
-    for (const LockMutexCreator& lmc : lmc_v) {
-        ::printf("%s\n", lmc.str().c_str());
-        CYBOZU_TEST_ASSERT(lmc.possible());
+    static_assert(std::is_same<typename C::value_type, MutexOpCreator>::value);
+    for (const MutexOpCreator& moc : moc_v) {
+        ::printf("%s\n", moc.str().c_str());
+        CYBOZU_TEST_ASSERT(moc.possible());
     }
 }
 
 
-void verify_unlockable(const LockMutexCreator& lmc0)
+void verify_unlockable(const MutexOpCreator& moc0)
 {
-    LockMutexCreator lmc1 = lmc0.unlock();
-    CYBOZU_TEST_ASSERT(lmc1.possible());
-    CYBOZU_TEST_EQUAL(lmc1.ld.state, LockState::INIT);
+    MutexOpCreator moc1 = moc0.unlock();
+    CYBOZU_TEST_ASSERT(moc1.possible());
+    CYBOZU_TEST_EQUAL(moc1.ld.state, LockState::INIT);
 }
 
 
@@ -34,7 +34,7 @@ CYBOZU_TEST_AUTO(test_read_reserve)
     uint32_t ord_id = 10;
     LockData ld0(ord_id);
 
-    std::vector<LockMutexCreator> v;
+    std::vector<MutexOpCreator> v;
     v.emplace_back(ld0, md0);
     verify_unlockable(v.back());
     v.push_back(v.back().read_reserve_1st());
@@ -53,7 +53,7 @@ CYBOZU_TEST_AUTO(test_read_reserve_and_upgrade)
     uint32_t ord_id = 10;
     LockData ld0(ord_id);
 
-    std::vector<LockMutexCreator> v;
+    std::vector<MutexOpCreator> v;
     v.emplace_back(ld0, md0);
     v.push_back(v.back().read_reserve_1st());
     verify_unlockable(v.back());
@@ -74,7 +74,7 @@ CYBOZU_TEST_AUTO(test_blind_write_reserve)
     uint32_t ord_id = 10;
     LockData ld0(ord_id);
 
-    std::vector<LockMutexCreator> v;
+    std::vector<MutexOpCreator> v;
     v.emplace_back(ld0, md0);
     v.push_back(v.back().blind_write());
     verify_unlockable(v.back());
@@ -85,9 +85,9 @@ CYBOZU_TEST_AUTO(test_blind_write_reserve)
     v.push_back(v.back().protect<LockState::BLIND_WRITE>());
     v.push_back(v.back().unlock());
 
-    for (LockMutexCreator& lmc : v) {
-        ::printf("%s\n", lmc.str().c_str());
-        CYBOZU_TEST_ASSERT(lmc.possible());
+    for (MutexOpCreator& moc : v) {
+        ::printf("%s\n", moc.str().c_str());
+        CYBOZU_TEST_ASSERT(moc.possible());
     }
 }
 
