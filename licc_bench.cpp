@@ -578,6 +578,7 @@ void dispatch0(CmdLineOptionPlus& opt)
     case USE_PQNoneLock:
         dispatch1<cybozu::lock::PQNoneLock>(opt);
         break;
+#ifndef USE_LICC2
     case USE_PQSpinLock:
         dispatch1<cybozu::lock::PQSpinLock>(opt);
         break;
@@ -601,6 +602,8 @@ void dispatch0(CmdLineOptionPlus& opt)
     case USE_PQMcsLock3:
         dispatch1<cybozu::lock::PQMcsLock3>(opt);
         break;
+#else // USE_LICC2
+#endif // USE_LICC2
     default:
         throw cybozu::Exception("bad pqLockType") << opt.pqLockType;
     }

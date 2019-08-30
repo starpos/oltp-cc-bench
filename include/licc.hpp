@@ -1017,7 +1017,7 @@ public:
         wV_.clear();
 #endif
     }
-    INLINE bool isEmpty() const { return vec_.empty(); }
+    INLINE bool is_empty() const { return vec_.empty(); }
 
 private:
     INLINE typename Vec::iterator findInVec(uintptr_t key) {

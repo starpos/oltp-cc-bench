@@ -37,9 +37,9 @@ CYBOZU_TEST_AUTO(test_read_reserve)
     std::vector<LockMutexCreator> v;
     v.emplace_back(ld0, md0);
     verify_unlockable(v.back());
-    v.push_back(v.back().read_reserve());
+    v.push_back(v.back().read_reserve_1st());
     verify_unlockable(v.back());
-    v.push_back(v.back().read_reserve_again());
+    v.push_back(v.back().read_reserve_recover());
     verify_unlockable(v.back());
     v.push_back(v.back().unlock());
 
@@ -55,13 +55,13 @@ CYBOZU_TEST_AUTO(test_read_reserve_and_upgrade)
 
     std::vector<LockMutexCreator> v;
     v.emplace_back(ld0, md0);
-    v.push_back(v.back().read_reserve());
+    v.push_back(v.back().read_reserve_1st());
     verify_unlockable(v.back());
-    v.push_back(v.back().read_reserve_again());
+    v.push_back(v.back().read_reserve_recover());
     verify_unlockable(v.back());
     v.push_back(v.back().upgrade_reservation());
     verify_unlockable(v.back());
-    v.push_back(v.back().protect());
+    v.push_back(v.back().protect<LockState::READ_MODIFY_WRITE>());
     v.push_back(v.back().unlock());
 
     verify_possible(v);
@@ -78,11 +78,11 @@ CYBOZU_TEST_AUTO(test_blind_write_reserve)
     v.emplace_back(ld0, md0);
     v.push_back(v.back().blind_write());
     verify_unlockable(v.back());
-    v.push_back(v.back().blind_write_reserve());
+    v.push_back(v.back().blind_write_reserve_1st());
     verify_unlockable(v.back());
-    v.push_back(v.back().blind_write_reserve_again());
+    v.push_back(v.back().blind_write_reserve_recover());
     verify_unlockable(v.back());
-    v.push_back(v.back().protect());
+    v.push_back(v.back().protect<LockState::BLIND_WRITE>());
     v.push_back(v.back().unlock());
 
     for (LockMutexCreator& lmc : v) {
