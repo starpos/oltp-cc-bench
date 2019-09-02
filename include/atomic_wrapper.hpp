@@ -27,7 +27,7 @@ void store_release(Int0& m, Int1 v) {
 
 
 template <typename Int0, typename Int1>
-Int0 exchange(Int0& m, Int1 v, int mode) {
+Int0 exchange(Int0& m, Int1 v, int mode = __ATOMIC_ACQ_REL) {
     return __atomic_exchange_n(&m, v, mode);
 }
 

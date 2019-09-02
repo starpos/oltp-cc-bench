@@ -52,9 +52,9 @@ template <typename PQLock>
 struct ILockTypes
 {
 #ifdef USE_LICC2
-    using ILock = cybozu::lock::licc2::Lock;
-    using IMutex = cybozu::lock::licc2::Mutex;
-    using ILockSet = cybozu::lock::licc2::LockSet;
+    using ILock = cybozu::lock::licc2::cas::Lock;
+    using IMutex = cybozu::lock::licc2::cas::Mutex;
+    using ILockSet = cybozu::lock::licc2::cas::LockSet;
 #else
     using ILock = cybozu::lock::ILock<PQLock>;
     using IMutex = cybozu::lock::IMutex<PQLock>;

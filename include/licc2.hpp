@@ -488,6 +488,13 @@ struct MutexOpCreator
 };
 
 
+/**
+ * Simple CAS-only locking.
+ * Starfation-freeness depends on possibility of occurrence of starvation on CAS operations.
+ */
+namespace cas {
+
+
 struct Mutex
 {
     MutexData md;
@@ -1026,6 +1033,280 @@ private:
     }
 };
 
+
+} // namespace cas
+
+
+/**
+ * Starvation-free version.
+ * atomic exchange is used like MCS locking protocol.
+ */
+namespace mcs {
+
+
+enum RequestType : uint8_t
+{
+    RESERVE_FOR_READ = 0,
+    RESERVE_FOR_WRITE = 1,
+    PROTECT = 2,
+    UNRESERVE_FOR_READ = 3,
+    UNRESERVE_FOR_WRITE = 4,
+    UNPROTECT = 5,
+};
+
+enum Response : uint8_t
+{
+    // Internally used.
+    WAITING = 0,
+    OWNER = 1,
+    SHOULD_WAIT = 2,
+
+    // Messages that means the request has been processed.
+    SUCCESSED = 3,
+    FAILED = 4,
+};
+
+
+/**
+ *
+ */
+struct Request
+{
+    alignas(CACHE_LINE_SIZE)
+    Request* next;  // for linked list as a request queue.
+
+    RequestType type;
+    uint32_t ord_id; // requestor's ord_id.
+    Response res; // response from the owner.
+
+    /**
+     * CAUSION: uninitialized. call init() to initialize the object.
+     */
+    Request() = default;
+
+    void init(RequestType type0, uint32_t ord_id0) {
+        next = nullptr;
+        type = type0;
+        ord_id = ord_id0;
+        res = WAITING;
+        release_memory_barrier();
+    }
+
+    Request(const Request& rhs) = delete;
+    Request& operator=(const Request& rhs) = delete;
+
+    Request(Request&& rhs) noexcept : Request() { swap(rhs); }
+    Request&& operator=(Request&& rhs) noexcept { swap(rhs); return *this; }
+
+    Response local_spin_wait() {
+        Response res0;
+        while ((res0 = load_acquire(res)) == WAITING) _mm_pause();
+        store_release(res, WAITING);
+        return res0;
+    }
+
+private:
+    void swap(Request& rhs) noexcept {
+        std::swap(next, rhs.next);
+        std::swap(type, rhs.type);
+        std::swap(ord_id, rhs.ord_id);
+        std::swap(res, rhs.res);
+
+        // QQQ
+    }
+
+    // QQQQQ
+};
+
+
+/**
+ * These are tags stored in the tail pointer.
+ * They never be the pointer value.
+ */
+Request* const UNOWNED = (Request*)0;
+Request* const OWNED = (Request*)1;
+
+
+/**
+ * using MCS-like Lock Template.
+ */
+class Lock
+{
+
+
+
+    // QQQ
+};
+
+
+class Mutex
+{
+    alignas(sizeof(uintptr_t))
+    Request* tail_;
+    Request* head_;
+    Request* waiting_;
+    MutexData md_;
+public:
+    Mutex2() : tail_(UNOWNED), head_(nullptr), waiting_(nullptr), md_() {
+        md_.init();
+    }
+
+    /**
+     * RETURN:
+     *   OWNER
+     */
+    Response enqueue(Request& req) {
+        Request* prev = exchange(tail_, &req);
+        if (prev == UNOWNED) {
+            return OWNER;
+        }
+        if (prev == OWNED) {
+            store_release(head_, &req);
+            Response res = req.local_spin_wait();
+            unused(res); assert(res == OWNER);
+            return OWNER;
+        }
+        // prev is the pointer of the previous request.
+        store_release(prev->next, &req);
+        req.local_spin_wait();
+
+    }
+
+
+
+
+
+
+
+    /**
+     * This is thread-safe code.
+     */
+    template <typename Func>
+    void do_request(Request& req, Func&& owner_task) {
+        Request* prev = exchange(tail_, &req);
+        if (prev == UNOWNED) {
+            if (do_owner_task(std::forward<Func>(owner_task))) {
+                msg = local_spin_wait();
+
+            }
+            // do owner task.
+
+
+        } else if (prev == OWNED) {
+            store_release(head_, &req);
+
+
+
+
+
+
+
+
+
+        // QQQQQ
+    }
+private:
+    /**
+     * This is not thread-safe code.
+     * RETURN:
+     *   true if the worker should wait.
+     */
+    template <typename Func>
+    bool do_owner_task(Func&& owner_task) {
+
+
+
+
+
+        // QQQQQ
+    }
+
+    Message local_spin_wait() {
+
+
+    }
+
+
+    // QQQQQ
+};
+
+
+
+
+
+/**
+ *
+ */
+class Lock
+{
+private:
+    Mutex* mutex_;
+    LockData ld_;
+
+    alignas(CACHE_LINE_SIZE)
+    Request req_;
+
+    // QQQQQ
+
+
+public:
+    INLINE Lock() : mutex_(nullptr), ld_(), req_() {
+    }
+    INLINE Lock(Mutex& mutex, uint32_t ord_id) : mutex_(&mutex), ld_(ord_id), req_() {
+    }
+    INLINE ~Lock() {
+        unlock();
+    }
+
+    void init(Mutex& mutex, uint32_t ord_id) {
+        mutex_ = &mutex;
+        ld_.init(ord_id);
+    }
+
+    // copy constructor/assign operator are removed.
+    Lock(const Lock&) = delete;
+    Lock& operator=(const Lock&) = delete;
+
+    // move constructor/assign operator.
+    Lock(Lock&& rhs) noexcept : Lock() { swap(rhs); }
+    Lock& operator=(Lock&& rhs) noexcept { swap(rhs); return *this; }
+
+
+
+
+
+
+private:
+    /**
+     * CAUSION: req_ object is not swappable during in request queue.
+     */
+    void swap(Lock& rhs) noexcept {
+        std::swap(mutex_, rhs.mutex_);
+        std::swap(ld_, rhs.ld_);
+        std::swap(req_, rhs.req_);
+    }
+
+
+
+
+
+    // QQQ
+
+};
+
+
+/**
+ *
+ */
+class LockSet2
+{
+
+
+    // QQQ
+};
+
+
+} // namespace mcs
 
 } // namespace licc2
 } // namespace lock
