@@ -33,3 +33,4 @@ sxql_test
 show_cpu_affinity
 
 test_licc2
+test_acquire_release
