@@ -94,7 +94,7 @@ clean:
 cmake:
 	cmake -G Ninja . -DCMAKE_BUILD_TYPE=$(CMAKE_TARGET) -DCMAKE_CXX_COMPILER=$(CXX)
 cmake_clean:
-	rm -rf CMakeFiles CMakeCache.txt cmake_install.cmake
+	rm -rf CMakeFiles CMakeCache.txt cmake_install.cmake ninja.* .ninja_*
 cmake_rebuild:
 	$(MAKE) cmake_clean
 	$(MAKE) cmake
