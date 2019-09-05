@@ -22,6 +22,8 @@
 #include "write_set.hpp"
 #include "allocator.hpp"
 #include "vector_payload.hpp"
+#include "cache_line_size.hpp"
+#include "list_util.hpp"
 
 
 namespace cybozu {
@@ -51,16 +53,24 @@ struct MutexData
     uint32_t is_writer:1;
 
     MutexData() = default; // CAUSION: not initialized
-    MutexData(const MutexData&) = default;
-    MutexData& operator=(const MutexData&) = default;
+    MutexData(const MutexData&) noexcept = default;
+    MutexData& operator=(const MutexData&) noexcept = default;
 
     MutexData(uint64_t x) : MutexData() {
+#if 0
         ::memcpy(this, &x, sizeof(*this));
+#else
+        *(uint64_t *)this = x;
+#endif
     }
     operator uint64_t() const {
+#if 0
         uint64_t x;
         ::memcpy(&x, this, sizeof(x));
         return x;
+#else
+        return *(uint64_t *)this;
+#endif
     }
 
     // Reference of uint64_t.
@@ -70,7 +80,11 @@ struct MutexData
     uint64_t val() const { return *this; }
 
     bool operator==(const MutexData& rhs) const {
+#if 0
         return uint64_t(*this) == uint64_t(rhs);
+#else
+        return *(uint64_t *)this == *(uint64_t *)&rhs;
+#endif
     }
     bool operator!=(const MutexData& rhs) const {
         return !(*this == rhs);
@@ -88,7 +102,8 @@ struct MutexData
             , ord_id, worker_id, epoch_id, version, protected_, is_writer);
     }
 
-    bool is_valid(uint32_t version0, bool allow_protected = false) const {
+    template <bool allow_protected = false>
+    bool is_valid(uint32_t version0) const {
         return (allow_protected || !protected_) && version == version0;
     }
 
@@ -212,6 +227,9 @@ struct LockData
 #endif
     explicit LockData(uint32_t ord_id0) : LockData() { init(ord_id0); }
 
+    LockData(const LockData&) noexcept = default;
+    LockData& operator=(const LockData&) noexcept = default;
+
     void init(uint32_t ord_id0) {
         state = LockState::INIT;
         updated = false;
@@ -253,21 +271,22 @@ struct MutexOpCreator
 
     MutexOpCreator() = default; // CAUSION. not initialized.
 
+#if 0
     // MUST_WAIT or IMPOSSIBLE.
     explicit MutexOpCreator(MutexOpCapability res) : capability(res), ld(), md() {
         assert(res != POSSIBLE);
     }
+#endif
+
     // Valid initial value.
     MutexOpCreator(LockData ld0, MutexData md0) : capability(POSSIBLE), ld(ld0), md(md0) {
     }
 
-    MutexOpCreator(const MutexOpCreator&) = default;
-    MutexOpCreator& operator=(const MutexOpCreator&) = default;
-    MutexOpCreator clone() const { return *this; }
+    MutexOpCreator(const MutexOpCreator&) noexcept = default;
+    MutexOpCreator& operator=(const MutexOpCreator&) noexcept = default;
 
     explicit operator bool() const { return possible(); }
     bool possible() const { return capability == POSSIBLE; }
-
 
     std::string str() const {
         std::stringstream ss;
@@ -279,7 +298,6 @@ struct MutexOpCreator
         return ss.str();
     }
 
-
     /**
      * Operations can be chained.
      */
@@ -287,6 +305,7 @@ struct MutexOpCreator
     /**
      * No need to change mutex object.
      */
+#if 0
     MutexOpCreator invisible_read() const {
         MutexOpCreator moc = clone();
         LockData& ld = moc.ld; MutexData& md = moc.md;
@@ -295,6 +314,8 @@ struct MutexOpCreator
         ld.version = md.version;
         return moc;
     }
+#endif
+#if 0
     /**
      * No need to change mutex object.
      */
@@ -305,6 +326,10 @@ struct MutexOpCreator
         ld.state = LockState::PRE_BLIND_WRITE;
         return moc;
     }
+#endif
+
+
+#if 0
     /**
      * At 1st read operation, call this function.
      */
@@ -312,7 +337,7 @@ struct MutexOpCreator
     MutexOpCreator read_reserve_1st() const {
         static_assert(is_lock_state_in(lock_state, {LockState::INIT, LockState::READ}));
         MutexOpCreator moc = clone();
-        if (!possible()) return moc;
+        if (!moc) return moc;
         LockData& ld = moc.ld; MutexData& md = moc.md;
         if (!md.can_read_reserve(ld.ord_id) || md.protected_) {
             return MutexOpCreator(MUST_WAIT);
@@ -330,7 +355,7 @@ struct MutexOpCreator
     template <bool allow_different_version = false>
     MutexOpCreator read_reserve_recover() const {
         MutexOpCreator moc = clone();
-        if (!possible()) return moc;
+        if (!moc) return moc;
         LockData& ld = moc.ld; MutexData& md = moc.md;
         if (allow_different_version)  {
             if (md.protected_) {
@@ -352,7 +377,7 @@ struct MutexOpCreator
     MutexOpCreator blind_write_reserve_detail() const {
         static_assert(lock_state == LockState::PRE_BLIND_WRITE || lock_state == LockState::BLIND_WRITE);
         MutexOpCreator moc = clone();
-        if (!possible()) return moc;
+        if (!moc) return moc;
         LockData& ld = moc.ld; MutexData& md = moc.md;
         if (!md.can_write_reserve(ld.ord_id) || md.protected_) {  // wait for unprotected here.
             return MutexOpCreator(MUST_WAIT);
@@ -372,7 +397,7 @@ struct MutexOpCreator
     MutexOpCreator read_modify_write_reserve_detail() const {
         static_assert(lock_state == LockState::READ || lock_state == LockState::READ_MODIFY_WRITE);
         MutexOpCreator moc = clone();
-        if (!possible()) return moc;
+        if (!moc) return moc;
         LockData& ld = moc.ld; MutexData& md = moc.md;
         if (md.version != ld.version || md.protected_) {
             // If protected, we expect the corresponding transaction will success its pre-commit,
@@ -407,7 +432,7 @@ struct MutexOpCreator
     MutexOpCreator read_modify_write_reserve_1st() const {
         static_assert(is_lock_state_in(lock_state, {LockState::INIT, LockState::READ_MODIFY_WRITE}));
         MutexOpCreator moc = clone();
-        if (!possible()) return moc;
+        if (!moc) return moc;
         LockData& ld = moc.ld; MutexData& md = moc.md;
         if (!md.can_write_reserve(ld.ord_id) || md.protected_) {
             // We must wait for unprotected to ensure it before calling protect_all().
@@ -464,7 +489,6 @@ struct MutexOpCreator
         MutexOpCreator moc = clone();
         if (!moc) return moc;
         LockData& ld = moc.ld; MutexData& md = moc.md;
-
         switch (ld.state) {
         case LockState::READ:
         case LockState::BLIND_WRITE:
@@ -480,12 +504,134 @@ struct MutexOpCreator
             // do nothing;
             break;
         default:
-            assert(false);
+            BUG();
         }
         ld.state = LockState::INIT;
         return moc;
     }
+#endif
+
+    // QQQQQ
+
+    template <LockState from_state, LockState to_state, bool is_write, bool checks_version>
+    MutexOpCreator xxx_reserve() const {
+        MutexOpCreator moc(*this);
+        if (!moc) return moc;
+        LockData& ld = moc.ld; MutexData& md = moc.md;
+        assert(ld.state == from_state);
+        if (checks_version && (md.version != ld.version || md.protected_)) {
+            moc.capability = IMPOSSIBLE;
+            return moc;
+        }
+        bool can_reserve = is_write
+            ? md.can_write_reserve(ld.ord_id)
+            : md.can_read_reserve(ld.ord_id);
+        if (!can_reserve || md.protected_) {
+            moc.capability = MUST_WAIT;
+            return moc;
+        }
+        if (is_write) {
+            md.prepare_write_reserve(ld.ord_id);
+        } else {
+            md.prepare_read_reserve(ld.ord_id);
+        }
+        ld.state = to_state;
+        ld.version = md.version;
+        return moc;
+    }
+    template <bool checks_version>
+    MutexOpCreator xxx_protect() const {
+        constexpr LockState from_state = checks_version ? LockState::READ_MODIFY_WRITE : LockState::BLIND_WRITE;
+        unused(from_state);
+        MutexOpCreator moc(*this);
+        if (!moc) return moc;
+        LockData& ld = moc.ld; MutexData& md = moc.md;
+        assert(ld.state == from_state);
+        if ((checks_version && ld.version != md.version)
+            || ld.ord_id != md.ord_id
+            || md.protected_) {
+            moc.capability = IMPOSSIBLE;
+            return moc;
+        }
+        // If the lock object is read reserved,
+        // we consider the upgrade reservation will be processed at the same time.
+        ld.state = LockState::PROTECTED;
+        md.ord_id = MAX_ORD_ID;
+        md.protected_ = 1;
+        return moc;
+    }
+    template <LockState from_state>
+    MutexOpCreator xxx_unlock_special() const {
+        MutexOpCreator moc(*this);
+        if (!moc) return moc;
+        LockData& ld = moc.ld; MutexData& md = moc.md;
+        assert(ld.state == from_state);
+        switch (from_state) {
+        case LockState::READ:
+        case LockState::BLIND_WRITE:
+        case LockState::READ_MODIFY_WRITE:
+            if (ld.ord_id == md.ord_id) md.ord_id = MAX_ORD_ID;
+            break;
+        case LockState::PROTECTED:
+            md.protected_ = 0;
+            if (ld.updated) md.version++;
+            break;
+        case LockState::INIT:
+        case LockState::PRE_BLIND_WRITE:
+            // do nothing;
+            break;
+        default:
+            BUG();
+        }
+        ld.state = LockState::INIT;
+        return moc;
+    }
+    MutexOpCreator unlock_general() const {
+        switch (ld.state) {
+        case LockState::INIT:
+            return xxx_unlock_special<LockState::INIT>();
+        case LockState::READ:
+            return xxx_unlock_special<LockState::READ>();
+        case LockState::PRE_BLIND_WRITE:
+            return xxx_unlock_special<LockState::PRE_BLIND_WRITE>();
+        case LockState::BLIND_WRITE:
+            return xxx_unlock_special<LockState::BLIND_WRITE>();
+        case LockState::READ_MODIFY_WRITE:
+            return xxx_unlock_special<LockState::READ_MODIFY_WRITE>();
+        case LockState::PROTECTED:
+            return xxx_unlock_special<LockState::PROTECTED>();
+        default:
+            BUG();
+        }
+    }
 };
+
+
+template <typename Mutex>
+void invisible_read(Mutex& mutex, LockData& ld, const void* shared, void* local, size_t size)
+{
+    unused(shared, local, size);
+    MutexData md0 = mutex.load();
+    for (;;) {
+        _mm_pause();
+        if (md0.protected_) {
+            md0 = mutex.load();
+            continue;
+        }
+#ifndef NO_PAYLOAD
+        ::memcpy(local, shared, size);
+#endif
+        acquire_memory_barrier();
+        MutexData md1 = mutex.load();
+        if (!md1.is_valid(md0.version)) {
+            md0 = md1;
+            continue;
+        }
+        ld.version = md0.version;
+        ld.state = LockState::READ;
+        return;
+    }
+}
 
 
 /**
@@ -524,7 +670,7 @@ public:
     INLINE Lock(Mutex& mutex, uint32_t ord_id) : mutex_(&mutex), ld_(ord_id) {
     }
     INLINE ~Lock() {
-        unlock();
+        unlock_general();
     }
 
     void init(Mutex& mutex, uint32_t ord_id) {
@@ -545,30 +691,7 @@ public:
      * INIT --> READ.
      */
     void invisible_read(const void *shared, void *local, size_t size) {
-        unused(shared, local, size);
-        MutexData md0 = mutex_->load();
-        for (;;) {
-            _mm_pause();
-            if (md0.protected_) {
-                md0 = mutex_->load();
-                continue;
-            }
-            MutexOpCreator moc0(ld_, md0);
-            MutexOpCreator moc1 = moc0.invisible_read();
-            assert(moc1.possible());
-            assert(md0 == moc1.md);
-#ifndef NO_PAYLOAD
-            ::memcpy(local, shared, size);
-#endif
-            acquire_memory_barrier();
-            MutexData md1 = mutex_->load();
-            if (!md1.is_valid(moc1.ld.version)) {
-                md0 = md1;
-                continue;
-            }
-            ld_ = moc1.ld;
-            return;
-        }
+        licc2::invisible_read(*mutex_, ld_, shared, local, size);
     }
     /**
      * WRITE_RESERVE = true
@@ -583,7 +706,14 @@ public:
         for (;;) {
             _mm_pause();
             MutexOpCreator moc0(ld_, md0);
+#if 0
             MutexOpCreator moc1 = moc0.reserve_for_read<do_write_reserve, false>();
+#else
+            constexpr LockState to_state = do_write_reserve
+                ? LockState::READ_MODIFY_WRITE
+                : LockState::READ;
+            MutexOpCreator moc1 = moc0.xxx_reserve<LockState::INIT, to_state, do_write_reserve, false>();
+#endif
             if (moc1.capability == MUST_WAIT) {
                 md0 = mutex_->load();
                 continue;
@@ -616,7 +746,25 @@ public:
         for (;;) {
             _mm_pause();
             MutexOpCreator moc0(ld_, md0);
+#if 0
             MutexOpCreator moc1 = moc0.reserve_for_read<do_write_reserve, is_retry>();
+#else
+            constexpr LockState from_state = [&]() {
+                if (is_retry) {
+                    if (do_write_reserve) {
+                        return LockState::READ_MODIFY_WRITE;
+                    } else {
+                        return LockState::READ;
+                    }
+                } else {
+                    return LockState::INIT;
+                }
+            }();
+            constexpr LockState to_state = do_write_reserve
+                ? LockState::READ_MODIFY_WRITE
+                : LockState::READ;
+            MutexOpCreator moc1 = moc0.xxx_reserve<from_state, to_state, do_write_reserve, true>();
+#endif
             if (moc1.capability == MUST_WAIT) {
                 md0 = mutex_->load();
                 continue;
@@ -661,7 +809,17 @@ public:
         MutexData md0 = mutex_->load();
         for (;;) {
             MutexOpCreator moc0(ld_, md0);
+#if 0
             MutexOpCreator moc1 = moc0.keep_reservation<lock_state>();
+#else
+            MutexOpCreator moc1 = [&]() {
+                if (lock_state == LockState::READ) {
+                    return moc0.xxx_reserve<LockState::READ, LockState::READ, false, true>();
+                } else {
+                    return moc0.xxx_reserve<LockState::READ_MODIFY_WRITE, LockState::READ_MODIFY_WRITE, true, true>();
+                }
+            }();
+#endif
             if (moc1.capability == IMPOSSIBLE) return false;
             if (moc1.capability == MUST_WAIT) {
                 md0 = mutex_->load();
@@ -684,7 +842,11 @@ public:
         for (;;) {
             _mm_pause();
             MutexOpCreator moc0(ld_, md0);
+#if 0
             MutexOpCreator moc1 = moc0.blind_write_reserve_1st();
+#else
+            MutexOpCreator moc1 = moc0.xxx_reserve<LockState::PRE_BLIND_WRITE, LockState::BLIND_WRITE, true, false>();
+#endif
             if (moc1.capability == MUST_WAIT) {
                 md0 = mutex_->load();
                 continue;
@@ -703,7 +865,11 @@ public:
         for (;;) {
             _mm_pause();
             MutexOpCreator moc0(ld_, md0);
+#if 0
             MutexOpCreator moc1 = moc0.upgrade_reservation();
+#else
+            MutexOpCreator moc1 = moc0.xxx_reserve<LockState::READ, LockState::READ_MODIFY_WRITE, true, true>();
+#endif
             if (moc1.capability == IMPOSSIBLE) return false;
             if (moc1.capability == MUST_WAIT) {
                 md0 = mutex_->load();
@@ -725,6 +891,7 @@ public:
         }
         return upgrade();
     }
+#if 0
     /**
      * Now this is not required.
      */
@@ -737,7 +904,12 @@ public:
             _mm_pause();
             if (md0.ord_id != ld_.ord_id) {
                 MutexOpCreator moc0(ld_, md0);
+#if 0
                 MutexOpCreator moc1 = moc0.write_reserve_recover<lock_state>();
+#else
+                MutexOpCreator moc1 =
+                    moc0.xxx_reserve<lock_state, lock_state, true, lock_state == LockState::READ_MODIFY_WRITE>();
+#endif
                 if (!moc1.possible()) return false;
                 if (md0 != moc1.md && !mutex_->cas(md0, moc1.md)) continue;
                 ld_ = moc1.ld;
@@ -749,16 +921,22 @@ public:
             return true;
         }
     }
-    template <LockState lock_state>
+#endif
+    template <bool checks_version>
     bool protect() {
-        static_assert(is_protectable(lock_state));
-        assert(ld_.state == lock_state);
+        constexpr LockState from_state = checks_version ? LockState::READ_MODIFY_WRITE : LockState::BLIND_WRITE;
+        assert(ld_.state == from_state);
         MutexData md0 = mutex_->load();
         for (;;) {
             _mm_pause();
             MutexOpCreator moc0(ld_, md0);
+#if 0
             MutexOpCreator moc1 = moc0.write_reserve_recover<lock_state>();
             MutexOpCreator moc2 = moc1.protect<lock_state>();
+#else
+            MutexOpCreator moc1 = moc0.xxx_reserve<from_state, from_state, true, checks_version>();
+            MutexOpCreator moc2 = moc1.xxx_protect<checks_version>();
+#endif
             if (!moc2.possible()) return false;
             if (mutex_->cas(md0, moc2.md)) {
                 ld_ = moc2.ld;
@@ -767,13 +945,31 @@ public:
             // CAS failed and continue.
         }
     }
-    void unlock() {
+    INLINE void unlock_general() noexcept {
         if (mutex_ == nullptr) return;
+        if (ld_.state == LockState::INIT || ld_.state == LockState::PRE_BLIND_WRITE) return;
         MutexData md0 = mutex_->load();
         for (;;) {
             _mm_pause();
             MutexOpCreator moc0(ld_, md0);
-            MutexOpCreator moc1 = moc0.unlock();
+#if 1
+            MutexOpCreator moc1 = moc0.unlock_general();
+#else
+            MutexOpCreator moc1 = [&]() {
+                switch (moc0.ld.state) {
+                case LockState::READ:
+                    return moc0.xxx_unlock_special<LockState::READ>();
+                case LockState::READ_MODIFY_WRITE:
+                    return moc0.xxx_unlock_special<LockState::READ_MODIFY_WRITE>();
+                case LockState::BLIND_WRITE:
+                    return moc0.xxx_unlock_special<LockState::BLIND_WRITE>();
+                case LockState::PROTECTED:
+                    return moc0.xxx_unlock_special<LockState::PROTECTED>();
+                default:
+                    BUG();
+                }
+            }();
+#endif
             assert(moc1.possible());
             if (md0 == moc1.md || mutex_->cas(md0, moc1.md)) {
                 ld_ = moc1.ld;
@@ -783,9 +979,27 @@ public:
             // CAS failed and continue.
         }
     }
-    bool is_unchanged(bool allow_protected = false) const {
+    template <LockState from_state>
+    INLINE void unlock_special() {
+        assert(mutex_ != nullptr);
+        MutexData md0 = mutex_->load();
+        for (;;) {
+            _mm_pause();
+            MutexOpCreator moc0(ld_, md0);
+            MutexOpCreator moc1 = moc0.xxx_unlock_special<from_state>();
+            assert(moc1);
+            if (md0 == moc1.md || mutex_->cas(md0, moc1.md)) {
+                ld_ = moc1.ld;
+                mutex_ = nullptr;
+                return;
+            }
+            // CAS failed and continue.
+        }
+    }
+    template <bool allow_protected = false>
+    bool is_unchanged() const {
         assert(mutex_);
-        return mutex_->load().is_valid(ld_.version, allow_protected);
+        return mutex_->load().is_valid<allow_protected>(ld_.version);
     }
     void update() {
         assert(ld_.state == LockState::PROTECTED);
@@ -797,7 +1011,6 @@ public:
     bool is_state(LockState st) const { return ld_.is_state(st); }
     bool is_state_in(std::initializer_list<LockState> st_list) const { return ld_.is_state_in(st_list); }
 
-private:
     void swap(Lock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(ld_, rhs.ld_);
@@ -871,7 +1084,7 @@ public:
         Lock& lk = it->lock;
         if (lk.is_state(LockState::READ)) {
             if (read_type == OPTIMISTIC) {
-                if (!lk.is_unchanged(true)) return false;
+                if (!lk.is_unchanged()) return false;
             } else {
                 if (!lk.try_keep_reservation<LockState::READ>()) return false;
             }
@@ -940,9 +1153,9 @@ public:
         for (OpEntryL& ope : vec_) {
             Lock& lk = ope.lock;
             if (lk.is_state(LockState::BLIND_WRITE)) {
-                if (!lk.protect<LockState::BLIND_WRITE>()) return false;
+                if (!lk.protect<false>()) return false;
             } else if (lk.is_state(LockState::READ_MODIFY_WRITE)) {
-                if (!lk.protect<LockState::READ_MODIFY_WRITE>()) return false;
+                if (!lk.protect<true>()) return false;
             } else {
                 assert(lk.is_state(LockState::READ));
             }
@@ -957,7 +1170,11 @@ public:
             if (lk.is_state(LockState::READ)) {
                 if (!lk.is_unchanged()) return false;
                 // S2PL allows unlocking of read locks here.
-                lk.unlock();
+#if 1
+                lk.unlock_special<LockState::READ>();
+#else
+                lk.unlock_general();
+#endif
             }
         }
         return true;
@@ -969,7 +1186,11 @@ public:
                 lk.update();
                 // writeback.
                 copy_value(ope.info.sharedVal, get_local_val_ptr(ope.info));
-                lk.unlock();
+#if 1
+                lk.unlock_special<LockState::PROTECTED>();
+#else
+                lk.unlock_general();
+#endif
             }
         }
         clear();
@@ -1054,69 +1275,100 @@ enum RequestType : uint8_t
     UNPROTECT = 5,
 };
 
-enum Response : uint8_t
+
+bool is_request_type_in(RequestType type, std::initializer_list<RequestType> type_list)
 {
-    // Internally used.
+    for (RequestType type0 : type_list) {
+        if (type == type0) return true;
+    }
+    return false;
+}
+
+
+bool is_unlock_request(RequestType type)
+{
+    return is_request_type_in(type, {UNRESERVE_FOR_READ, UNRESERVE_FOR_WRITE, UNPROTECT});
+}
+
+
+
+/**
+ * Initial state is WAITING.
+ * The owner will set the value OWNER or DONE.
+ * OWNER means the request must be the owner.
+ * DONE means the request is done.
+ */
+enum Message : uint8_t
+{
     WAITING = 0,
     OWNER = 1,
-    SHOULD_WAIT = 2,
-
-    // Messages that means the request has been processed.
-    SUCCESSED = 3,
-    FAILED = 4,
+    DONE = 2,
 };
 
 
 /**
- *
+ * Request to change a mutex state.
  */
 struct Request
 {
     alignas(CACHE_LINE_SIZE)
     Request* next;  // for linked list as a request queue.
 
+    // alignas(CACHE_LINE_SIZE)
     RequestType type;
+    Message msg; // message from the owner. internally used.
+    bool succeeded; // result of the request.
     uint32_t ord_id; // requestor's ord_id.
-    Response res; // response from the owner.
+
+    // Current lock data should be set begore enquing the request.
+    // If the request is successfully done, new lockdata will be set.
+    LockData ld;
 
     /**
      * CAUSION: uninitialized. call init() to initialize the object.
      */
     Request() = default;
 
-    void init(RequestType type0, uint32_t ord_id0) {
+    void init(RequestType type0, LockData ld0) {
         next = nullptr;
         type = type0;
-        ord_id = ord_id0;
-        res = WAITING;
-        release_memory_barrier();
+        ord_id = ld0.ord_id;
+        msg = WAITING;
+        succeeded = false;
+        ld = ld0;
     }
 
     Request(const Request& rhs) = delete;
     Request& operator=(const Request& rhs) = delete;
 
     Request(Request&& rhs) noexcept : Request() { swap(rhs); }
-    Request&& operator=(Request&& rhs) noexcept { swap(rhs); return *this; }
+    Request& operator=(Request&& rhs) noexcept { swap(rhs); return *this; }
 
-    Response local_spin_wait() {
-        Response res0;
-        while ((res0 = load_acquire(res)) == WAITING) _mm_pause();
-        store_release(res, WAITING);
-        return res0;
+    bool operator<(const Request& rhs) const { return ord_id < rhs.ord_id; }
+
+    Message local_spin_wait() {
+        Message msg0;
+        while ((msg0 = load_acquire(msg)) == WAITING) _mm_pause();
+        store_release(msg, WAITING);
+        return msg0;
     }
-
-private:
+    Request* get_next_ptr() {
+        Request* next0;
+        while ((next0 = load_acquire(next)) == nullptr) _mm_pause();
+        return next0;
+    }
     void swap(Request& rhs) noexcept {
         std::swap(next, rhs.next);
         std::swap(type, rhs.type);
+        std::swap(msg, rhs.msg);
+        std::swap(succeeded, rhs.succeeded);
         std::swap(ord_id, rhs.ord_id);
-        std::swap(res, rhs.res);
-
-        // QQQ
+        std::swap(ld, rhs.ld);
     }
-
-    // QQQQQ
 };
+
+
+using ReqList = NodeListT<Request>;
 
 
 /**
@@ -1127,127 +1379,100 @@ Request* const UNOWNED = (Request*)0;
 Request* const OWNED = (Request*)1;
 
 
-/**
- * using MCS-like Lock Template.
- */
-class Lock
-{
-
-
-
-    // QQQ
-};
-
-
 class Mutex
 {
     alignas(sizeof(uintptr_t))
     Request* tail_;
     Request* head_;
-    Request* waiting_;
+    ReqList waiting_;
     MutexData md_;
 public:
-    Mutex2() : tail_(UNOWNED), head_(nullptr), waiting_(nullptr), md_() {
+    Mutex() : tail_(UNOWNED), head_(nullptr), waiting_(), md_() {
         md_.init();
     }
 
+    MutexData load() const {
+        return load_acquire(md_.ref());
+    }
+    void store(MutexData md) {
+        store_release(md_.ref(), md.ref());
+    }
+#if 0 // cas is not used because md modifying operations will be done through the request queue only.
+    bool cas(MutexData& before, MutexData after) {
+        return compare_exchange(md_.ref(), before.ref(), after.ref());
+    }
+#endif
+
     /**
+     * Enqueue an request.
+     *
      * RETURN:
-     *   OWNER
+     *   true if you become owner.
+     *   The owner must call begin_owner_task() and do owner task and then end_owner_task().
      */
-    Response enqueue(Request& req) {
+    bool enqueue(Request& req) {
         Request* prev = exchange(tail_, &req);
         if (prev == UNOWNED) {
-            return OWNER;
+            return true;
         }
         if (prev == OWNED) {
             store_release(head_, &req);
-            Response res = req.local_spin_wait();
-            unused(res); assert(res == OWNER);
-            return OWNER;
+            Message msg = req.local_spin_wait();
+            unused(msg); assert(msg == OWNER);
+            return true;
         }
         // prev is the pointer of the previous request.
         store_release(prev->next, &req);
-        req.local_spin_wait();
-
+        Message msg = req.local_spin_wait();
+        unused(msg); assert(msg == DONE);
+        return false;
     }
-
-
-
-
-
-
 
     /**
-     * This is thread-safe code.
+     * The owner request itself is the head.
+     *
+     * tail is the tail of the dequeued request list.
+     * If the request list includes one request, the tail indicates the owner.
+     *
+     * waiting should be an empty list.
      */
-    template <typename Func>
-    void do_request(Request& req, Func&& owner_task) {
-        Request* prev = exchange(tail_, &req);
-        if (prev == UNOWNED) {
-            if (do_owner_task(std::forward<Func>(owner_task))) {
-                msg = local_spin_wait();
-
-            }
-            // do owner task.
-
-
-        } else if (prev == OWNED) {
-            store_release(head_, &req);
-
-
-
-
-
-
-
-
-
-        // QQQQQ
+    void begin_owner_task(Request*& tail, ReqList& waiting) {
+        tail = exchange(tail_, OWNED);
+        waiting = std::move(waiting_);
     }
-private:
     /**
-     * This is not thread-safe code.
-     * RETURN:
-     *   true if the worker should wait.
+     * waiting will be the new head of the waiting list.
      */
-    template <typename Func>
-    bool do_owner_task(Func&& owner_task) {
+    void end_owner_task(Request& req, ReqList&& waiting) {
+        waiting_ = std::move(waiting);
 
+        // This must be done during the request is owner.
+        const bool done = (req.msg == DONE);
+        ::store(req.msg, WAITING);
 
-
-
-
-        // QQQQQ
+        Request* tail = load_acquire(tail_);
+        if (tail != OWNED || !compare_exchange(tail_, tail, UNOWNED)) {
+            Request* head;
+            while ((head = load_acquire(head_)) == nullptr) _mm_pause();
+            ::store(head_, nullptr);
+            // release ownership.
+            store_release(head->msg, OWNER);
+        }
+        // The request is not the owner now.
+        if (!done) req.local_spin_wait();
     }
-
-    Message local_spin_wait() {
-
-
-    }
-
-
-    // QQQQQ
 };
 
 
-
-
-
 /**
- *
+ * using MCS-like Lock Template.
  */
 class Lock
 {
 private:
     Mutex* mutex_;
     LockData ld_;
-
-    alignas(CACHE_LINE_SIZE)
     Request req_;
-
-    // QQQQQ
-
 
 public:
     INLINE Lock() : mutex_(nullptr), ld_(), req_() {
@@ -1272,9 +1497,71 @@ public:
     Lock& operator=(Lock&& rhs) noexcept { swap(rhs); return *this; }
 
 
+    void invisible_read(const void *shared, void *local, size_t size) {
+        licc2::invisible_read(*mutex_, ld_, shared, local, size);
+    }
+    template <bool do_write_reserve = false>
+    void read_and_reserve(const void *shared, void *local, size_t size) {
+        unused(shared, local, size);
+
+        req_.init(RESERVE_FOR_READ, ld_);
+        if (mutex_->enqueue(req_)) do_owner_task();
+        if (req_.succeeded) {
+            // QQQQQ
+        }
+
+        // QQQ
+    }
+    template <LockState lock_state>
+    bool try_keep_reservation() {
+        // QQQ
+    }
+    void blind_write() {
+        assert(ld_.state == LockState::INIT);
+        ld_.state = LockState::PRE_BLIND_WRITE;
+    }
+    void blind_write_reserve() {
+        // QQQ
+    }
+    bool upgrade() {
+        // QQQ
+        return false;
+    }
+    bool upgrade_if_necessary() {
+        if (ld_.state != LockState::READ) {
+            // no need to upgrade.
+            return true;
+        }
+        return upgrade();
+    }
+    template <LockState lock_state>
+    bool protect() {
+        // QQQ
+    }
+    void unlock() noexcept {
+        if (mutex_ == nullptr) return;
+
+        // QQQ
 
 
 
+        mutex_ = nullptr;
+    }
+
+    template <bool allow_protected = false>
+    bool is_unchanged() const {
+        assert(mutex_);
+        return mutex_->load().is_valid<allow_protected>(ld_.version);
+    }
+    void update() {
+        assert(ld_.state == LockState::PROTECTED);
+        ld_.updated = true;
+    }
+
+    uintptr_t get_mutex_id() const { return uintptr_t(mutex_); }
+
+    bool is_state(LockState st) const { return ld_.is_state(st); }
+    bool is_state_in(std::initializer_list<LockState> st_list) const { return ld_.is_state_in(st_list); }
 
 private:
     /**
@@ -1284,21 +1571,101 @@ private:
         std::swap(mutex_, rhs.mutex_);
         std::swap(ld_, rhs.ld_);
         std::swap(req_, rhs.req_);
+        // QQQ
     }
 
+    /**
+     * Owner must do almost all the md modifying operations.
+     */
+    void do_owner_task() {
+        Request *tail;
+        ReqList waiting;
+        mutex_->begin_owner_task(tail, waiting);
+        owner_process_unlock_operations(&req_, tail, waiting);
+        owner_process_lock_operations(waiting);
+        mutex_->end_owner_task(req_, std::move(waiting));
+    }
+    /**
+     * process unlock (unreserve and unprotect) operations.
+     * head and tail is included.
+     */
+    void owner_process_unlock_operations(Request* head, Request* tail, ReqList& waiting) {
+        while (head != nullptr) {
+            bool inserts_waiting = false;
+            if (is_unlock_request(head->type)) {
+                MutexData md0 = mutex_->load();
+                MutexOpCreator moc0(head->ld, md0);
+                MutexOpCreator moc1 = moc0.unlock_general();
+                assert(moc1.possible());
+                if (md0 != moc1.md) mutex_->store(moc1.md);
+                head->ld = moc1.ld;
+                head->succeeded = true;
+                store_release(head->msg, DONE);
+            } else {
+                inserts_waiting = true;
+            }
+            Request* next;
+            if (head != tail) {
+                next = head->get_next_ptr();
+            } else {
+                next = nullptr;
+            }
+            if (inserts_waiting) {
+                insert_sort<Request>(waiting, head); // it breaks head->next pointer.
+            }
+            head = next;
+        }
+    }
+    void owner_process_lock_operations(ReqList& waiting) {
+        while (!waiting.empty()) {
+            Request& req = *waiting.front();
+            if (!owner_process_lock_operation(req)) break;
+            waiting.pop_front(); // do this before notification.
+            store_release(req.msg, DONE);
+        }
+    }
+    /**
+     * RETURN:
+     *   true if the request has been done (with success or failure).
+     */
+    bool owner_process_lock_operation(Request& req) {
+#if 0
+        MutexData md0 = mutex_->load(); // Only the owner can change the mutex state.
+        MutexOpCreator moc0(req.ld, md0);
+        switch(req.type) {
+        case RESERVE_FOR_READ:
+            MutexOpCreator moc1 = moc0.read_reserve_1st<LockState::INIT>();
+            if (!moc1.possible()) {
+                assert(moc1.capability == MUST_WAIT);
+                return false;
+            }
+            mutex_->store(moc1.md);
+            req.ld = moc1.ld;
+            return true;
+        case RESERVE_FOR_WRITE:
+            MutexOpCreator moc1 = moc0.blind_write_reserve();
 
 
-
-
-    // QQQ
-
+            // QQQQQ
+            break;
+        case PROTECT:
+            // QQQ
+            break;
+        default:
+            BUG();
+        }
+#else
+        unused(req);
+        return false;
+#endif
+    }
 };
 
 
 /**
  *
  */
-class LockSet2
+class LockSet
 {
 
 
