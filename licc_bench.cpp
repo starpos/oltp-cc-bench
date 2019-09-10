@@ -30,7 +30,7 @@ struct CmdLineOptionPlus : CmdLineOption
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&modeStr, "licc-hybrid", "mode", "[mode]: specify mode in licc-pcc, licc-occ, licc-hybrid.");
-        appendOpt(&pqLockType, 0, "pqlock", "[id]: pqlock type (0:none, 1:pqspin, 3:pqmcs1, 4:pqmcs2, 5:pq1993, 6:pq1997, 7:pqmcs3)");
+        appendOpt(&pqLockType, 0, "pqlock", "[id]: pqlock type (0:none, 1:pqspin, 3:pqmcs1, 4:pqmcs2, 5:pq1993, 6:pq1997, 7:pqmcs3, 8:mcslike)");
         appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
         appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write 0:w 1:rmw (default: 1)");
         appendOpt(&writePct, 50, "writepct", "[pct]: write percentage (0 to 100) for custom3 workload");
@@ -54,13 +54,24 @@ struct ILockTypes
 #ifdef USE_LICC2
     using ILock = cybozu::lock::licc2::cas::Lock;
     using IMutex = cybozu::lock::licc2::cas::Mutex;
-    using ILockSet = cybozu::lock::licc2::cas::LockSet;
+    using ILockSet = cybozu::lock::licc2::LockSet<IMutex, ILock>;
 #else
     using ILock = cybozu::lock::ILock<PQLock>;
     using IMutex = cybozu::lock::IMutex<PQLock>;
     using ILockSet = cybozu::lock::ILockSet<PQLock>;
 #endif
 };
+
+
+#ifdef USE_LICC2
+template <>
+struct ILockTypes<cybozu::lock::licc2::PqMcsLike>
+{
+    using ILock = cybozu::lock::licc2::mcs::Lock;
+    using IMutex = cybozu::lock::licc2::mcs::Mutex;
+    using ILockSet = cybozu::lock::licc2::LockSet<IMutex, ILock>;
+};
+#endif
 
 
 std::vector<uint> CpuId_;
@@ -560,7 +571,7 @@ void dispatch1(CmdLineOptionPlus& opt)
 
 enum PQLockType
 {
-    // (0:none, 1:pqspin, 2:pqposix, 3:pqmcs1, 4:pqmcs2, 5:pq1993, 6:pq1997, 7:pqmcs3)");
+    // (0:none, 1:pqspin, 2:pqposix, 3:pqmcs1, 4:pqmcs2, 5:pq1993, 6:pq1997, 7:pqmcs3, 8:mcslike)");
     USE_PQNoneLock = 0,
     USE_PQSpinLock = 1,
     USE_PQPosixLock = 2,
@@ -569,6 +580,7 @@ enum PQLockType
     USE_PQ1993Lock = 5,
     USE_PQ1997Lock = 6, // buggy.
     USE_PQMcsLock3 = 7,
+    USE_PQMcsLike = 8, // This is for LICC2.
 };
 
 
@@ -587,6 +599,7 @@ void dispatch0(CmdLineOptionPlus& opt)
         dispatch1<cybozu::lock::PQPosixLock>(opt);
         break;
 #endif
+#if 0 // disabled for saving compilation time.
     case USE_PQMcsLock:
         dispatch1<cybozu::lock::PQMcsLock>(opt);
         break;
@@ -599,10 +612,14 @@ void dispatch0(CmdLineOptionPlus& opt)
     case USE_PQ1997Lock:
         dispatch1<cybozu::lock::PQ1997Lock>(opt);
         break;
+#endif
     case USE_PQMcsLock3:
         dispatch1<cybozu::lock::PQMcsLock3>(opt);
         break;
 #else // USE_LICC2
+    case USE_PQMcsLike:
+        dispatch1<cybozu::lock::licc2::PqMcsLike>(opt);
+        break;
 #endif // USE_LICC2
     default:
         throw cybozu::Exception("bad pqLockType") << opt.pqLockType;
