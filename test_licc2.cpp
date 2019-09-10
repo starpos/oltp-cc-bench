@@ -22,7 +22,7 @@ void verify_possible(const C& moc_v)
 
 void verify_unlockable(const MutexOpCreator& moc0)
 {
-    MutexOpCreator moc1 = moc0.unlock();
+    MutexOpCreator moc1 = moc0.unlock_general();
     CYBOZU_TEST_ASSERT(moc1.possible());
     CYBOZU_TEST_EQUAL(moc1.ld.state, LockState::INIT);
 }
@@ -37,11 +37,11 @@ CYBOZU_TEST_AUTO(test_read_reserve)
     std::vector<MutexOpCreator> v;
     v.emplace_back(ld0, md0);
     verify_unlockable(v.back());
-    v.push_back(v.back().read_reserve_1st());
+    v.push_back(v.back().xxx_reserve<LockState::READ, false, false>());
     verify_unlockable(v.back());
-    v.push_back(v.back().read_reserve_recover());
+    v.push_back(v.back().xxx_reserve<LockState::READ, false, true>());
     verify_unlockable(v.back());
-    v.push_back(v.back().unlock());
+    v.push_back(v.back().xxx_unlock_special<LockState::READ>());
 
     verify_possible(v);
 }
@@ -55,14 +55,14 @@ CYBOZU_TEST_AUTO(test_read_reserve_and_upgrade)
 
     std::vector<MutexOpCreator> v;
     v.emplace_back(ld0, md0);
-    v.push_back(v.back().read_reserve_1st());
+    v.push_back(v.back().xxx_reserve<LockState::READ, false, false>());
     verify_unlockable(v.back());
-    v.push_back(v.back().read_reserve_recover());
+    v.push_back(v.back().xxx_reserve<LockState::READ, false, true>());
     verify_unlockable(v.back());
-    v.push_back(v.back().upgrade_reservation());
+    v.push_back(v.back().xxx_reserve<LockState::READ_MODIFY_WRITE, true, true>());
     verify_unlockable(v.back());
-    v.push_back(v.back().protect<LockState::READ_MODIFY_WRITE>());
-    v.push_back(v.back().unlock());
+    v.push_back(v.back().xxx_protect<true>());
+    v.push_back(v.back().xxx_unlock_special<LockState::PROTECTED>());
 
     verify_possible(v);
 }
@@ -78,12 +78,12 @@ CYBOZU_TEST_AUTO(test_blind_write_reserve)
     v.emplace_back(ld0, md0);
     v.push_back(v.back().blind_write());
     verify_unlockable(v.back());
-    v.push_back(v.back().blind_write_reserve_1st());
+    v.push_back(v.back().xxx_reserve<LockState::BLIND_WRITE, true, false>());
     verify_unlockable(v.back());
-    v.push_back(v.back().blind_write_reserve_recover());
+    v.push_back(v.back().xxx_reserve<LockState::BLIND_WRITE, true, false>());
     verify_unlockable(v.back());
-    v.push_back(v.back().protect<LockState::BLIND_WRITE>());
-    v.push_back(v.back().unlock());
+    v.push_back(v.back().xxx_protect<false>());
+    v.push_back(v.back().xxx_unlock_special<LockState::PROTECTED>());
 
     for (MutexOpCreator& moc : v) {
         ::printf("%s\n", moc.str().c_str());
