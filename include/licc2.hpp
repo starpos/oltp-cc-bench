@@ -810,7 +810,6 @@ struct Request
     alignas(CACHE_LINE_SIZE)
     Request* next;  // for linked list as a request queue.
 
-    // alignas(CACHE_LINE_SIZE)
     RequestType type;
     bool checks_version; // If true, the request checks that version is unchanged.
     Message msg; // message from the owner. internally used.
@@ -852,12 +851,7 @@ struct Request
         std::swap(ld, rhs.ld);
     }
 
-    bool operator<(const Request& rhs) const {
-        // PROTECT request must be prior.
-        if (type == RequestType::PROTECT && rhs.type != RequestType::PROTECT) return true;
-        if (type != RequestType::PROTECT && rhs.type == RequestType::PROTECT) return false;
-        return ord_id < rhs.ord_id;
-    }
+    bool operator<(const Request& rhs) const { return ord_id < rhs.ord_id; }
 
     Message local_spin_wait() {
         Message msg0;
@@ -888,27 +882,28 @@ class Mutex
 {
     alignas(sizeof(uintptr_t))
     Request* tail_;
+    // alignas(CACHE_LINE_SIZE)
     Request* head_;
     ReqList waiting_;
     MutexData md_;
 public:
-    Mutex() : tail_(UNOWNED), head_(nullptr), waiting_(), md_() {
+    INLINE Mutex() : tail_(UNOWNED), head_(nullptr), waiting_(), md_() {
         md_.init();
     }
     /**
      * Everyone can call load() to read a mutex state.
      */
-    MutexData load() const {
+    INLINE MutexData load() const {
         return load_acquire(md_.ref());
     }
     /**
      * Store operations are allowed only to the owner.
      */
-    void store(MutexData md) {
+    INLINE void store(MutexData md) {
         store_release(md_.ref(), md.ref());
     }
 #if 0 // cas is not used because md modifying operations will be done through the request queue only.
-    bool cas(MutexData& before, MutexData after) {
+    INLINE bool cas(MutexData& before, MutexData after) {
         return compare_exchange(md_.ref(), before.ref(), after.ref());
     }
 #endif
@@ -920,7 +915,7 @@ public:
      *   true if you have become owner.
      *   The owner must call begin_owner_task(), do owner task, and then call end_owner_task().
      */
-    bool enqueue(Request& req) {
+    INLINE bool enqueue(Request& req) {
         Request* prev = exchange(tail_, &req);
         if (prev == UNOWNED) {
             return true;
@@ -947,7 +942,7 @@ public:
      *
      * waiting should be an empty list.
      */
-    void begin_owner_task(Request*& tail, ReqList& waiting) {
+    INLINE void begin_owner_task(Request*& tail, ReqList& waiting) {
         tail = exchange(tail_, OWNED);
         assert(tail != UNOWNED); assert(tail != OWNED);
         waiting = std::move(waiting_);
@@ -956,7 +951,7 @@ public:
      * req is the owner itself.
      * waiting will be the new head of the waiting list.
      */
-    void end_owner_task(Request& req, ReqList&& waiting) {
+    INLINE void end_owner_task(Request& req, ReqList&& waiting) {
         waiting_ = std::move(waiting);
 
         // This must be done during the request is owner.
@@ -995,7 +990,7 @@ public:
         unlock_general();
     }
 
-    void init(Mutex& mutex, uint32_t ord_id) {
+    INLINE void init(Mutex& mutex, uint32_t ord_id) {
         mutex_ = &mutex;
         ld_.init(ord_id);
     }
@@ -1005,29 +1000,29 @@ public:
     Lock& operator=(const Lock&) = delete;
 
     // move constructor/assign operator.
-    Lock(Lock&& rhs) noexcept : Lock() { swap(rhs); }
-    Lock& operator=(Lock&& rhs) noexcept { swap(rhs); return *this; }
+    INLINE Lock(Lock&& rhs) noexcept : Lock() { swap(rhs); }
+    INLINE Lock& operator=(Lock&& rhs) noexcept { swap(rhs); return *this; }
 
     /**
      * CAUSION: req_ object is not swappable during in request queue.
      */
-    void swap(Lock& rhs) noexcept {
+    INLINE void swap(Lock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(ld_, rhs.ld_);
         std::swap(req_, rhs.req_);
     }
 
 
-    void invisible_read(const void *shared, void *local, size_t size) {
+    INLINE void invisible_read(const void *shared, void *local, size_t size) {
         licc2::invisible_read(*mutex_, ld_, shared, local, size);
     }
 
     template <RequestType req_type>
-    void read_and_reserve_detail(const void *shared, void *local, size_t size) {
+    INLINE void read_and_reserve_detail(const void *shared, void *local, size_t size) {
         unused(shared, local, size);
         MutexData md0 = mutex_->load();
         for (;;) {
-#if 0  // QQQQQ
+#if 1
             if (req_type == RequestType::READ && md0.can_read_reserve_without_changing(ld_.ord_id)) {
                 // fast path.
                 ld_.state = LockState::READ;
@@ -1038,9 +1033,8 @@ public:
                 unused(ret); assert(ret);
             }
 #else
-                // slow path.
-                bool ret = do_request(req_type, false);
-                unused(ret); assert(ret);
+            bool ret = do_request(req_type, false);
+            unused(ret); assert(ret);
 #endif
 #ifndef NO_PAYLOAD
             ::memcpy(local, shared, size);
@@ -1050,42 +1044,42 @@ public:
             if (md0.is_valid(ld_.version)) return;
         }
     }
-    void read_and_reserve(const void *shared, void *local, size_t size) {
+    INLINE void read_and_reserve(const void *shared, void *local, size_t size) {
         assert(ld_.is_state_in({LockState::INIT, LockState::READ}));
         read_and_reserve_detail<RequestType::READ>(shared, local, size);
     }
-    void read_for_update(const void* shared, void* local, size_t size) {
+    INLINE void read_for_update(const void* shared, void* local, size_t size) {
         assert(ld_.is_state_in({LockState::INIT, LockState::READ_MODIFY_WRITE}));
         read_and_reserve_detail<RequestType::READ_MODIFY_WRITE>(shared, local, size);
     }
     template <LockState lock_state>
-    bool try_keep_reservation() {
+    INLINE bool try_keep_reservation() {
         static_assert(is_lock_state_in(lock_state, {LockState::READ, LockState::READ_MODIFY_WRITE}));
         assert(ld_.is_state(lock_state));
         constexpr RequestType req_type = (lock_state == LockState::READ ? RequestType::READ : RequestType::READ_MODIFY_WRITE);
         return do_request(req_type, true);
     }
-    void blind_write() {
+    INLINE void blind_write() {
         assert(ld_.is_state(LockState::INIT));
         ld_.state = LockState::PRE_BLIND_WRITE;
     }
-    void reserve_for_blind_write() {
+    INLINE void reserve_for_blind_write() {
         assert(ld_.is_state(LockState::PRE_BLIND_WRITE));
         bool ret = do_request(RequestType::BLIND_WRITE, false);
         unused(ret); assert(ret);
     }
-    bool upgrade() {
+    INLINE bool upgrade() {
         assert(ld_.is_state(LockState::READ));
         return do_request(RequestType::READ_MODIFY_WRITE, true);
     }
     template <bool checks_version>
-    bool protect() {
+    INLINE bool protect() {
         constexpr LockState lock_state = (checks_version ? LockState::READ_MODIFY_WRITE : LockState::BLIND_WRITE);
         unused(lock_state); assert(ld_.is_state(lock_state));
         return do_request(RequestType::PROTECT, checks_version);
     }
     template <LockState from_state>
-    void unlock_special() noexcept {
+    INLINE void unlock_special() noexcept {
         assert(mutex_ != nullptr);
         if (is_lock_state_in(from_state, {LockState::INIT, LockState::PRE_BLIND_WRITE})) {
             mutex_ = nullptr;
@@ -1102,7 +1096,7 @@ public:
         unused(ret); assert(ret);
         mutex_ = nullptr;
     }
-    void unlock_general() noexcept {
+    INLINE void unlock_general() noexcept {
         if (mutex_ == nullptr) return;
         if (ld_.is_state_in({LockState::INIT, LockState::PRE_BLIND_WRITE})) {
             mutex_ = nullptr;
@@ -1121,22 +1115,22 @@ public:
     }
 
     template <bool allow_protected = false>
-    bool is_unchanged() const {
+    INLINE bool is_unchanged() const {
         assert(mutex_);
         return mutex_->load().is_valid<allow_protected>(ld_.version);
     }
-    void update() {
+    INLINE void update() {
         assert(ld_.state == LockState::PROTECTED);
         ld_.updated = true;
     }
 
-    uintptr_t get_mutex_id() const { return uintptr_t(mutex_); }
+    INLINE uintptr_t get_mutex_id() const { return uintptr_t(mutex_); }
 
-    bool is_state(LockState st) const { return ld_.is_state(st); }
-    bool is_state_in(std::initializer_list<LockState> st_list) const { return ld_.is_state_in(st_list); }
+    INLINE bool is_state(LockState st) const { return ld_.is_state(st); }
+    INLINE bool is_state_in(std::initializer_list<LockState> st_list) const { return ld_.is_state_in(st_list); }
 
 private:
-    bool do_request(RequestType type, bool checks_version) {
+    INLINE bool do_request(RequestType type, bool checks_version) {
         req_.init(type, ld_, checks_version);
         if (mutex_->enqueue(req_)) do_owner_task();
         if (!req_.succeeded) return false;
@@ -1146,31 +1140,30 @@ private:
     /**
      * Owner must do almost all the md modifying operations.
      */
-    void do_owner_task() {
+    INLINE void do_owner_task() {
         Request *tail;
-        ReqList waiting;
-        mutex_->begin_owner_task(tail, waiting);
-        owner_process_unlock_operations(&req_, tail, waiting);
-        owner_process_lock_operations(waiting);
-        mutex_->end_owner_task(req_, std::move(waiting));
+        ReqList waiting_list, protect_list;
+        mutex_->begin_owner_task(tail, waiting_list);
+        MutexData md0 = mutex_->load();
+        bool version_changed = owner_process_unlock_requests(&req_, tail, protect_list, waiting_list, md0);
+        owner_process_protect_requests(protect_list, md0);
+        owner_process_reserve_requests(waiting_list, md0);
+        if (version_changed) owner_fail_checking_version_requests(waiting_list);
+        mutex_->end_owner_task(req_, std::move(waiting_list));
     }
     /**
      * process unlock (unreserve and unprotect) operations.
      * head and tail is included.
+     * RETURN:
+     *   true if version was updated.
+     *   false if version was unchanged.
      */
-    void owner_process_unlock_operations(Request* head, Request* tail, ReqList& waiting) {
+    INLINE bool owner_process_unlock_requests(Request* head, Request* tail, ReqList& protect_list, ReqList& waiting_list, MutexData& md0) {
+        bool version_changed = false;
         while (head != nullptr) {
-            bool inserts_to_waiting = false;
             if (head->type == RequestType::UNLOCK) {
-                MutexData md0 = mutex_->load();
-                auto moc1 = MutexOpCreator(head->ld, md0).unlock_general();
-                assert(moc1.possible());
-                mutex_->store(moc1.md);
-                head->ld = moc1.ld;
-                head->succeeded = true;
-                store_release(head->msg, DONE);
-            } else {
-                inserts_to_waiting = true;
+                version_changed |= owner_process_one_unlock_request(*head, md0);
+                // notification must be done later due to next pointer.
             }
             Request* next;
             if (head != tail) {
@@ -1178,17 +1171,55 @@ private:
             } else {
                 next = nullptr;
             }
-            if (inserts_to_waiting) {
-                insert_sort<Request>(waiting, head); // it breaks head->next pointer.
+            // The following insert operations breaks head->next pointer.
+            if (head->type == RequestType::PROTECT) {
+                insert_sort<Request>(protect_list, head);
+            } else if (head->type == RequestType::UNLOCK) {
+                store_release(head->msg, DONE); // notification. don't touch the request from now.
+            } else {
+                insert_sort<Request>(waiting_list, head);
             }
             head = next;
         }
+        return version_changed;
     }
-    void owner_process_lock_operations(ReqList& waiting) {
-        while (!waiting.empty()) {
-            Request& req = *waiting.front();
-            if (!owner_process_lock_operation(req)) return;
-            waiting.pop_front(); // do this before notification.
+    INLINE bool owner_process_one_unlock_request(Request& req, MutexData& md0) {
+        auto moc1 = MutexOpCreator(req.ld, md0).unlock_general();
+        assert(moc1.possible());
+        mutex_->store(moc1.md);
+        md0 = moc1.md;
+        req.ld = moc1.ld;
+        req.succeeded = true;
+        return moc1.md.version != md0.version;
+    }
+    INLINE void owner_process_protect_requests(ReqList& protect_list, MutexData& md0) {
+        while (!protect_list.empty()) {
+            Request& req = *protect_list.front();
+            owner_process_one_protect_request(req, md0);
+            protect_list.pop_front(); // do this before notification.
+            store_release(req.msg, DONE);
+        }
+    }
+    INLINE void owner_process_one_protect_request(Request& req, MutexData& md0) {
+        assert(req.type == RequestType::PROTECT);
+        MutexOpCreator moc0(req.ld, md0);
+        MutexOpCreator moc1;
+        if (req.checks_version) moc1 = moc0.reserve<LockState::READ_MODIFY_WRITE, true>().protect<true>();
+        else moc1 = moc0.reserve<LockState::BLIND_WRITE, false>().protect<false>();
+        if (!moc1.possible()) {
+            req.succeeded = false;
+            return;
+        }
+        mutex_->store(moc1.md);
+        md0 = moc1.md;
+        req.ld = moc1.ld;
+        req.succeeded = true;
+    }
+    INLINE void owner_process_reserve_requests(ReqList& waiting_list, MutexData& md0) {
+        while (!waiting_list.empty()) {
+            Request& req = *waiting_list.front();
+            if (!owner_process_one_reserve_request(req, md0)) return;
+            waiting_list.pop_front(); // do this before notification.
             store_release(req.msg, DONE);
         }
     }
@@ -1196,8 +1227,7 @@ private:
      * RETURN:
      *   true if the request has been done (with success or failure).
      */
-    bool owner_process_lock_operation(Request& req) {
-        MutexData md0 = mutex_->load(); // Only the owner can change the mutex state.
+    INLINE bool owner_process_one_reserve_request(Request& req, MutexData& md0) {
         MutexOpCreator moc0(req.ld, md0);
         MutexOpCreator moc1;
         switch(req.type) {
@@ -1216,10 +1246,6 @@ private:
             if (req.checks_version) moc1 = moc0.reserve<LockState::READ_MODIFY_WRITE, true>();
             else moc1 = moc0.reserve<LockState::READ_MODIFY_WRITE, false>();
             break;
-        case RequestType::PROTECT:
-            if (req.checks_version) moc1 = moc0.reserve<LockState::READ_MODIFY_WRITE, true>().protect<true>();
-            else moc1 = moc0.reserve<LockState::BLIND_WRITE, false>().protect<false>();
-            break;
         default:
             BUG();
         }
@@ -1232,9 +1258,27 @@ private:
         }
         assert(moc1.possible());
         mutex_->store(moc1.md);
+        md0 = moc1.md;
         req.ld = moc1.ld;
         req.succeeded = true;
         return true;
+    }
+    /**
+     * Notify requests with failure that checks version unchanged.
+     */
+    INLINE void owner_fail_checking_version_requests(ReqList& waiting_list) {
+        ReqList tmp_list;
+        while (!waiting_list.empty()) {
+            Request& req = *waiting_list.front();
+            waiting_list.pop_front();
+            if (req.checks_version) {
+                req.succeeded = false;
+                store_release(req.msg, DONE); // notification.
+            } else {
+                tmp_list.push_back(&req);
+            }
+        }
+        waiting_list = std::move(tmp_list);
     }
 };
 
