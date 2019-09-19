@@ -1057,6 +1057,12 @@ public:
         static_assert(is_lock_state_in(lock_state, {LockState::READ, LockState::READ_MODIFY_WRITE}));
         assert(ld_.is_state(lock_state));
         constexpr RequestType req_type = (lock_state == LockState::READ ? RequestType::READ : RequestType::READ_MODIFY_WRITE);
+        // fast path.
+        MutexData md0 = mutex_->load();
+        if (!md0.is_valid(ld_.version)) return false;
+        if (md0.ord_id == ld_.ord_id) return true;
+        if (req_type == RequestType::READ && md0.can_read_reserve_without_changing(ld_.ord_id)) return true;
+        // slow path.
         return do_request(req_type, true);
     }
     INLINE void blind_write() {
