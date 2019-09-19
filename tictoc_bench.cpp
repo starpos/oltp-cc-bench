@@ -10,6 +10,8 @@
 #include "vector_payload.hpp"
 #include "cache_line_size.hpp"
 #include "zipf.hpp"
+#include "workload_util.hpp"
+
 
 #ifdef USE_PARTITION
 #include "partitioned.hpp"
@@ -29,10 +31,10 @@ struct Shared
 #endif
     size_t longTxSize;
     size_t nrOp;
-    size_t nrWr;
+    double wrRatio;
     size_t nrWr4Long;
-    int shortTxMode;
-    int longTxMode;
+    TxMode shortTxMode;
+    TxMode longTxMode;
     bool usesBackOff;
     bool usesRMW;
     bool nowait;
@@ -60,47 +62,28 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 #endif
     const size_t longTxSize = shared.longTxSize;
     const size_t nrOp = shared.nrOp;
-    const size_t nrWr = shared.nrWr;
-    const int shortTxMode = shared.shortTxMode;
-    const int longTxMode = shared.longTxMode;
+    const size_t wrRatio = size_t(shared.wrRatio * (double)SIZE_MAX);
+    const TxMode shortTxMode = shared.shortTxMode;
+    const TxMode longTxMode = shared.longTxMode;
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
     FastZipf fastZipf(rand, shared.zipfTheta, recV.size(), shared.zipfZetan);
     cybozu::tictoc::LocalSet localSet;
     std::vector<uint8_t> value(shared.payload);
-    std::vector<size_t> tmpV; // for fillMuIdVecArray.
-
-    // USE_MIX_TX
-    std::vector<bool> isWriteV(nrOp);
-    std::vector<size_t> tmpV2; // for fillModeVec.
-
-    // USE_LONG_TX_2
-    BoolRandom<decltype(rand)> boolRand(rand);
 
     const bool isLongTx = longTxSize != 0 && idx < shared.nrTh4LongTx; // starvation setting.
     const size_t realNrOp = isLongTx ? longTxSize : nrOp;
-    const size_t realNrWr = isLongTx ? shared.nrWr4Long : nrWr;
-    if (!isLongTx && shortTxMode == USE_MIX_TX) {
-        isWriteV.resize(nrOp);
-    }
+    const size_t realNrWr = isLongTx ? shared.nrWr4Long : size_t(shared.wrRatio * (double)nrOp);
+    auto getMode = selectGetModeFunc<decltype(rand), Mode>(isLongTx, shortTxMode, longTxMode);
+    auto getRecordIdx = selectGetRecordIdx<decltype(rand)>(isLongTx, shortTxMode, longTxMode, shared.usesZipf);
     localSet.init(shared.payload, realNrOp);
     localSet.setNowait(shared.nowait);
-
-#if 0
-    GetModeFunc<decltype(rand), Mode>
-        getMode(boolRand, isWriteV, isLongTx,
-                shortTxMode, longTxMode, realNrOp, nrWr);
-#endif
 
     storeRelease(ready, 1);
     while (!loadAcquire(start)) _mm_pause();
     size_t count = 0; unused(count);
     while (!loadAcquire(quit)) {
-        if (!isLongTx && shortTxMode == USE_MIX_TX) {
-            fillModeVec(isWriteV, rand, nrWr, tmpV2);
-        }
-
         size_t firstRecIdx = 0;
         uint64_t t0 = 0;
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
@@ -110,17 +93,10 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
             rand.setState(randState);
             // Try to run transaction.
             for (size_t i = 0; i < realNrOp; i++) {
-#if 0
-                const bool isWrite = bool(getMode(i));
-#else
-                const bool isWrite = bool(
-                    getMode<decltype(rand), Mode>(
-                        rand, boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
-                        realNrOp, realNrWr, i));
-#endif
-                const size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode,
-                                                recV.size(), realNrOp, i, firstRecIdx,
-                                                shared.usesZipf, fastZipf);
+                size_t key = getRecordIdx(rand, fastZipf, recV.size(), realNrOp, i, firstRecIdx);
+                Mode mode = getMode(rand, realNrOp, realNrWr, wrRatio, i);
+                bool isWrite = (mode == Mode::X);
+
                 auto& item = recV[key];
                 Mutex& mutex = item.value;
                 if (shared.usesRMW || !isWrite) {
@@ -258,10 +234,10 @@ int main(int argc, char *argv[]) try
         initRecordVector(shared.recV, opt);
         shared.longTxSize = opt.longTxSize;
         shared.nrOp = opt.nrOp;
-        shared.nrWr = opt.nrWr;
+        shared.wrRatio = opt.wrRatio;
         shared.nrWr4Long = opt.nrWr4Long;
-        shared.shortTxMode = opt.shortTxMode;
-        shared.longTxMode = opt.longTxMode;
+        shared.shortTxMode = TxMode(opt.shortTxMode);
+        shared.longTxMode = TxMode(opt.longTxMode);
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         shared.usesRMW = opt.usesRMW ? 1 : 0;
         shared.nowait = opt.nowait ? 1 : 0;

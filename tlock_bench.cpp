@@ -13,6 +13,7 @@
 #include "cmdline_option.hpp"
 #include "arch.hpp"
 #include "zipf.hpp"
+#include "workload_util.hpp"
 
 
 using Spinlock = cybozu::lock::TtasSpinlockT<0>;
@@ -282,10 +283,10 @@ struct TLockShared
     TxInfo txInfo;
     size_t longTxSize;
     size_t nrOp;
-    size_t nrWr;
+    double wrRatio;
     size_t nrWr4Long;
-    int shortTxMode;
-    int longTxMode;
+    TxMode shortTxMode;
+    TxMode longTxMode;
 
     GlobalTxIdGenerator globalTxIdGen;
     SimpleTxIdGenerator simpleTxIdGen;
@@ -311,9 +312,9 @@ Result1 tWorker(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     unused(txInfo);
     const size_t longTxSize = shared.longTxSize;
     const size_t nrOp = shared.nrOp;
-    const size_t nrWr = shared.nrWr;
-    const int shortTxMode = shared.shortTxMode;
-    const int longTxMode = shared.longTxMode;
+    const size_t wrRatio = size_t(shared.wrRatio * (double)SIZE_MAX);
+    const TxMode shortTxMode = shared.shortTxMode;
+    const TxMode longTxMode = shared.longTxMode;
 
     PriorityIdGenerator<12> priIdGen;
     priIdGen.init(idx + 1);
@@ -321,20 +322,21 @@ Result1 tWorker(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
-    std::vector<size_t> muIdV(nrOp);
+
+    const double theta = 0.0;
+    FastZipf fastZipf(rand, theta, muV.size(), FastZipf::zeta(muV.size(), theta));
+    const bool usesZipf = false;
+
+    const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
+    auto getMode = selectGetModeFunc<decltype(rand), Mode>(isLongTx, shortTxMode, longTxMode);
+    auto getRecordIdx = selectGetRecordIdx<decltype(rand)>(isLongTx, shortTxMode, longTxMode, usesZipf);
+    AccessInfoVec aiV;
+    aiV.resize(isLongTx ? longTxSize : nrOp);
+
     std::vector<TLock> writeLocks;
     std::vector<TLock> readLocks;
     std::vector<uintptr_t> writeSet;
     std::vector<TLockReader> readSet;
-
-    std::vector<size_t> tmpV; // for fillMuIdVecArray.
-
-    // USE_MIX_TX
-    std::vector<bool> isWriteV;
-    std::vector<size_t> tmpV2; // for fillModeVec;
-
-    // USE_LONG_TX_2
-    BoolRandom<decltype(rand)> boolRand(rand);
 
 #ifdef MONITOR
     {
@@ -343,34 +345,13 @@ Result1 tWorker(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     }
 #endif
 
-    const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
-    if (isLongTx) {
-        muIdV.resize(longTxSize);
-    } else {
-        muIdV.resize(nrOp);
-        if (shortTxMode == USE_MIX_TX) {
-            isWriteV.resize(nrOp);
-        }
-    }
-
     storeRelease(ready, 1);
     while (!loadAcquire(start)) _mm_pause();
     size_t count = 0; unused(count);
     while (!loadAcquire(quit)) {
-        if (isLongTx) {
-            if (longTxSize > muV.size() * 5 / 1000) {
-                fillMuIdVecArray(muIdV, rand, muV.size(), tmpV);
-            } else {
-                fillMuIdVecLoop(muIdV, rand, muV.size());
-            }
-        } else {
-            fillMuIdVecLoop(muIdV, rand, muV.size());
-            if (shortTxMode == USE_MIX_TX) {
-                fillModeVec(isWriteV, rand, nrWr, tmpV2);
-            }
-        }
+        fillAccessInfoVec(rand, fastZipf, getMode, getRecordIdx, muV.size(), wrRatio, aiV);
 #if 0 /* For test. */
-        std::sort(muIdV.begin(), muIdV.end());
+        std::sort(aiV.begin(), aiV.end());
 #endif
 
         uint64_t txId;
@@ -396,10 +377,10 @@ Result1 tWorker(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
                 txInfo.txId = txId;
             }
 #endif
-            for (size_t i = 0; i < muIdV.size(); i++) {
-                Mode mode = getMode<decltype(rand), Mode>(
-                    rand, boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
-                    nrOp, nrWr, i);
+            for (size_t i = 0; i < aiV.size(); i++) {
+                Mode mode;
+                size_t key;
+                aiV[i].get(key, mode);
 #ifdef MONITOR
                 {
                     Spinlock lk(&txInfo.mutex);
@@ -410,7 +391,7 @@ Result1 tWorker(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
                     lkInfo.state = 0;
                 }
 #endif
-                Mutex *mutex = &muV[muIdV[i]];
+                Mutex *mutex = &muV[key];
                 if (mode == Mode::S) {
                     const bool tryOccRead = rmode == ReadMode::OCC
                         || (rmode == ReadMode::HYBRID && !isLongTx && retry == 0);
@@ -667,153 +648,6 @@ Result1 readWorker(size_t idx, const bool& start, const bool& quit, bool& should
     return res;
 }
 
-template <typename TxIdGen, typename TLockTypes>
-Result1 contentionWorker(size_t idx, const bool& start, const bool& quit, std::vector<typename TLockTypes::Mutex>& muV, TxIdGen& txIdGen, ReadMode rmode, size_t nrOp, size_t nrWr)
-{
-    using Mutex = typename TLockTypes::Mutex;
-    using TLock = typename TLockTypes::TLock;
-    using TLockReader = typename TLockTypes::TLockReader;
-    using Mode = typename TLockTypes::Mode;
-
-    cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
-    const bool isLongTx = false;
-    Result1 res;
-    cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
-    assert(nrWr <= nrOp);
-
-    std::vector<size_t> muIdV(nrOp);
-
-    std::vector<TLock> writeLocks;
-    std::vector<TLock> readLocks;
-    std::vector<uintptr_t> writeSet;
-    std::vector<TLockReader> readSet;
-
-    std::vector<size_t> tmpV; // for fillMuIdVecArray.
-    std::vector<bool> isWriteV(nrOp);
-
-    while (!start) _mm_pause();
-    size_t count = 0; unused(count);
-    while (!quit) {
-        muIdV.resize(nrOp);
-        fillMuIdVecLoop(muIdV, rand, muV.size());
-        isWriteV.resize(nrOp);
-        fillModeVec(isWriteV, rand, nrWr, tmpV);
-
-#if 0 /* For test. */
-        std::sort(muIdV.begin(), muIdV.end());
-#endif
-
-        const size_t sz = muIdV.size();
-        unused(sz);
-        const uint32_t txId = txIdGen.get();
-
-        for (size_t retry = 0;; retry++) {
-            if (quit) break; // to quit under starvation.
-            assert(writeLocks.empty());
-            assert(readLocks.empty());
-            assert(writeSet.empty());
-            assert(readSet.empty());
-            for (size_t i = 0; i < muIdV.size(); i++) {
-                Mode mode = isWriteV[i] ? Mode::X : Mode::S;
-
-                Mutex *mutex = &muV[muIdV[i]];
-                if (mode == Mode::S) {
-                    const bool tryOccRead = rmode == ReadMode::OCC
-                        || (rmode == ReadMode::HYBRID && retry == 0);
-                    if (tryOccRead) {
-                        readSet.emplace_back();
-                        TLockReader& r = readSet.back();
-                        for (;;) {
-                            r.prepare(mutex);
-                            // read
-                            r.readFence();
-                            if (r.verifyAll()) break;
-                        }
-                    } else {
-                        readLocks.emplace_back(mutex, mode, txId);
-                        TLock& lk = readLocks.back();
-                        for (;;) {
-                            // read
-                            if (!lk.intercepted()) break;
-                            // intercept failed.
-                            lk.relock();
-                        }
-                    }
-                } else {
-                    assert(mode == Mode::X);
-                    writeLocks.emplace_back(mutex, mode, txId);
-                    TLock& lk = writeLocks.back();
-                    // modify the resource on write-set.
-                    writeSet.emplace_back(lk.getMutexId());
-                }
-            }
-
-            // Pre-commit.
-            for (size_t i = 0; i < writeLocks.size(); i++) {
-                if (!writeLocks[i].protect()) {
-                    res.incIntercepted(isLongTx);
-                    goto abort;
-                }
-            }
-#if 0 // protect read locks.
-            for (size_t i = 0; i < readLocks.size(); i++) {
-                if (!readLocks[i].protect()) {
-                    res.incIntercepted(isLongTx);
-                    goto abort;
-                }
-            }
-            // serialization points.
-            __atomic_thread_fence(__ATOMIC_ACQUIRE);
-#else // verify read locks.
-            // serialization points.
-            __atomic_thread_fence(__ATOMIC_ACQUIRE);
-            for (size_t i = 0; i < readLocks.size(); i++) {
-                if (!readLocks[i].unchanged()) {
-                    res.incIntercepted(isLongTx);
-                    goto abort;
-                }
-            }
-#endif
-            if (!readSet.empty() && !writeSet.empty()) {
-                // for binary search in verify phase.
-                std::sort(writeSet.begin(), writeSet.end());
-            }
-
-            for (TLockReader& r : readSet) {
-                const bool ret =
-                    (!writeSet.empty() && std::binary_search(writeSet.begin(), writeSet.end(), r.getMutexId()))
-                    ? r.verifyVersion() : r.verifyAll();
-                if (!ret) {
-                    res.incAbort(isLongTx);
-                    goto abort;
-                }
-            }
-
-            // We can commit.
-            for (TLock &lk : readLocks) {
-                assert(lk.mode() != Mode::X);
-                lk.unlock();
-            }
-            for (TLock &lk : writeLocks) {
-                assert(lk.mode() == Mode::X);
-                lk.update();
-                lk.writeFence();
-                lk.unlock();
-            }
-            res.incCommit(isLongTx);
-            clearLocks(writeLocks, readLocks, writeSet, readSet);
-
-            // Tx succeeded.
-            res.addRetryCount(isLongTx, retry);
-            break;
-
-          abort:
-            clearLocks(writeLocks, readLocks, writeSet, readSet);
-        }
-    }
-    return res;
-}
-
 
 template <typename PQLock>
 struct ILockShared
@@ -824,10 +658,10 @@ struct ILockShared
     ReadMode rmode;
     size_t longTxSize;
     size_t nrOp;
-    size_t nrWr;
+    double wrRatio;
     size_t nrWr4Long;
-    int shortTxMode;
-    int longTxMode;
+    TxMode shortTxMode;
+    TxMode longTxMode;
 
     GlobalTxIdGenerator globalTxIdGen;
     SimpleTxIdGenerator simpleTxIdGen;
@@ -858,51 +692,32 @@ Result1 iWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQui
     const ReadMode rmode = shared.rmode;
     const size_t longTxSize = shared.longTxSize;
     const size_t nrOp = shared.nrOp;
-    const size_t nrWr = shared.nrWr;
-    const int shortTxMode = shared.shortTxMode;
-    const int longTxMode = shared.longTxMode;
+    const size_t wrRatio = size_t(shared.wrRatio * (double)SIZE_MAX);
+    const TxMode shortTxMode = shared.shortTxMode;
+    const TxMode longTxMode = shared.longTxMode;
+    const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
-    std::vector<size_t> muIdV(nrOp);
+
+    const double theta = 0.0;
+    FastZipf fastZipf(rand, theta, muV.size(), FastZipf::zeta(muV.size(), theta));
+    const bool usesZipf = false;
+
+    AccessInfoVec aiV;
+    aiV.resize(isLongTx ? longTxSize : nrOp);
+    auto getMode = selectGetModeFunc<decltype(rand), IMode>(isLongTx, shortTxMode, longTxMode);
+    auto getRecordIdx = selectGetRecordIdx<decltype(rand)>(isLongTx, shortTxMode, longTxMode, usesZipf);
+
     std::vector<ILock> writeLocks;
     std::vector<ILock> readLocks;
     std::vector<uintptr_t> writeSet;
     std::vector<ILockReader> readSet;
 
-    std::vector<size_t> tmpV; // for fillMuIdVecArray.
-
-    // for USE_MIX_TX
-    std::vector<bool> isWriteV;
-    std::vector<size_t> tmpV2; // for fillModeVec;
-
-    // for USE_LONG_TX_2
-    BoolRandom<decltype(rand)> boolRand(rand);
-
-
-    const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
-    if (isLongTx) {
-        muIdV.resize(longTxSize);
-    } else {
-        muIdV.resize(nrOp);
-    }
-
-    while (!start) _mm_pause();
+    while (!loadAcquire(start)) _mm_pause();
     size_t count = 0; unused(count);
-    while (!quit) {
-        if (isLongTx) {
-            if (longTxSize > muV.size() * 5 / 1000) {
-                fillMuIdVecArray(muIdV, rand, muV.size(), tmpV);
-            } else {
-                fillMuIdVecLoop(muIdV, rand, muV.size());
-            }
-        } else {
-            fillMuIdVecLoop(muIdV, rand, muV.size());
-            if (shortTxMode == USE_MIX_TX) {
-                isWriteV.resize(nrOp);
-                fillModeVec(isWriteV, rand, nrWr, tmpV2);
-            }
-        }
+    while (!loadAcquire(quit)) {
+        fillAccessInfoVec(rand, fastZipf, getMode, getRecordIdx, muV.size(), wrRatio, aiV);
 #if 0 /* For test. */
         std::sort(muIdV.begin(), muIdV.end());
 #endif
@@ -926,12 +741,11 @@ Result1 iWorker(size_t idx, const bool& start, const bool& quit, bool& shouldQui
             assert(writeSet.empty());
             assert(readSet.empty());
 
-            for (size_t i = 0; i < muIdV.size(); i++) {
-                IMode mode = getMode<decltype(rand), IMode>(
-                    rand, boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
-                    nrOp, nrWr, i);
-
-                IMutex &mutex = muV[muIdV[i]];
+            for (size_t i = 0; i < aiV.size(); i++) {
+                size_t key;
+                IMode mode;
+                aiV[i].get(key, mode);
+                IMutex &mutex = muV[key];
                 if (mode == IMode::S) {
                     const bool tryOccRead = rmode == ReadMode::OCC
                         || (rmode == ReadMode::HYBRID && !isLongTx && retry == 0);
@@ -1072,46 +886,26 @@ Result1 iWorker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit
     const ReadMode rmode = shared.rmode;
     const size_t longTxSize = shared.longTxSize;
     const size_t nrOp = shared.nrOp;
-    const size_t nrWr = shared.nrWr;
-    const int shortTxMode = shared.shortTxMode;
-    const int longTxMode = shared.longTxMode;
+    const size_t wrRatio = size_t(shared.wrRatio * (double)SIZE_MAX);
+    const TxMode shortTxMode = shared.shortTxMode;
+    const TxMode longTxMode = shared.longTxMode;
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
     FastZipf fastZipf(rand, 0.0, muV.size());
-
-    std::vector<size_t> tmpV; // for fillMuIdVecArray.
-
-    // for USE_MIX_TX
-    std::vector<bool> isWriteV;
-    std::vector<size_t> tmpV2; // for fillModeVec;
-
-    // for USE_LONG_TX_2
-    BoolRandom<decltype(rand)> boolRand(rand);
-
+    const bool usesZipf = false;
 
     const bool isLongTx = longTxSize != 0 && idx == 0; // starvation setting.
     const size_t realNrOp = isLongTx ? longTxSize : nrOp;
-    const size_t realNrWr = isLongTx ? shared.nrWr4Long : nrWr;
-    if (!isLongTx && shortTxMode == USE_MIX_TX) {
-        isWriteV.resize(nrOp);
-    }
-#if 0
-    GetModeFunc<decltype(rand), IMode>
-        getMode(boolRand, isWriteV, isLongTx,
-                shortTxMode, longTxMode, realNrOp, nrWr);
-#endif
-
+    const size_t realNrWr = isLongTx ? shared.nrWr4Long : size_t(shared.wrRatio * (double)nrOp);
+    auto getMode = selectGetModeFunc<decltype(rand), IMode>(isLongTx, shortTxMode, longTxMode);
+    auto getRecordIdx = selectGetRecordIdx<decltype(rand)>(isLongTx, shortTxMode, longTxMode, usesZipf);
     cybozu::lock::ILockSet<PQLock> lockSet;
 
     storeRelease(ready, 1);
     while (!loadAcquire(start)) _mm_pause();
     size_t count = 0; unused(count);
     while (!loadAcquire(quit)) {
-        if (!isLongTx && shortTxMode == USE_MIX_TX) {
-            fillModeVec(isWriteV, rand, nrWr, tmpV2);
-        }
-
         uint64_t priId;
         if (txIdGenType == SCALABLE_TXID_GEN) {
             priId = priIdGen.get(isLongTx ? 0 : 1);
@@ -1132,17 +926,8 @@ Result1 iWorker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit
             if (loadAcquire(quit)) break; // to quit under starvation.
 
             for (size_t i = 0; i < realNrOp; i++) {
-#if 0
-                IMode mode = getMode(i);
-#else
-                IMode mode = getMode<decltype(rand), IMode>(
-                    rand, boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
-                    realNrOp, realNrWr, i);
-
-#endif
-                size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode,
-                                          muV.size(), realNrOp, i, firstRecIdx,
-                                          false, fastZipf);
+                size_t key = getRecordIdx(rand, fastZipf, muV.size(), realNrOp, i, firstRecIdx);
+                IMode mode = getMode(rand, realNrOp, realNrWr, wrRatio, i);
                 IMutex &mutex = muV[key];
 
 #if 0
@@ -1412,10 +1197,10 @@ void dispatch1(CmdLineOptionPlus& opt)
         shared.rmode = strToReadMode(opt.modeStr.c_str());
         shared.longTxSize = opt.longTxSize;
         shared.nrOp = opt.nrOp;
-        shared.nrWr = opt.nrWr;
+        shared.wrRatio = opt.wrRatio;
         shared.nrWr4Long = opt.nrWr4Long;
-        shared.shortTxMode = opt.shortTxMode;
-        shared.longTxMode = opt.longTxMode;
+        shared.shortTxMode = TxMode(opt.shortTxMode);
+        shared.longTxMode = TxMode(opt.longTxMode);
         for (size_t i = 0; i < opt.nrLoop; i++) {
             dispatch2<PQLock, 0>(opt, shared);
         }
@@ -1425,10 +1210,10 @@ void dispatch1(CmdLineOptionPlus& opt)
         shared.rmode = strToReadMode(opt.modeStr.c_str());
         shared.longTxSize = opt.longTxSize;
         shared.nrOp = opt.nrOp;
-        shared.nrWr = opt.nrWr;
+        shared.wrRatio = opt.wrRatio;
         shared.nrWr4Long = opt.nrWr4Long;
-        shared.shortTxMode = opt.shortTxMode;
-        shared.longTxMode = opt.longTxMode;
+        shared.shortTxMode = TxMode(opt.shortTxMode);
+        shared.longTxMode = TxMode(opt.longTxMode);
         for (size_t i = 0; i < opt.nrLoop; i++) {
             dispatch2<PQLock, 1>(opt, shared);
         }

@@ -14,6 +14,15 @@
 #include "cache_line_size.hpp"
 
 
+enum TxIdGenType : uint8_t
+{
+    SCALABLE_TXID_GEN = 0,
+    BULK_TXID_GEN = 1,
+    SIMPLE_TXID_GEN = 2,
+    EPOCH_TXID_GEN = 3,
+};
+
+
 /**
  * Transaction Id generator.
  *

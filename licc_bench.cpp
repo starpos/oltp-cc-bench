@@ -4,14 +4,16 @@
 #else
 #include "licc.hpp"
 #endif
+#include <algorithm>
 #include "pqlock.hpp"
 #include "cmdline_option.hpp"
 #include "measure_util.hpp"
 #include "cpuid.hpp"
 #include "time.hpp"
 #include "tx_util.hpp"
-#include <algorithm>
 #include "zipf.hpp"
+#include "workload_util.hpp"
+
 
 #ifdef USE_PARTITION
 #include "partitioned.hpp"
@@ -125,10 +127,10 @@ struct ILockShared
     ReadMode rmode;
     size_t longTxSize;
     size_t nrOp;
-    size_t nrWr;
+    double wrRatio;
     size_t nrWr4Long;
-    int shortTxMode;
-    int longTxMode;
+    TxMode shortTxMode;
+    TxMode longTxMode;
     bool usesBackOff;
     size_t writePct;
     bool usesRMW;
@@ -167,23 +169,19 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     const ReadMode rmode = shared.rmode;
     const size_t longTxSize = shared.longTxSize;
     const size_t nrOp = shared.nrOp;
-    const size_t nrWr = shared.nrWr;
-    const int shortTxMode = shared.shortTxMode;
-    const int longTxMode = shared.longTxMode;
+    const size_t wrRatio = size_t(shared.wrRatio * (double)SIZE_MAX);
+    const TxMode shortTxMode = shared.shortTxMode;
+    const TxMode longTxMode = shared.longTxMode;
     const bool usesRMW = shared.usesRMW;
 
     Result1 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
     FastZipf fastZipf(rand, shared.zipfTheta, recV.size(), shared.zipfZetan);
-    BoolRandom<decltype(rand)> boolRand(rand);
-    std::vector<bool> isWriteV;
-    std::vector<size_t> tmpV; // for fillModeVec
     const bool isLongTx = longTxSize != 0 && idx < shared.nrTh4LongTx;
     const size_t realNrOp = isLongTx ? longTxSize : nrOp;
-    const size_t realNrWr = isLongTx ? shared.nrWr4Long : nrWr;
-    if (!isLongTx && shortTxMode == USE_MIX_TX) {
-        isWriteV.resize(nrOp);
-    }
+    const size_t realNrWr = isLongTx ? shared.nrWr4Long : size_t((double)nrOp * shared.wrRatio);
+    auto getMode = selectGetModeFunc<decltype(rand), IMode>(isLongTx, shortTxMode, longTxMode);
+    auto getRecordIdx = selectGetRecordIdx<decltype(rand)>(isLongTx, shortTxMode, longTxMode, shared.usesZipf);
 
 #if 0
     cybozu::lock::OrdIdGen ordIdGen;
@@ -192,16 +190,6 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     cybozu::lock::SimpleEpochGenerator epochGen;
 #else
     EpochTxIdGenerator<9, 2> epochTxIdGen(idx + 1, epochGen_);
-#endif
-
-#if 0
-    GetModeFunc<decltype(rand), IMode>
-        getMode(boolRand, isWriteV, isLongTx,
-                shortTxMode, longTxMode, realNrOp, nrWr);
-#endif
-#if 0
-    GetRecordIdxFunc<decltype(rand)>
-        getRecordIdx(rand, isLongTx, shortTxMode, longTxMode, muV.size(), realNrOp);
 #endif
 
     ILockSet lockSet;
@@ -221,10 +209,6 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     storeRelease(ready, 1);
     while (!loadAcquire(start)) _mm_pause();
     while (!loadAcquire(quit)) {
-        if (!isLongTx && shortTxMode == USE_MIX_TX) {
-            fillModeVec(isWriteV, rand, nrWr, tmpV);
-        }
-
 #if 0
         ordIdGen.epochId = epochGen.get();
         const uint32_t ordId = ordIdGen.ordId;
@@ -252,22 +236,10 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 #endif
             for (size_t i = 0; i < realNrOp; i++) {
                 //::printf("op %zu\n", i); // debug code
-#if 0
-                IMode mode = getMode(i);
-#else
-                IMode mode = getMode<decltype(rand), IMode>(
-                    rand, boolRand, isWriteV, isLongTx, shortTxMode, longTxMode,
-                    realNrOp, realNrWr, i);
-#endif
-#if 0
-                size_t key = getRecordIdx(i);
-#elif 1
-                size_t key = getRecordIdx(rand, isLongTx, shortTxMode, longTxMode,
-                                          recV.size(), realNrOp, i, firstRecIdx,
-                                          shared.usesZipf, fastZipf);
-#else
-                size_t key = rand() % recV.size();
-#endif
+
+                size_t key = getRecordIdx(rand, fastZipf, recV.size(), realNrOp, i, firstRecIdx);
+                IMode mode = getMode(rand, realNrOp, realNrWr, wrRatio, i);
+
                 //::printf("mode %c key %zu\n", mode == IMode::S ? 'S' : 'X', key); // QQQQQ
                 auto& rec = recV[key];
                 IMutex& mutex = rec.value;
@@ -529,10 +501,15 @@ void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
     shared.rmode = strToReadMode(opt.modeStr.c_str());
     shared.longTxSize = opt.longTxSize;
     shared.nrOp = opt.nrOp;
-    shared.nrWr = opt.nrWr;
+    shared.wrRatio = opt.wrRatio;
     shared.nrWr4Long = opt.nrWr4Long;
-    shared.shortTxMode = opt.shortTxMode;
-    shared.longTxMode = opt.longTxMode;
+    shared.shortTxMode = TxMode(opt.shortTxMode);
+    shared.longTxMode = TxMode(opt.longTxMode);
+#if 0
+    ::printf("txmode1 %u %u\n", opt.shortTxMode, opt.longTxMode); // QQQQQ
+    ::printf("txmode2 %u %u\n", shared.shortTxMode, shared.longTxMode); // QQQQQ
+#endif
+
     shared.usesBackOff = opt.usesBackOff != 0;
     shared.writePct = opt.writePct;
     shared.usesRMW = opt.usesRMW != 0;
