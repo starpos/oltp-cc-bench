@@ -3,7 +3,7 @@
 	@file
 	@brief unit test class
 
-	Copyright (C) 2008 Cybozu Labs, Inc., all rights reserved.
+	@author MITSUNARI Shigeo(@herumi)
 */
 
 #include <stdio.h>
@@ -86,14 +86,15 @@ public:
 		}
 		fflush(stdout);
 		if (msg.empty()) {
-			int total = okCount_ + ngCount_ + exceptionCount_;
+			int err = ngCount_ + exceptionCount_;
+			int total = okCount_ + err;
 			std::cout << "ctest:name=" << getBaseName(*argv)
 					  << ", module=" << list_.size()
 					  << ", total=" << total
 					  << ", ok=" << okCount_
 					  << ", ng=" << ngCount_
 					  << ", exception=" << exceptionCount_ << std::endl;
-			return total > 0 ? 1 : 0;
+			return err > 0 ? 1 : 0;
 		} else {
 			std::cout << msg << std::endl;
 			return 1;

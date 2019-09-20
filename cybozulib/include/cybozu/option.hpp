@@ -3,7 +3,7 @@
 	@file
 	@brief command line parser
 
-	Copyright (C) Cybozu Labs, Inc., all rights reserved.
+	@author MITSUNARI Shigeo(@herumi)
 */
 #include <string>
 #include <vector>
@@ -145,7 +145,7 @@ bool convertInt(T* x, const char *str)
 	if (factor > 1) {
 		if ((std::numeric_limits<T>::min)() / factor <= y
 			&& y <= (std::numeric_limits<T>::max)() / factor) {
-			*x = y * factor;
+			*x = static_cast<T>(y * factor);
 		} else {
 			return false;
 		}
@@ -155,8 +155,28 @@ bool convertInt(T* x, const char *str)
 	return true;
 }
 
+template<class T>
+void convertToStr(std::ostream& os, const T* p)
+{
+	os << *p;
+}
+template<>inline void convertToStr(std::ostream& os, const int8_t* p)
+{
+	os << static_cast<int>(*p);
+}
+template<>inline void convertToStr(std::ostream& os, const uint8_t* p)
+{
+	os << static_cast<int>(*p);
+}
+
 #define CYBOZU_OPTION_DEFINE_CONVERT_INT(type) \
 template<>inline bool convert(type* x, const char *str) { return convertInt(x, str); }
+
+CYBOZU_OPTION_DEFINE_CONVERT_INT(int8_t)
+CYBOZU_OPTION_DEFINE_CONVERT_INT(uint8_t)
+
+CYBOZU_OPTION_DEFINE_CONVERT_INT(int16_t)
+CYBOZU_OPTION_DEFINE_CONVERT_INT(uint16_t)
 
 CYBOZU_OPTION_DEFINE_CONVERT_INT(int)
 CYBOZU_OPTION_DEFINE_CONVERT_INT(long)
@@ -185,7 +205,7 @@ struct Holder : public HolderBase {
 	std::string toStr() const
 	{
 		std::ostringstream os;
-		os << *p_;
+		convertToStr(os, p_);
 		return os.str();
 	}
 	const void *get() const { return (void*)p_; }
@@ -238,7 +258,7 @@ public:
 
 	~Var() { delete p_; }
 
-	void swap(Var& rhs) throw()
+	void swap(Var& rhs) CYBOZU_NOEXCEPT
 	{
 		std::swap(p_, rhs.p_);
 		std::swap(isSet_, rhs.isSet_);
@@ -345,7 +365,7 @@ class Option {
 	template<class T, class U>
 	void append(T *pvar, const U& defaultVal, bool isMust, const char *opt, const std::string& help = "")
 	{
-		*pvar = defaultVal;
+		*pvar = static_cast<const T&>(defaultVal);
 		appendSub(pvar, N_is1, isMust, opt, help);
 	}
 	/*

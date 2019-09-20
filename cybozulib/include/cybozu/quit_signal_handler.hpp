@@ -3,7 +3,7 @@
 	@file
 	@brief quit signal handler
 
-	Copyright (C) 2009 Cybozu Labs, Inc., all rights reserved.
+	@author MITSUNARI Shigeo(@herumi)
 */
 #ifdef _WIN32
 #include <windows.h>
@@ -22,13 +22,13 @@ template<class App>
 class QuitSignalHandler {
 	static App *app_;
 #ifdef _WIN32
-	static inline BOOL WINAPI ctrlHandler(DWORD) throw()
+	static inline BOOL WINAPI ctrlHandler(DWORD) CYBOZU_NOEXCEPT
 	{
 		if (app_) app_->quit();
 		return TRUE;
 	}
 #else
-	static void ctrlHandler(int) throw()
+	static void ctrlHandler(int) CYBOZU_NOEXCEPT
 	{
 		app_->quit();
 //		signal(SIGINT, SIG_IGN);

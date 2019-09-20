@@ -2,7 +2,7 @@
 /**
 	@file
 	@brief stacktrace class
-	Copyright (C) 2008 Cybozu Labs, Inc., all rights reserved.
+	@author MITSUNARI Shigeo(@herumi)
 */
 #include <string>
 #include <vector>
@@ -276,8 +276,8 @@ public:
 #endif
 		return out;
 	}
-	bool empty() const throw() { return data_.empty(); }
-	void clear() throw() { data_.clear(); }
+	bool empty() const CYBOZU_NOEXCEPT { return data_.empty(); }
+	void clear() CYBOZU_NOEXCEPT { data_.clear(); }
 };
 
 inline std::ostream& operator<<(std::ostream& os, const StackTrace& self)

@@ -3,7 +3,7 @@
 	@file
 	@brief tiny socket class
 
-	Copyright (C) Cybozu Labs, Inc., all rights reserved.
+	@author MITSUNARI Shigeo(@herumi)
 	@author MITSUNARI Shigeo
 */
 #include <errno.h>
@@ -32,7 +32,6 @@
 
 #include <cybozu/atomic.hpp>
 #include <cybozu/exception.hpp>
-#include <cybozu/stream_fwd.hpp>
 #include <cybozu/itoa.hpp>
 #include <string>
 
@@ -472,7 +471,7 @@ public:
 		ssize_t readSize = ::read(sd_, buf, size);
 		if (readSize < 0 && errno == EINTR) goto RETRY;
 #endif
-		if (readSize < 0) throw cybozu::Exception("Socket:readSome") << cybozu::NetErrorNo();
+		if (readSize < 0) throw cybozu::Exception("Socket:readSome") << cybozu::NetErrorNo() << bufSize;
 		return readSize;
 	}
 
@@ -496,7 +495,7 @@ public:
 		@param buf [out] send buffer
 		@param bufSize [in] send buffer size(byte)
 	*/
-	void write(const void *buf, size_t bufSize)
+	void write(bool *pb, const void *buf, size_t bufSize)
 	{
 		const char *p = (const char *)buf;
 		while (bufSize > 0) {
@@ -507,10 +506,20 @@ public:
 			int writeSize = ::write(sd_, p, size);
 			if (writeSize < 0 && errno == EINTR) continue;
 #endif
-			if (writeSize < 0) throw cybozu::Exception("Socket:write") << cybozu::NetErrorNo();
+			if (writeSize < 0) {
+				*pb = false;
+				return;
+			}
 			p += writeSize;
 			bufSize -= writeSize;
 		}
+		*pb = true;
+	}
+	void write(const void *buf, size_t bufSize)
+	{
+		bool b;
+		write(&b, buf, bufSize);
+		if (!b) throw cybozu::Exception("Socket:write") << cybozu::NetErrorNo() << bufSize;
 	}
 	/**
 		connect to address:port

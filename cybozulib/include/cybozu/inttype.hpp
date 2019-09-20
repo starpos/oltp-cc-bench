@@ -2,7 +2,7 @@
 /**
 	@file
 	@brief int type definition and macros
-	Copyright (C) 2008 Cybozu Labs, Inc., all rights reserved.
+	@author MITSUNARI Shigeo(@herumi)
 */
 
 #if defined(_MSC_VER) && (MSC_VER <= 1500) && !defined(CYBOZU_DEFINED_INTXX)
@@ -148,6 +148,11 @@
 	#endif
 #endif
 
+#if CYBOZU_CPP_VERSION >= CYBOZU_CPP_VERSION_CPP11
+	#define CYBOZU_NOEXCEPT noexcept
+#else
+	#define CYBOZU_NOEXCEPT throw()
+#endif
 namespace cybozu {
 template<class T>
 void disable_warning_unused_variable(const T&) { }

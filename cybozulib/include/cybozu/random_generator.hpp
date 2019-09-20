@@ -7,12 +7,16 @@
 	http://opensource.org/licenses/BSD-3-Clause
 */
 
+#ifndef CYBOZU_DONT_USE_EXCEPTION
 #include <cybozu/exception.hpp>
+#endif
 #ifdef _WIN32
 #include <winsock2.h>
 #include <windows.h>
 #include <wincrypt.h>
+#ifdef _MSC_VER
 #pragma comment (lib, "advapi32.lib")
+#endif
 #include <cybozu/critical_section.hpp>
 #else
 #include <sys/types.h>
@@ -25,9 +29,99 @@ class RandomGenerator {
 	RandomGenerator(const RandomGenerator&);
 	void operator=(const RandomGenerator&);
 public:
-	uint32_t operator()()
+#ifdef _WIN32
+	RandomGenerator()
+		: prov_(0)
+		, pos_(bufSize)
 	{
-		return get32();
+		DWORD flagTbl[] = { 0, CRYPT_NEWKEYSET };
+		for (int i = 0; i < 2; i++) {
+			if (CryptAcquireContext(&prov_, NULL, NULL, PROV_RSA_FULL, flagTbl[i]) != 0) return;
+		}
+#ifdef CYBOZU_DONT_USE_EXCEPTION
+		prov_ = 0;
+#else
+		throw cybozu::Exception("randomgenerator");
+#endif
+	}
+	bool read_inner(void *buf, size_t byteSize)
+	{
+		if (prov_ == 0) return false;
+		return CryptGenRandom(prov_, static_cast<DWORD>(byteSize), static_cast<BYTE*>(buf)) != 0;
+	}
+	~RandomGenerator()
+	{
+		if (prov_) {
+			CryptReleaseContext(prov_, 0);
+		}
+	}
+	/*
+		fill buf[0..bufNum-1] with random data
+		@note bufNum is not byte size
+	*/
+	template<class T>
+	void read(bool *pb, T *buf, size_t bufNum)
+	{
+		cybozu::AutoLockCs al(cs_);
+		const size_t byteSize = sizeof(T) * bufNum;
+		if (byteSize > bufSize) {
+			if (!read_inner(buf, byteSize)) {
+				*pb = false;
+				return;
+			}
+		} else {
+			if (pos_ + byteSize > bufSize) {
+				read_inner(buf_, bufSize);
+				pos_ = 0;
+			}
+			memcpy(buf, buf_ + pos_, byteSize);
+			pos_ += byteSize;
+		}
+		*pb = true;
+	}
+private:
+	HCRYPTPROV prov_;
+	static const size_t bufSize = 1024;
+	char buf_[bufSize];
+	size_t pos_;
+	cybozu::CriticalSection cs_;
+#else
+	RandomGenerator()
+		: fp_(::fopen("/dev/urandom", "rb"))
+	{
+#ifndef CYBOZU_DONT_USE_EXCEPTION
+		if (!fp_) throw cybozu::Exception("randomgenerator");
+#endif
+	}
+	~RandomGenerator()
+	{
+		if (fp_) ::fclose(fp_);
+	}
+	/*
+		fill buf[0..bufNum-1] with random data
+		@note bufNum is not byte size
+	*/
+	template<class T>
+	void read(bool *pb, T *buf, size_t bufNum)
+	{
+		if (fp_ == 0) {
+			*pb = false;
+			return;
+		}
+		const size_t byteSize = sizeof(T) * bufNum;
+		*pb = ::fread(buf, 1, (int)byteSize, fp_) == byteSize;
+	}
+private:
+	FILE *fp_;
+#endif
+#ifndef CYBOZU_DONT_USE_EXCEPTION
+public:
+	template<class T>
+	void read(T *buf, size_t bufNum)
+	{
+		bool b;
+		read(&b, buf, bufNum);
+		if (!b) throw cybozu::Exception("RandomGenerator:read") << bufNum;
 	}
 	uint32_t get32()
 	{
@@ -41,80 +135,11 @@ public:
 		read(&ret, 1);
 		return ret;
 	}
-#ifdef _WIN32
-	RandomGenerator()
-		: prov_(0)
-		, pos_(bufSize)
+	uint32_t operator()()
 	{
-		DWORD flagTbl[] = { 0, CRYPT_NEWKEYSET };
-		for (int i = 0; i < 2; i++) {
-			if (CryptAcquireContext(&prov_, NULL, NULL, PROV_RSA_FULL, flagTbl[i]) != 0) return;
-		}
-		throw cybozu::Exception("randomgenerator");
-	}
-	void read_inner(void *buf, size_t byteSize)
-	{
-		if (CryptGenRandom(prov_, static_cast<DWORD>(byteSize), static_cast<BYTE*>(buf)) == 0) {
-			throw cybozu::Exception("randomgenerator:read") << byteSize;
-		}
-	}
-	~RandomGenerator()
-	{
-		if (prov_) {
-			CryptReleaseContext(prov_, 0);
-		}
-	}
-	/*
-		fill buf[0..bufNum-1] with random data
-		@note bufNum is not byte size
-	*/
-	template<class T>
-	void read(T *buf, size_t bufNum)
-	{
-		cybozu::AutoLockCs al(cs_);
-		const size_t byteSize = sizeof(T) * bufNum;
-		if (byteSize > bufSize) {
-			read_inner(buf, byteSize);
-		} else {
-			if (pos_ + byteSize > bufSize) {
-				read_inner(buf_, bufSize);
-				pos_ = 0;
-			}
-			memcpy(buf, buf_ + pos_, byteSize);
-			pos_ += byteSize;
-		}
-	}
-private:
-	HCRYPTPROV prov_;
-	static const size_t bufSize = 1024;
-	char buf_[bufSize];
-	size_t pos_;
-	cybozu::CriticalSection cs_;
-#else
-	RandomGenerator()
-		: fp_(::fopen("/dev/urandom", "rb"))
-	{
-		if (!fp_) throw cybozu::Exception("randomgenerator");
-	}
-	~RandomGenerator()
-	{
-		if (fp_) ::fclose(fp_);
-	}
-	/*
-		fill buf[0..bufNum-1] with random data
-		@note bufNum is not byte size
-	*/
-	template<class T>
-	void read(T *buf, size_t bufNum)
-	{
-		const size_t byteSize = sizeof(T) * bufNum;
-		if (::fread(buf, 1, (int)byteSize, fp_) != byteSize) {
-			throw cybozu::Exception("randomgenerator:read") << byteSize;
-		}
+		return get32();
 	}
 #endif
-private:
-	FILE *fp_;
 };
 
 template<class T, class RG>

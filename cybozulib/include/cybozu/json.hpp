@@ -3,7 +3,7 @@
 	@file
 	@brief json parser
 
-	Copyright (C) 2012 Cybozu Labs, Inc., all rights reserved.
+	@author MITSUNARI Shigeo(@herumi)
 */
 #include <assert.h>
 #include <vector>
@@ -73,7 +73,7 @@ public:
 		{
 			obj_ = new Object(obj);
 		}
-		void swap(Value& rhs) throw()
+		void swap(Value& rhs) CYBOZU_NOEXCEPT
 		{
 			std::swap(type_, rhs.type_);
 			std::swap(ptn_, rhs.ptn_);

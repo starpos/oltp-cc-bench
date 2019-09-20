@@ -3,7 +3,7 @@
 	@file
 	@brief tiny wrapper of openssl class
 
-	Copyright (C) 2007 Cybozu Labs, Inc., all rights reserved.
+	@author MITSUNARI Shigeo(@herumi)
 */
 #include <cybozu/socket.hpp>
 #include <cybozu/exception.hpp>
@@ -30,7 +30,11 @@ struct Engine {
 	}
 	~Engine()
 	{
+#if OPENSSL_VERSION_NUMBER >= 0x10000000L && OPENSSL_VERSION_NUMBER < 0x10100000L
+		ERR_remove_thread_state(0);
+#elif OPENSSL_VERSION_NUMBER < 0x10000000L
 		ERR_remove_state(0);
+#endif
 		EVP_cleanup();
 		CRYPTO_cleanup_all_ex_data();
 		ENGINE_cleanup();
