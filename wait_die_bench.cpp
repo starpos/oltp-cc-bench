@@ -405,7 +405,7 @@ void dispatch1(CmdLineOptionPlus& opt, Shared& shared)
         runExec(opt, shared, worker2<SIMPLE_TXID_GEN>, res);
         break;
     case EPOCH_TXID_GEN:
-	runExec(opt, shared, worker2<EPOCH_TXID_GEN>, res);
+        runExec(opt, shared, worker2<EPOCH_TXID_GEN>, res);
 	break;
     default:
         throw cybozu::Exception("bad txIdGenType") << opt.txIdGenType;

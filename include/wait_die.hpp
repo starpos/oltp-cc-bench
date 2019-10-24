@@ -21,21 +21,31 @@ using TxId = uint64_t;
 #endif
 
 const TxId MAX_TXID = TxId(-1);
+const uint16_t MAX_READERS = (1 << 15) - 1;
+
 
 struct WaitDieData
 {
     using Mode = cybozu::lock::LockStateXS::Mode;
 
+    alignas(sizeof(uint64_t))
     union {
 #ifndef USE_64BIT_TXID
         uint64_t obj;
         struct {
-            uint32_t txId; // txId that holds X lock.
-            uint8_t lkstObj;
-            uint8_t reserved0;
-            uint16_t reserved1;
+            // txId that holds X lock or mininum txId (that means prior tx) that holds S lock.
+            uint32_t txId;
+            union {
+                uint16_t lockObj;
+                struct {
+                    uint16_t locked:1;
+                    uint16_t readers:15;
+                };
+            };
+            uint16_t reserved0;
         };
 #else
+        // obsolete code.
         uint128_t obj;
         struct {
             uint64_t txId;
@@ -50,9 +60,10 @@ struct WaitDieData
     WaitDieData() = default;
     void init() {
         txId = MAX_TXID;
-        getLockState()->clearAll();
+        lockObj = 0;
+#ifndef NDEBUG
         reserved0 = 0;
-        reserved1 = 0;
+#endif
     }
 #ifndef USE_64BIT_TXID
     WaitDieData(uint64_t obj0) {
@@ -70,29 +81,16 @@ struct WaitDieData
     }
 #endif
 
-    cybozu::lock::LockStateXS* getLockState() {
-        return (cybozu::lock::LockStateXS *)(&lkstObj);
-    }
-    const cybozu::lock::LockStateXS* getLockState() const {
-        return (cybozu::lock::LockStateXS *)(&lkstObj);
-    }
-
     std::string str() const {
         return cybozu::util::formatString(
 #ifndef USE_64BIT_TXID
-            "txId %u %s",
+            "txId %u X %u S %u",
 #else
-            "txId %" PRIu64 " %s",
+            "txId %" PRIu64 " X %u S %u",
 #endif
-            txId, getLockState()->str().c_str());
+            txId, locked, readers);
     }
 };
-
-
-#if 0
-thread_local size_t cas_success = 0;
-thread_local size_t cas_total = 0;
-#endif
 
 
 class WaitDieLock
@@ -103,19 +101,27 @@ public:
         alignas(sizeof(uintptr_t))
         WaitDieData wd;
 
-        Mutex() { wd.init(); }
-        WaitDieData atomicRead() const {
+        INLINE Mutex() { wd.init(); }
+
+        DEPRECATED WaitDieData atomicRead() const {
             return __atomic_load_n(&wd.obj, __ATOMIC_RELAXED);
         }
-        bool compareAndSwap(WaitDieData& expected, WaitDieData desired, int mode) {
+        DEPRECATED bool compareAndSwap(WaitDieData& expected, WaitDieData desired, int mode) {
             bool ret = __atomic_compare_exchange_n(
                 &wd.obj, &expected.obj, desired.obj,
                 false, mode, __ATOMIC_RELAXED);
-#if 0
-            cas_success += ret;
-            cas_total++;
-#endif
             return ret;
+        }
+
+        INLINE WaitDieData load() const {
+            return __atomic_load_n(&wd.obj, __ATOMIC_ACQUIRE);
+        }
+        INLINE void store(WaitDieData value) {
+            __atomic_store_n(&wd.obj, value.obj, __ATOMIC_RELEASE);
+        }
+        INLINE bool cas(WaitDieData& expected, WaitDieData desired, int mode = __ATOMIC_ACQ_REL) {
+            return __atomic_compare_exchange_n(
+                &wd.obj, &expected.obj, desired.obj, false, mode, __ATOMIC_ACQUIRE);
         }
     };
 
@@ -125,126 +131,151 @@ private:
     TxId txId_;
 
 public:
-    WaitDieLock() : mutex_(nullptr), mode_(Mode::INVALID), txId_(0) {}
-    ~WaitDieLock() noexcept {
+    INLINE WaitDieLock() noexcept : mutex_(nullptr), mode_(Mode::INVALID), txId_(MAX_TXID) {}
+    INLINE ~WaitDieLock() noexcept {
         unlock();
     }
-    WaitDieLock(const WaitDieLock& ) = delete;
-    WaitDieLock(WaitDieLock&& rhs) noexcept : WaitDieLock() { swap(rhs); }
-    WaitDieLock& operator=(const WaitDieLock& rhs) = delete;
-    WaitDieLock& operator=(WaitDieLock&& rhs) noexcept { swap(rhs); return *this; }
+    INLINE WaitDieLock(const WaitDieLock& ) = delete;
+    INLINE WaitDieLock(WaitDieLock&& rhs) noexcept : WaitDieLock() { swap(rhs); }
+    INLINE WaitDieLock& operator=(const WaitDieLock& rhs) = delete;
+    INLINE WaitDieLock& operator=(WaitDieLock&& rhs) noexcept { swap(rhs); return *this; }
 
     /**
      * This is for blind-write.
      */
-    void setMutex(Mutex *mutex) { mutex_ = mutex; }
+    INLINE void setMutex(Mutex& mutex) noexcept { mutex_ = &mutex; }
 
     /**
      * If true, locked.
      * If false, you must abort your running transaction.
      */
-    bool lock(Mutex *mutex, Mode mode, TxId txId) {
-        assert(mode_ == Mode::INVALID);
-        assert(mode != Mode::INVALID);
-        assert(mutex);
-        mutex_ = mutex;
-        mode_ = mode;
-        txId_ = txId;
-
-        WaitDieData wd0 = mutex_->atomicRead();
+    INLINE bool readLock(Mutex& mutex, TxId txId) noexcept {
+        assert(txId != MAX_TXID);
+        WaitDieData wd0 = mutex.load();
         for (;;) {
-            if (wd0.getLockState()->canSet(mode_)) {
-#ifndef NDEBUG
-                if (wd0.getLockState()->isUnlocked()) {
-                    assert(wd0.txId == MAX_TXID);
-                }
-#endif
-
+            _mm_pause();
+            if (wd0.locked == 0 && wd0.readers < MAX_READERS) {
+                // try to lock
                 WaitDieData wd1 = wd0;
-                wd1.getLockState()->set(mode_);
-                if (txId < wd0.txId) {
-                    wd1.txId = txId;
-                }
-                if (mutex_->compareAndSwap(wd0, wd1, __ATOMIC_ACQUIRE)) {
-#if 0 // debug
-                    ::printf("lock    %p %s\n", mutex, wd1.str().c_str());
-#endif
+                wd1.readers++;
+                if (txId < wd1.txId) wd1.txId = txId;
+                if (mutex.cas(wd0, wd1, __ATOMIC_ACQUIRE)) {
+                    mutex_ = &mutex;
+                    mode_ = Mode::S;
+                    txId_ = txId;
                     return true;
                 }
-                continue;
-            } else if (wd0.txId <= txId) {
-                break;
-            } else {
-                waitFor(wd0);
-                continue;
+                continue; // retry
             }
+            assert(wd0.txId != txId);
+            if (wd0.txId < txId) {
+                return false; // die
+            }
+            wd0 = mutex.load();
+            // wait
         }
-        init();
-        return false;
     }
-    void unlock() noexcept {
-        if (mode_ == Mode::INVALID) return;
-        assert(mutex_);
-
-        WaitDieData wd0 = mutex_->atomicRead();
+    INLINE bool writeLock(Mutex& mutex, TxId txId) noexcept {
+        assert(txId != MAX_TXID);
+        WaitDieData wd0 = mutex.load();
         for (;;) {
-            WaitDieData wd1 = wd0;
-            assert(wd1.getLockState()->canClear(mode_));
-            wd1.getLockState()->clear(mode_);
-            if (wd1.getLockState()->isUnlocked()) {
-                wd1.txId = MAX_TXID;
+            _mm_pause();
+            if (wd0.locked || wd0.readers != 0) {
+                assert(wd0.txId != txId);
+                if (wd0.txId < txId) {
+                    return false; // die
+                }
+                wd0 = mutex.load();
+                continue; // wait
             }
-            if (mutex_->compareAndSwap(wd0, wd1, __ATOMIC_RELEASE)) {
-#if 0 // debug
-                ::printf("unlock  %p %s\n", mutex_, wd1.str().c_str());
-#endif
-                break;
-            }
-        }
-        init();
-    }
-    bool upgrade() {
-        assert(mutex_);
-        assert(mode_ == Mode::S);
-        WaitDieData wd0 = mutex_->atomicRead();
-        while (txId_ == wd0.txId && wd0.getLockState()->getCount(Mode::S) == 1) {
+            // try to lock
             WaitDieData wd1 = wd0;
-            wd1.getLockState()->clearAll();
-            wd1.getLockState()->set(Mode::X);
-            if (mutex_->compareAndSwap(wd0, wd1, __ATOMIC_RELAXED)) {
+            wd1.locked = 1;
+            wd1.txId = txId;
+            if (mutex.cas(wd0, wd1, __ATOMIC_ACQUIRE)) {
+                mutex_ = &mutex;
                 mode_ = Mode::X;
-#if 0 // debug
-                ::printf("upgrade %p %s\n", mutex_, wd1.str().c_str());
-#endif
+                txId_ = txId;
                 return true;
             }
+            // retry
+        }
+    }
+    INLINE void unlock() noexcept {
+        // mutex_ may not be nullptr due to setMutex().
+        switch (mode_) {
+        case Mode::INVALID: return;
+        case Mode::S: readUnlock(); return;
+        case Mode::X: writeUnlock(); return;
+        default: assert(false);
+        }
+    }
+    INLINE void readUnlock() noexcept {
+        assert(mode_ == Mode::S);
+        assert(mutex_ != nullptr);
+        assert(txId_ != MAX_TXID);
+        WaitDieData wd0 = mutex_->load();
+        for (;;) {
+            _mm_pause();
+            WaitDieData wd1 = wd0;
+            assert(wd1.readers > 0);
+            wd1.readers--;
+            if (wd1.readers == 0) {
+                wd1.txId = MAX_TXID;
+            }
+            if (mutex_->cas(wd0, wd1, __ATOMIC_RELEASE)) {
+                init();
+                return;
+            }
+            // retry
+        }
+    }
+    INLINE void writeUnlock() noexcept {
+        assert(mode_ == Mode::X);
+        assert(mutex_ != nullptr);
+        assert(txId_ != MAX_TXID);
+        WaitDieData wd0 = mutex_->load();
+        WaitDieData wd1 = wd0;
+        assert(wd1.locked);
+        wd1.locked = 0;
+        wd1.txId = MAX_TXID;
+        mutex_->store(wd1);
+        init();
+    }
+    INLINE bool upgrade() noexcept {
+        assert(mutex_);
+        assert(mode_ == Mode::S);
+        assert(txId_ != MAX_TXID);
+        WaitDieData wd0 = mutex_->load();
+        while (txId_ == wd0.txId && wd0.readers == 1) {
+            _mm_pause();
+            WaitDieData wd1 = wd0;
+            wd1.locked = 1;
+            wd1.readers = 0;
+            if (mutex_->cas(wd0, wd1)) {
+                mode_ = Mode::X;
+                return true;
+            }
+            // retry
         }
         return false;
     }
-    Mode mode() const {
+    INLINE Mode mode() const noexcept {
         return mode_;
     }
-    uintptr_t getMutexId() const {
+    INLINE uintptr_t getMutexId() const noexcept {
         return uintptr_t(mutex_);
     }
 private:
-    void init() {
+    INLINE void init() noexcept {
         mutex_ = nullptr;
         mode_ = Mode::INVALID;
-        txId_ = 0;
+        txId_ = MAX_TXID;
     }
-    void swap(WaitDieLock& rhs) noexcept {
+    INLINE void swap(WaitDieLock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(mode_, rhs.mode_);
         std::swap(txId_, rhs.txId_);
-    }
-    void waitFor(WaitDieData& wd) {
-        assert(mutex_);
-        for (;;) {
-            wd = mutex_->atomicRead();
-            if (wd.getLockState()->canSet(mode_) || wd.txId <= txId_) return;
-            _mm_pause();
-        }
     }
 };
 
@@ -313,7 +344,7 @@ public:
         vec_.emplace_back();
         OpEntryL &ope = vec_.back();
         Lock& lk = ope.lock;
-        if (!lk.lock(&mutex, Mode::S, txId_)) {
+        if (!lk.readLock(mutex, txId_)) {
             // should die.
             return false;
         }
@@ -336,7 +367,7 @@ public:
         vec_.emplace_back();
         OpEntryL& ope = vec_.back();
         // Lock will be tried later. See blindWriteLockAll().
-        ope.lock.setMutex(&mutex); // for search.
+        ope.lock.setMutex(mutex); // for search.
         bwV_.emplace_back(&mutex, vec_.size() - 1);
         ope.info.set(allocateLocalVal(), sharedVal);
         copyValue(getLocalValPtr(ope.info), src); // write local data.
@@ -369,7 +400,7 @@ public:
         OpEntryL &ope = vec_.back();
         Lock& lk = ope.lock;
         LocalValInfo& info = ope.info;
-        if (!lk.lock(&mutex, Mode::X, txId_)) {
+        if (!lk.writeLock(mutex, txId_)) {
             // should die.
             return false;
         }
@@ -384,7 +415,7 @@ public:
         for (BlindWriteInfo& bwInfo : bwV_) {
             OpEntryL& ope = vec_[bwInfo.idx];
             assert(ope.lock.mode() == Mode::INVALID);
-            if (!ope.lock.lock(bwInfo.mutex, Mode::X, txId_)) {
+            if (!ope.lock.writeLock(*bwInfo.mutex, txId_)) {
                 // should die.
                 return false;
             }
