@@ -473,8 +473,14 @@ struct Mutex
     void store(MutexData md0) {
         store_release(md.ref(), md0.val());
     }
-    bool cas(MutexData& before, MutexData after) {
+    bool cas_acq_rel(MutexData& before, MutexData after) {
         return compare_exchange(md.ref(), before.ref(), after.val());
+    }
+    bool cas_acq(MutexData& before, MutexData after) {
+        return compare_exchange_acquire(md.ref(), before.ref(), after.val());
+    }
+    bool cas_rel(MutexData& before, MutexData after) {
+        return compare_exchange_release(md.ref(), before.ref(), after.val());
     }
 };
 
@@ -554,7 +560,7 @@ public:
                 md0 = md1;
                 continue;
             }
-            if (mutex_->cas(md0, moc1.md)) {
+            if (mutex_->cas_acq(md0, moc1.md)) {
                 ld_ = moc1.ld;
                 return;
             }
@@ -581,7 +587,7 @@ public:
             }
             assert(moc1.capability == POSSIBLE);
             assert(!moc1.md.protected_);
-            if ((!does_write_reserve && md0 == moc1.md) || mutex_->cas(md0, moc1.md)) {
+            if ((!does_write_reserve && md0 == moc1.md) || mutex_->cas_acq(md0, moc1.md)) {
                 ld_ = moc1.ld;
                 return moc1.md;
             }
@@ -625,7 +631,7 @@ public:
                 continue;
             }
             assert(moc1.capability == POSSIBLE);
-            if (md0 == moc1.md || mutex_->cas(md0, moc1.md)) {
+            if (md0 == moc1.md || mutex_->cas_acq(md0, moc1.md)) {
                 ld_ = moc1.ld;
                 return true;
             }
@@ -648,7 +654,7 @@ public:
             }
             assert(moc1.capability == POSSIBLE);
             assert(md0 != moc1.md);
-            if (mutex_->cas(md0, moc1.md)) {
+            if (mutex_->cas_acq(md0, moc1.md)) {
                 ld_ = moc1.ld;
                 return;
             }
@@ -668,7 +674,7 @@ public:
             }
             assert(moc1.capability == POSSIBLE);
             assert(md0 != moc1.md);
-            if (mutex_->cas(md0, moc1.md)) {
+            if (mutex_->cas_acq(md0, moc1.md)) {
                 ld_ = moc1.ld;
                 return true;
             }
@@ -686,7 +692,7 @@ public:
                 .reserve<to_state, checks_version>()
                 .template protect<checks_version>();
             if (!moc1.possible()) return false;
-            if (mutex_->cas(md0, moc1.md)) {
+            if (mutex_->cas_acq_rel(md0, moc1.md)) {
                 ld_ = moc1.ld;
                 return true;
             }
@@ -709,7 +715,7 @@ public:
             _mm_pause();
             auto moc1 = MutexOpCreator(ld_, md0).unlock_general();
             assert(moc1.possible());
-            if (md0 == moc1.md || mutex_->cas(md0, moc1.md)) {
+            if (md0 == moc1.md || mutex_->cas_rel(md0, moc1.md)) {
                 ld_ = moc1.ld;
                 mutex_ = nullptr;
                 return;
@@ -734,7 +740,7 @@ public:
             _mm_pause();
             auto moc1 = MutexOpCreator(ld_, md0).unlock_special<from_state>();
             assert(moc1.possible());
-            if (md0 == moc1.md || mutex_->cas(md0, moc1.md)) {
+            if (md0 == moc1.md || mutex_->cas_rel(md0, moc1.md)) {
                 ld_ = moc1.ld;
                 mutex_ = nullptr;
                 return;
