@@ -1,3 +1,4 @@
+#pragma once
 /*
  * This header works only x86_64 architecture.
  */
