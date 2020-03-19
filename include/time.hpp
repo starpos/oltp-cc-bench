@@ -1,3 +1,4 @@
+#pragma once
 /**
  * @file
  * @brief clock wrappers.
@@ -5,8 +6,6 @@
  *
  * (C) 2013 Cybozu Labs, Inc.
  */
-#ifndef CYBOZU_TIME_HPP
-#define CYBOZU_TIME_HPP
 
 #include <chrono>
 #include <deque>
@@ -81,6 +80,5 @@ uint64_t rdtscp()
 }
 #endif
 
-}} // namespace cybozu::time
 
-#endif /* CYBOZU_TIME_HPP */
+}} // namespace cybozu::time
