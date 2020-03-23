@@ -64,7 +64,7 @@ Int0 fetch_sub(Int0& m, Int1 v, int mode = __ATOMIC_ACQ_REL)
 }
 
 
-void memory_barrier() {
+void acq_rel_memory_barrier() {
     __atomic_thread_fence(__ATOMIC_ACQ_REL);
 }
 
@@ -97,7 +97,7 @@ void acquire_memory_barrier() {
 
 /*
  * In x86_64, CAS and load is not reordered.
- * In aarch64, ldar/stlr is not reordered.
+ * In aarch64, ldar/stlr instructions are not reordered.
  * So in the both architectures,
  * it is not required explicit
  * instruction memory barriers at serialization point
