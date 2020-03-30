@@ -54,13 +54,13 @@ struct LockDataXS
     LockDataXS() : txId(UINT32_MAX), iVersion(0), tState(), nState(), uVersion(0) {}
 #endif
     LockDataXS(uint128_t x) {
-        ::memcpy(this, &x, sizeof(*this));
+        ::memcpy((void*)this, &x, sizeof(x));
     }
 
     // Set bottom half only.
     void setBottomHalf(uint64_t x) {
-        ::memset(this, 0, sizeof(uint64_t));
-        ::memcpy((uint8_t *)this + sizeof(uint64_t), &x, sizeof(uint64_t));
+        ::memset((void *)this, 0, sizeof(x));
+        ::memcpy((uint8_t *)this + sizeof(x), &x, sizeof(x));
     }
 
     std::string str() const {
@@ -89,6 +89,8 @@ struct LockDataXS
     }
 };
 
+static_assert(sizeof(LockDataXS) == sizeof(uint128_t));
+
 
 struct LockDataMG
 {
@@ -111,7 +113,7 @@ struct LockDataMG
 
     LockDataMG() : txId(UINT32_MAX), tState(), nState(), iVersion(0), uVersion(0) {}
     LockDataMG(uint128_t x) {
-        ::memcpy(this, &x, sizeof(*this));
+        ::memcpy((void *)this, &x, sizeof(x));
     }
 
     std::string str() const {
