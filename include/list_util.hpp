@@ -12,6 +12,28 @@
 #include "random.hpp"
 
 
+/**
+ * Insert a node between prev and curr.
+ * If prev is null, the node will be head.
+ * If curr is null, the node will be tail.
+ * Both prev and curr are null, node->next will be null.
+ */
+template <typename Node>
+void insert_node(Node*& head, Node*& tail, Node* prev, Node* curr, Node* node)
+{
+    assert(node != nullptr);
+    if (prev == nullptr) {
+        head = node;
+    } else {
+        prev->next = node;
+    }
+    node->next = curr; // curr may be null.
+    if (curr == nullptr) {
+        tail = node;
+    }
+}
+
+
 template <typename Node>
 class NodeListT;
 
@@ -208,6 +230,61 @@ public:
     iterator begin() { iterator it; it.set_begin(*this); return it; }
     iterator end() { iterator it; it.set_end(*this); return it; }
 
+
+    template <typename Less>
+    void insert_sort(Node* node) {
+        assert(node != nullptr);
+        Node* head = front();
+        if (head == nullptr) {
+            push_back(node);
+            return;
+        }
+        Less less;
+        Node* prev = nullptr;
+        while (head != nullptr && !less(*node, *head)) {  // head <= node
+            prev = head;
+            head = head->next;
+        }
+        // insert the node at the previous of head.
+        insert_node(head_, tail_, prev, head, node);
+        size_++;
+    }
+
+    template <typename Less>
+    void insert_sort(NodeListT<Node>&& src) {
+        NodeListT<Node>& dst = *this;
+        if (src.empty()) return;
+        if (dst.empty()) {
+            dst = std::move(src);
+            return;
+        }
+
+        Node* src_node = src.front();
+        assert(src_node != nullptr);
+        Node* src_next = src_node->next;
+
+        Node* dst_prev = nullptr;
+        Node* dst_node = dst.front();
+        assert(dst_node != nullptr);
+
+        dst.size_ += src.size_;
+        Less less;
+
+        while (src_node != nullptr) {
+            while (dst_node != nullptr && !less(*src_node, *dst_node)) { // dst_node <= src_node
+                dst_prev = dst_node;
+                dst_node = dst_node->next;
+            }
+
+            insert_node(dst.head_, dst.tail_, dst_prev, dst_node, src_node);
+            dst_prev = src_node;
+
+            src_node = src_next;
+            if (src_next != nullptr) src_next = src_next->next;
+        }
+        src.init();
+    }
+
 private:
     void swap(NodeListT& rhs) noexcept {
         std::swap(head_, rhs.head_);
@@ -220,11 +297,10 @@ private:
         node->next = nullptr;
     }
 
-    template <typename Node2, typename Less>
-    friend void insert_sort(NodeListT<Node2>& list, Node2* node);
-
-    template <typename Node2, typename Less>
-    friend void insert_sort(NodeListT<Node2>& dst, NodeListT<Node2>&& src);
+    template <typename... Args>
+    void log(Args&&... args) {
+        unused(args...);
+    }
 };
 
 
@@ -314,48 +390,12 @@ void test_nodelist()
 
 
 /**
- * Insert a node between prev and curr.
- * If prev is null, the node will be head.
- * If curr is null, the node will be tail.
- * Both prev and curr are null, node->next will be null.
- */
-template <typename Node>
-void insert_node(Node*& head, Node*& tail, Node* prev, Node* curr, Node* node)
-{
-    assert(node != nullptr);
-    if (prev == nullptr) {
-        head = node;
-    } else {
-        prev->next = node;
-    }
-    node->next = curr; // curr may be null.
-    if (curr == nullptr) {
-        tail = node;
-    }
-}
-
-
-/**
  * Insert sort.
  */
 template <typename Node, typename Less = std::less<Node> >
 void insert_sort(NodeListT<Node>& list, Node* node)
 {
-    assert(node != nullptr);
-    Node* head = list.front();
-    if (head == nullptr) {
-        list.push_back(node);
-        return;
-    }
-    Less less;
-    Node* prev = nullptr;
-    while (head != nullptr && !less(*node, *head)) {  // head <= node
-        prev = head;
-        head = head->next;
-    }
-    // insert the node at the previous of head.
-    insert_node(list.head_, list.tail_, prev, head, node);
-    list.size_++;
+    list.template insert_sort<Less>(node);
 }
 
 
@@ -368,36 +408,7 @@ void insert_sort(NodeListT<Node>& list, Node* node)
 template <typename Node, typename Less = std::less<Node> >
 void insert_sort(NodeListT<Node>& dst, NodeListT<Node>&& src)
 {
-    if (src.empty()) return;
-    if (dst.empty()) {
-        dst = std::move(src);
-        return;
-    }
-
-    Node* src_node = src.front();
-    assert(src_node != nullptr);
-    Node* src_next = src_node->next;
-
-    Node* dst_prev = nullptr;
-    Node* dst_node = dst.front();
-    assert(dst_node != nullptr);
-
-    dst.size_ += src.size_;
-    Less less;
-
-    while (src_node != nullptr) {
-        while (dst_node != nullptr && !less(*src_node, *dst_node)) { // dst_node <= src_node
-            dst_prev = dst_node;
-            dst_node = dst_node->next;
-        }
-
-        insert_node(dst.head_, dst.tail_, dst_prev, dst_node, src_node);
-        dst_prev = src_node;
-
-        src_node = src_next;
-        if (src_next != nullptr) src_next = src_next->next;
-    }
-    src.init();
+    dst.template insert_sort<Less>(std::move(src));
 }
 
 
@@ -507,7 +518,7 @@ void test_insert_sort()
 
     // check requests having the same order will keep FIFO.
     {
-        TestNode2 v2[10];
+        TestNode2 v2[10]; unused(v2);
         for (size_t i = 0; i < 10; i++) {
             v[i].order = 0;
             v[i].value = i;
