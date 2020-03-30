@@ -39,6 +39,9 @@ const uint32_t MAX_ORD_ID = UINT32_MAX;
  */
 struct MutexData
 {
+    // To avoid the BUG: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=90511
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattributes"
     alignas(sizeof(uint64_t))
     union {
         uint32_t ord_id;
@@ -48,6 +51,7 @@ struct MutexData
             uint32_t epoch_id:22;
         };
     };
+#pragma GCC diagnostic pop
     uint32_t version:30;
     uint32_t protected_:1;
     uint32_t is_writer:1;

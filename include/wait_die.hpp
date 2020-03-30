@@ -28,6 +28,9 @@ struct WaitDieData
 {
     using Mode = cybozu::lock::LockStateXS::Mode;
 
+    // To avoid the BUG: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=90511
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattributes"
     alignas(sizeof(uint64_t))
     union {
 #ifndef USE_64BIT_TXID
@@ -56,6 +59,7 @@ struct WaitDieData
         };
 #endif
     };
+#pragma GCC diagnostic pop
 
     WaitDieData() = default;
     void init() {
