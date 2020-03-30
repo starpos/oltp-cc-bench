@@ -41,13 +41,13 @@ Int0 exchange(Int0& m, Int1 v, int mode = __ATOMIC_ACQ_REL) {
 
 
 template <typename Int0, typename Int1>
-bool compare_exchange(Int0& m, Int0& before, Int1 after, int mode = __ATOMIC_ACQ_REL) {
-    return __atomic_compare_exchange_n(&m, &before, (Int0)after, false, mode, __ATOMIC_ACQUIRE);
+bool compare_exchange(Int0& m, Int0& before, Int1 after, int mode = __ATOMIC_ACQ_REL, int fail_mode = __ATOMIC_ACQUIRE) {
+    return __atomic_compare_exchange_n(&m, &before, (Int0)after, false, mode, fail_mode);
 }
 
 
-#define compare_exchange_acquire(m, b, a) compare_exchange(m, b, a, __ATOMIC_ACQUIRE)
-#define compare_exchange_release(m, b, a) compare_exchange(m, b, a, __ATOMIC_RELEASE)
+#define compare_exchange_acquire(m, b, a) compare_exchange(m, b, a, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)
+#define compare_exchange_release(m, b, a) compare_exchange(m, b, a, __ATOMIC_RELEASE, __ATOMIC_RELAXED)
 
 
 template <typename Int0, typename Int1>

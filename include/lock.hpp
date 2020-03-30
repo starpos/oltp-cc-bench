@@ -168,7 +168,7 @@ public:
     ~McsSpinlock() noexcept {
         if (!load(node_.next)) {
             Node *node = &node_;
-            if (compareExchange(mutex_->tail, node, nullptr, __ATOMIC_RELEASE)) {
+            if (compareExchange(mutex_->tail, node, nullptr, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
                 return;
             }
             while (!load(node_.next)) _mm_pause();
@@ -217,9 +217,9 @@ public:
         int v = load(v_);
         if (v > 1) return false;
         assert(v == 1);
-        return compareExchange(v_, v, -1, __ATOMIC_RELAXED);
+        return compareExchange(v_, v, -1, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
     }
-    INLINE void upgrade() {
+    inline void upgrade() {
         int v = load(v_);
         for (;;) {
             while (v > 1) {
@@ -227,7 +227,7 @@ public:
                 v = load(v_);
             }
             assert(v == 1);
-            if (compareExchange(v_, v, -1, __ATOMIC_RELAXED)) {
+            if (compareExchange(v_, v, -1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
                 return;
             }
         }

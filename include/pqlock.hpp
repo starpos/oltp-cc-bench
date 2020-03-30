@@ -159,7 +159,7 @@ public:
 
         if (!load(node_.next)) {
             Node *node = &node_;
-            if (compareExchange(mutex_->tail, node, nullptr, __ATOMIC_RELEASE)) {
+            if (compareExchange(mutex_->tail, node, nullptr, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
                 mutex_ = nullptr;
                 return;
             }
@@ -1100,7 +1100,7 @@ struct PCtr
             v1.ctr++;
             v1.dq = true;
             v1.ptr = node;
-            if (compareExchange(obj, v0.obj, v1.obj, __ATOMIC_RELAXED)) {
+            if (compareExchange(obj, v0.obj, v1.obj, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
                 return;
             }
         }
@@ -1112,7 +1112,7 @@ struct PCtr
             PCtr v1 = v0;
             v1.ctr++;
             v1.dq = dq0;
-            if (compareExchange(obj, v0.obj, v1.obj, __ATOMIC_RELAXED)) {
+            if (compareExchange(obj, v0.obj, v1.obj, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
                 return;
             }
         }
@@ -1225,7 +1225,7 @@ void lock(Mutex& mutex, PCtr& self, uint32_t pri)
         while (next.ptr == nullptr) {
             self.ctr = next.ctr + 1;
             self.dq = false;
-            if (compareExchange(mutex.next.obj, next.obj, self.obj, __ATOMIC_RELAXED)) {
+            if (compareExchange(mutex.next.obj, next.obj, self.obj, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
                 self.ptr->isLocked = false;
                 self.ptr->pri = 0; // max priority.
                 __atomic_thread_fence(__ATOMIC_RELEASE);
@@ -1254,7 +1254,7 @@ void lock(Mutex& mutex, PCtr& self, uint32_t pri)
                 self.ctr = next.ctr + 1;
                 assert(!next.dq);
                 self.dq = false;
-                if (compareExchange(prev.ptr->next.obj, next.obj, self.obj, __ATOMIC_RELAXED)) {
+                if (compareExchange(prev.ptr->next.obj, next.obj, self.obj, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
                     self.ptr->next.setDq(false);
                     __atomic_thread_fence(__ATOMIC_ACQ_REL);
                     while (self.ptr->isLocked) _mm_pause();
@@ -1321,7 +1321,7 @@ void unlock(Mutex& mutex, PCtr& self)
         p1 = load(self.ptr->next.obj);
         p1.ctr = p0.ctr + 1;
         p1.dq = p0.dq;
-        if (compareExchange(mutex.next.obj, p0.obj, p1.obj, __ATOMIC_RELAXED)) break;
+        if (compareExchange(mutex.next.obj, p0.obj, p1.obj, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) break;
     }
 #endif
 
