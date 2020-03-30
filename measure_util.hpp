@@ -193,9 +193,9 @@ public:
 
 struct RetryCounts
 {
+    using Umap = std::unordered_map<size_t, size_t>;
     using Pair = std::pair<size_t, size_t>;
-
-    std::unordered_map<size_t, size_t> retryCounts;
+    Umap retryCounts;
 
     void add(size_t nrRetry, size_t nr = 1) {
         std::unordered_map<size_t, size_t>::iterator it = retryCounts.find(nrRetry);
@@ -206,14 +206,14 @@ struct RetryCounts
         }
     }
     void merge(const RetryCounts& rhs) {
-        for (const Pair& p : rhs.retryCounts) {
+        for (const Umap::value_type& p : rhs.retryCounts) {
             add(p.first, p.second);
         }
     }
     friend std::ostream& out(std::ostream& os, const RetryCounts& rc, bool verbose) {
         std::vector<Pair> v;
         v.reserve(rc.retryCounts.size());
-        for (const Pair& p : rc.retryCounts) {
+        for (const Umap::value_type& p : rc.retryCounts) {
             v.push_back(p);
         }
         std::sort(v.begin(), v.end());
