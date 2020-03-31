@@ -219,7 +219,7 @@ public:
         assert(v == 1);
         return compareExchange(v_, v, -1, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
     }
-    inline void upgrade() {
+    INLINE void upgrade() {
         int v = load(v_);
         for (;;) {
             while (v > 1) {

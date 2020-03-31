@@ -79,7 +79,7 @@ namespace util {
 /**
  * Formst string with va_list.
  */
-inline std::string formatStringV(const char *format, va_list ap)
+std::string formatStringV(const char *format, va_list ap)
 {
     char *p = nullptr;
     int ret = ::vasprintf(&p, format, ap);
@@ -97,7 +97,7 @@ inline std::string formatStringV(const char *format, va_list ap)
 /**
  * Create a std::string using printf() like formatting.
  */
-inline std::string formatString(const char * format, ...)
+std::string formatString(const char * format, ...)
 {
     std::string s;
     std::exception_ptr ep;
@@ -113,7 +113,7 @@ inline std::string formatString(const char * format, ...)
     return s;
 }
 
-inline void checkCond(bool cond, const char *name, int line)
+void checkCond(bool cond, const char *name, int line)
 {
     if (!cond) {
         throw RT_ERR("check error: %s:%d", name, line);
@@ -123,7 +123,7 @@ inline void checkCond(bool cond, const char *name, int line)
 /**
  * Get unix time in double.
  */
-inline double getTime()
+double getTime()
 {
     struct timeval tv;
     ::gettimeofday(&tv, NULL);
@@ -165,7 +165,7 @@ private:
 /**
  * Convert size string with unit suffix to unsigned integer.
  */
-inline uint64_t fromUnitIntString(const std::string &valStr)
+uint64_t fromUnitIntString(const std::string &valStr)
 {
     if (valStr.empty()) throw RT_ERR("Invalid argument.");
     char *endp;
@@ -195,7 +195,7 @@ inline uint64_t fromUnitIntString(const std::string &valStr)
  *   p: 2^50
  *   e: 2^60
  */
-inline std::string toUnitIntString(uint64_t val)
+std::string toUnitIntString(uint64_t val)
 {
     uint64_t mask = (1ULL << 10) - 1;
     const char units[] = " kmgtpezy";
@@ -214,7 +214,7 @@ inline std::string toUnitIntString(uint64_t val)
     }
 }
 
-inline std::string byteArrayToStr(const void *data, size_t size)
+std::string byteArrayToStr(const void *data, size_t size)
 {
     std::string s;
     s.resize(size * 2 + 1);
@@ -228,7 +228,7 @@ inline std::string byteArrayToStr(const void *data, size_t size)
 /**
  * Print byte array as hex list.
  */
-inline void printByteArray(::FILE *fp, const void *data, size_t size, size_t lineSize = 64)
+void printByteArray(::FILE *fp, const void *data, size_t size, size_t lineSize = 64)
 {
     if (lineSize % 2 != 0) lineSize--;
     for (size_t i = 0; i < size; i++) {
@@ -238,7 +238,7 @@ inline void printByteArray(::FILE *fp, const void *data, size_t size, size_t lin
     if (size % lineSize != 0) { ::fprintf(fp, "\n"); }
 }
 
-inline void printByteArray(const void *data, size_t size, size_t lineSize = 64)
+void printByteArray(const void *data, size_t size, size_t lineSize = 64)
 {
     printByteArray(::stdout, data, size, lineSize);
 }
@@ -294,7 +294,7 @@ bool hexStrToInt(const std::string &hexStr, IntType &i)
 /**
  * Trim first and last spaces from a string.
  */
-inline std::string trimSpace(const std::string &str, const std::string &spaces = " \t\r\n")
+std::string trimSpace(const std::string &str, const std::string &spaces = " \t\r\n")
 {
     auto isSpace = [&](char c) -> bool {
         for (char space : spaces) {
@@ -320,7 +320,7 @@ inline std::string trimSpace(const std::string &str, const std::string &spaces =
 /**
  * Split a string with separators.
  */
-inline std::vector<std::string> splitString(
+std::vector<std::string> splitString(
     const std::string &str, const std::string &separators, bool isTrimSpace = true)
 {
     auto isSep = [&](int c) -> bool {
@@ -358,7 +358,7 @@ inline std::vector<std::string> splitString(
  * Type T must have empty() member function.
  */
 template <typename T>
-inline void removeEmptyItemFromVec(std::vector<T> &v)
+void removeEmptyItemFromVec(std::vector<T> &v)
 {
     v.erase(std::remove_if(
                 v.begin(), v.end(),
@@ -366,30 +366,30 @@ inline void removeEmptyItemFromVec(std::vector<T> &v)
             v.end());
 }
 
-inline bool hasPrefix(const std::string &name, const std::string &prefix)
+bool hasPrefix(const std::string &name, const std::string &prefix)
 {
     return name.substr(0, prefix.size()) == prefix;
 }
 
-inline std::string removePrefix(const std::string &name, const std::string &prefix)
+std::string removePrefix(const std::string &name, const std::string &prefix)
 {
     assert(hasPrefix(name, prefix));
     return name.substr(prefix.size());
 }
 
-inline bool hasSuffix(const std::string &name, const std::string &suffix)
+bool hasSuffix(const std::string &name, const std::string &suffix)
 {
     if (name.size() < suffix.size()) return false;
     return name.substr(name.size() - suffix.size()) == suffix;
 }
 
-inline std::string removeSuffix(const std::string &name, const std::string &suffix)
+std::string removeSuffix(const std::string &name, const std::string &suffix)
 {
     assert(hasSuffix(name, suffix));
     return name.substr(0, name.size() - suffix.size());
 }
 
-inline bool isAllDigit(const std::string &s)
+bool isAllDigit(const std::string &s)
 {
     return std::all_of(s.cbegin(), s.cend(), [](const char &c) {
             return '0' <= c && c <= '9';
@@ -402,7 +402,7 @@ inline bool isAllDigit(const std::string &s)
  * RETURN:
  *   prefix like "XXX_".
  */
-inline std::string getPrefix(const std::string &name, const std::string &base)
+std::string getPrefix(const std::string &name, const std::string &base)
 {
     size_t s0 = name.size();
     size_t s1 = base.size();
@@ -439,7 +439,7 @@ void printList(const C &c)
     printList(std::cout, c);
 }
 
-inline bool isAllZero(const void *data, size_t size)
+bool isAllZero(const void *data, size_t size)
 {
     const char *p = (const char *)data;
     while (size > 0) {
@@ -450,7 +450,7 @@ inline bool isAllZero(const void *data, size_t size)
     return true;
 }
 
-inline void parseStrVec(
+void parseStrVec(
     const std::vector<std::string>& v, size_t pos, size_t numMust,
     std::initializer_list<std::string *> list)
 {
@@ -469,7 +469,7 @@ inline void parseStrVec(
 }
 
 template <typename C>
-inline std::string concat(const C &list, const std::string &delim = "")
+std::string concat(const C &list, const std::string &delim = "")
 {
     std::stringstream ss;
     if (list.empty()) return ss.str();

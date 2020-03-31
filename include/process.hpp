@@ -66,7 +66,7 @@ private:
 /**
  * @fd 0, 1, or 2.
  */
-inline void redirectToNullDev(int fd)
+void redirectToNullDev(int fd)
 {
     int flags = (fd == 0 ? O_RDONLY : O_WRONLY);
     int tmpFd = ::open("/dev/null", flags);
@@ -81,7 +81,7 @@ inline void redirectToNullDev(int fd)
 /**
  * Close all file descriptors except for 0, 1, and 2.
  */
-inline void closeAllFileDescriptors()
+void closeAllFileDescriptors()
 {
     int maxFd = ::sysconf(_SC_OPEN_MAX);
     maxFd = maxFd < 0 ? 1024 : maxFd;
@@ -93,7 +93,7 @@ inline void closeAllFileDescriptors()
 /**
  * Create command line arguments for execv().
  */
-inline std::vector<char *> prepareArgv(const std::string &cmd, const std::vector<std::string> &args)
+std::vector<char *> prepareArgv(const std::string &cmd, const std::vector<std::string> &args)
 {
     std::vector<char *> argv;
     argv.push_back(const_cast<char *>(cmd.c_str()));
@@ -104,7 +104,7 @@ inline std::vector<char *> prepareArgv(const std::string &cmd, const std::vector
     return argv;
 }
 
-inline void streamToStr(int fdr, std::string &outStr, std::exception_ptr& ep) noexcept
+void streamToStr(int fdr, std::string &outStr, std::exception_ptr& ep) noexcept
 {
     try {
         std::stringstream ss;
@@ -123,7 +123,7 @@ inline void streamToStr(int fdr, std::string &outStr, std::exception_ptr& ep) no
 /**
  * Call another command and get stdout as a result.
  */
-inline std::string call(const std::string& cmd, const std::vector<std::string> &args)
+std::string call(const std::string& cmd, const std::vector<std::string> &args)
 {
     cybozu::FileStat stat = cybozu::FilePath(cmd).stat();
     if (!stat.exists()) {
@@ -186,7 +186,7 @@ inline std::string call(const std::string& cmd, const std::vector<std::string> &
     return stdOutStr;
 }
 
-inline std::string call(const std::vector<std::string> &args)
+std::string call(const std::vector<std::string> &args)
 {
     if (args.empty()) throw std::runtime_error("no executable specified.");
     const std::string &cmd = args[0];

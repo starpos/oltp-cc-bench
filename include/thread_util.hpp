@@ -989,7 +989,7 @@ private:
     }
 };
 
-inline std::string exceptionPtrToStr(std::exception_ptr ep) try
+std::string exceptionPtrToStr(std::exception_ptr ep) try
 {
     std::rethrow_exception(ep);
     return "exceptionPtrToStr:no error";

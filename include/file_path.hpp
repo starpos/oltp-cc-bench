@@ -338,7 +338,7 @@ public:
         }
         return rmdir();
     }
-    friend inline std::ostream &operator<<(std::ostream &os, const FilePath &fp) {
+    friend std::ostream &operator<<(std::ostream &os, const FilePath &fp) {
         os << fp.removeRedundancy().str();
         return os;
     }
@@ -439,7 +439,7 @@ private:
     }
 };
 
-inline FilePath getCurrentDir()
+FilePath getCurrentDir()
 {
     char *p = ::getcwd(nullptr, 0);
     if (!p) throw std::system_error(errno, std::system_category(), "getcwd failed.");
@@ -453,7 +453,7 @@ inline FilePath getCurrentDir()
     }
 }
 
-inline bool isSameFile(const std::string& path1, const std::string& path2)
+bool isSameFile(const std::string& path1, const std::string& path2)
 {
     const FileStat s1(path1);
     const FileStat s2(path2);

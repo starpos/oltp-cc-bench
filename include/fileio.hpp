@@ -167,7 +167,7 @@ public:
 /**
  * Create a file if it does not exist.
  */
-inline void createEmptyFile(const std::string &path, mode_t mode = 0644)
+void createEmptyFile(const std::string &path, mode_t mode = 0644)
 {
     struct stat st;
     if (::stat(path.c_str(), &st) == 0) return;
@@ -184,7 +184,7 @@ inline void createEmptyFile(const std::string &path, mode_t mode = 0644)
  *   such as std::string and std::vector<char>.
  */
 template <typename String>
-inline void readAllFromFile(File &file, String &buf)
+void readAllFromFile(File &file, String &buf)
 {
     constexpr const size_t usize = 4096; // unit size.
     size_t rsize = buf.size(); // read data will be appended to buf.
@@ -199,7 +199,7 @@ inline void readAllFromFile(File &file, String &buf)
 }
 
 template <typename String>
-inline void readAllFromFile(const std::string &path, String &buf)
+void readAllFromFile(const std::string &path, String &buf)
 {
     File file(path, O_RDONLY);
     readAllFromFile(file, buf);
