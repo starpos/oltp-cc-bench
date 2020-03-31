@@ -194,4 +194,13 @@ std::string call(const std::vector<std::string> &args)
     return call(cmd, args2);
 }
 
+
+size_t get_nr_processors()
+{
+    long v = ::sysconf(_SC_NPROCESSORS_ONLN);
+    if (v < 0) throw std::runtime_error("sysconf failed.");
+    return size_t(v);
+}
+
+
 }} //namespace cybozu::process
