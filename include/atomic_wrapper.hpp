@@ -1,37 +1,38 @@
 #pragma once
+#include "inline.hpp"
 
 // Thin wrappers of atomic builtin.
 
 template <typename Int>
-Int load(Int& m)
+INLINE Int load(Int& m)
 {
     return __atomic_load_n(&m, __ATOMIC_RELAXED);
 }
 
 
 template <typename Int>
-Int load_acquire(Int& m)
+INLINE Int load_acquire(Int& m)
 {
     return __atomic_load_n(&m, __ATOMIC_ACQUIRE);
 }
 
 
 template <typename Int0, typename Int1>
-void store(Int0& m, Int1 v)
+INLINE void store(Int0& m, Int1 v)
 {
     __atomic_store_n(&m, (Int0)v, __ATOMIC_RELAXED);
 }
 
 
 template <typename Int0, typename Int1>
-void store_release(Int0& m, Int1 v)
+INLINE void store_release(Int0& m, Int1 v)
 {
     __atomic_store_n(&m, (Int0)v, __ATOMIC_RELEASE);
 }
 
 
 template <typename Int0, typename Int1>
-Int0 exchange(Int0& m, Int1 v, int mode = __ATOMIC_ACQ_REL) {
+INLINE Int0 exchange(Int0& m, Int1 v, int mode = __ATOMIC_ACQ_REL) {
     return __atomic_exchange_n(&m, v, mode);
 }
 
@@ -41,7 +42,7 @@ Int0 exchange(Int0& m, Int1 v, int mode = __ATOMIC_ACQ_REL) {
 
 
 template <typename Int0, typename Int1>
-bool compare_exchange(Int0& m, Int0& before, Int1 after, int mode = __ATOMIC_ACQ_REL, int fail_mode = __ATOMIC_ACQUIRE) {
+INLINE bool compare_exchange(Int0& m, Int0& before, Int1 after, int mode = __ATOMIC_ACQ_REL, int fail_mode = __ATOMIC_ACQUIRE) {
     return __atomic_compare_exchange_n(&m, &before, (Int0)after, false, mode, fail_mode);
 }
 
@@ -51,30 +52,30 @@ bool compare_exchange(Int0& m, Int0& before, Int1 after, int mode = __ATOMIC_ACQ
 
 
 template <typename Int0, typename Int1>
-Int0 fetch_add(Int0& m, Int1 v, int mode = __ATOMIC_ACQ_REL)
+INLINE Int0 fetch_add(Int0& m, Int1 v, int mode = __ATOMIC_ACQ_REL)
 {
     return __atomic_fetch_add(&m, static_cast<Int0>(v), mode);
 }
 
 
 template <typename Int0, typename Int1>
-Int0 fetch_sub(Int0& m, Int1 v, int mode = __ATOMIC_ACQ_REL)
+INLINE Int0 fetch_sub(Int0& m, Int1 v, int mode = __ATOMIC_ACQ_REL)
 {
     return __atomic_fetch_sub(&m, static_cast<Int0>(v), mode);
 }
 
 
-void acq_rel_memory_barrier() {
+INLINE void acq_rel_memory_barrier() {
     __atomic_thread_fence(__ATOMIC_ACQ_REL);
 }
 
 
-void release_memory_barrier() {
+INLINE void release_memory_barrier() {
     __atomic_thread_fence(__ATOMIC_RELEASE);
 }
 
 
-void acquire_memory_barrier() {
+INLINE void acquire_memory_barrier() {
     __atomic_thread_fence(__ATOMIC_ACQUIRE);
 }
 
