@@ -446,7 +446,7 @@ void invisible_read(Mutex& mutex, LockData& ld, const void* shared, void* local,
 #ifndef NO_PAYLOAD
         ::memcpy(local, shared, size);
 #endif
-        acquire_memory_barrier();
+        acquire_fence();
         MutexData md1 = mutex.load();
         if (!md1.is_valid(md0.version)) {
             md0 = md1;
@@ -553,7 +553,7 @@ public:
 #ifndef NO_PAYLOAD
             ::memcpy(local, shared, size);
 #endif
-            acquire_memory_barrier();
+            acquire_fence();
             if (!does_write_reserve && md0 == moc1.md) {
                 // CAS is not required but verify is required.
                 MutexData md1 = mutex_->load();
@@ -612,7 +612,7 @@ public:
 #ifndef NO_PAYLOAD
             ::memcpy(local, shared, size);
 #endif
-            acquire_memory_barrier();
+            acquire_fence();
             MutexData md1 = mutex_->load();
             if (md1.is_valid(md0.version)) return;
             md0 = reserve_for_read<does_write_reserve, true>(md1);
@@ -1049,7 +1049,7 @@ public:
 #ifndef NO_PAYLOAD
             ::memcpy(local, shared, size);
 #endif
-            acquire_memory_barrier();
+            acquire_fence();
             md0 = mutex_->load();
             if (md0.is_valid(ld_.version)) return;
         }

@@ -61,7 +61,7 @@ void worker(size_t id, Shared& shared) try
             uint64_t y = loadAcquire(shared_value_);
             for (;;) {
                 // emulate reading the record.
-                acquireMemoryBarrier();
+                acquireFence();
                 x = loadAcquire(shared_value_);
                 if (x == y) break;
                 y = x;
@@ -75,7 +75,7 @@ void worker(size_t id, Shared& shared) try
             uint64_t y = loadAcquire(shared_value_);
             for (;;) {
                 if (compareExchange(shared_value_, y, x + 1)) {
-                    releaseMemoryBarrier();
+                    releaseFence();
                     // emulate writing the record.
                     break;
                 }

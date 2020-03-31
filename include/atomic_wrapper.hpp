@@ -65,17 +65,17 @@ INLINE Int0 fetch_sub(Int0& m, Int1 v, int mode = __ATOMIC_ACQ_REL)
 }
 
 
-INLINE void acq_rel_memory_barrier() {
+INLINE void acq_rel_fence() {
     __atomic_thread_fence(__ATOMIC_ACQ_REL);
 }
 
 
-INLINE void release_memory_barrier() {
+INLINE void release_fence() {
     __atomic_thread_fence(__ATOMIC_RELEASE);
 }
 
 
-INLINE void acquire_memory_barrier() {
+INLINE void acquire_fence() {
     __atomic_thread_fence(__ATOMIC_ACQUIRE);
 }
 
@@ -88,9 +88,9 @@ INLINE void acquire_memory_barrier() {
 #define compareExchange compare_exchange
 #define fetchAdd fetch_add
 #define fetchSub fetch_sub
-#define memoryBarrier memory_barrier
-#define releaseMemoryBarrier release_memory_barrier
-#define acquireMemoryBarrier acquire_memory_barrier
+#define acqRelFence acq_rel_fence
+#define releaseFence release_fence
+#define acquireFence acquire_fence
 
 
 
