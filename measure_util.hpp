@@ -23,6 +23,18 @@
 #include "atomic_wrapper.hpp"
 
 
+/**
+ * To enable retry counting.
+ * This takes a bit overhead.
+ */
+#if 0
+#define USE_RETRY_COUNT
+#else
+#undef USE_RETRY_COUNT
+#endif
+
+
+
 void sleepMs(size_t ms)
 {
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
@@ -218,7 +230,7 @@ struct RetryCounts
         }
         std::sort(v.begin(), v.end());
 
-#if 0
+#ifdef USE_RETRY_COUNT
         if (verbose) {
             for (const Pair& p : v) {
                 os << cybozu::util::formatString("%5zu %zu\n", p.first, p.second);
@@ -265,7 +277,7 @@ struct Result1
     void incAbort(bool isLongTx) { value[isLongTx ? 3 : 2]++; }
     void incIntercepted(bool isLongTx) { value[isLongTx ? 5 : 4]++; }
     void addRetryCount(bool isLongTx, size_t nrRetry) {
-#if 0
+#ifdef USE_RETRY_COUNT
         if (isLongTx) {
             rcL.add(nrRetry);
         } else {
@@ -278,30 +290,15 @@ struct Result1
     }
 
     friend std::ostream& operator<<(std::ostream& os, const Result1& res) {
-        const bool verbose = false; // QQQ
-#if 0
-        os << cybozu::util::formatString(
-            "commit S %zu L %zu  abort S %zu L %zu  intercepted S %zu L %zu"
-            , res.value[0], res.value[1]
-            , res.value[2], res.value[3]
-            , res.value[4], res.value[5]);
-        os << "  ";
-        out(os, res.rcS, verbose);
-        os << "  ";
-        out(os, res.rcL, verbose);
-        os << "\n";
-        return os;
-#else
         os << cybozu::util::formatString(
             "commitS:%zu commitL:%zu abortS:%zu abortL:%zu interceptedS:%zu interceptedL:%zu"
             , res.value[0], res.value[1]
             , res.value[2], res.value[3]
             , res.value[4], res.value[5]);
-        if (verbose) {
-            // not yet implemented.
-        }
-        return os;
+#ifdef USE_RETRY_COUNT
+        os << "\n" << "  " << res.rcS << "  " << res.rcL;
 #endif
+        return os;
     }
     std::string str() const {
         std::stringstream ss;
