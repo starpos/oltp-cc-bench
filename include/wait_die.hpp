@@ -107,16 +107,6 @@ public:
 
         INLINE Mutex() { wd.init(); }
 
-        DEPRECATED WaitDieData atomicRead() const {
-            return __atomic_load_n(&wd.obj, __ATOMIC_RELAXED);
-        }
-        DEPRECATED bool compareAndSwap(WaitDieData& expected, WaitDieData desired, int mode) {
-            bool ret = __atomic_compare_exchange_n(
-                &wd.obj, &expected.obj, desired.obj,
-                false, mode, __ATOMIC_RELAXED);
-            return ret;
-        }
-
         INLINE WaitDieData load() const {
             return __atomic_load_n(&wd.obj, __ATOMIC_ACQUIRE);
         }
