@@ -6,6 +6,7 @@
 #include "arch.hpp"
 #include "vector_payload.hpp"
 #include "write_set.hpp"
+#include "atomic_wrapper.hpp"
 #include "inline.hpp"
 
 
@@ -274,11 +275,256 @@ private:
 };
 
 
-class LockSet
+/**
+ * Wait-die deadlock avoidance revision 2.
+ *
+ * It is a bit fairer lock to reduce aborts.
+ */
+template <size_t Threshold_cumulo_readers>
+struct WaitDieData2
+{
+    static_assert(Threshold_cumulo_readers < (1 << 7));
+    using Mode = cybozu::lock::LockStateXS::Mode;
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattributes"
+    alignas(sizeof(uint64_t))
+    union {
+        uint64_t obj;
+        struct {
+            // tx_id that holds X lock or mininum tx_id (that means prior tx) that holds S lock.
+            uint32_t tx_id;
+            union {
+                uint32_t mutex_obj;
+                struct {
+                    uint32_t write_locked:1;
+                    uint32_t readers:7;
+                    uint32_t reserved0:1;
+                    uint32_t cumulo_readers:7;
+                    uint32_t reserved1:16;
+                };
+            };
+        };
+    };
+#pragma GCC diagnostic pop
+
+    INLINE WaitDieData2() { init(); }
+    INLINE void init() {
+        tx_id = MAX_TXID;
+        mutex_obj = 0;
+    }
+    INLINE WaitDieData2(uint64_t obj0) { obj = obj0; }
+    INLINE operator uint64_t() const { return obj; }
+
+    std::string str() const {
+        return cybozu::util::formatString(
+            "tx_id %u X %u S %u (cumulative %u)"
+            , tx_id, write_locked, readers, cumulo_readers);
+    }
+
+    bool is_unlocked() const {
+        return tx_id == MAX_TXID && write_locked == 0
+            && readers == 0 && cumulo_readers == 0;
+    }
+};
+
+
+template <size_t Threshold_cumulo_readers>
+struct WaitDieLock2
 {
     using Mode = cybozu::lock::LockStateXS::Mode;
-    using Mutex = WaitDieLock::Mutex;
-    using Lock = WaitDieLock;
+    struct Mutex : WaitDieData2<Threshold_cumulo_readers> {
+
+        using WaitDieData2<Threshold_cumulo_readers>::WaitDieData2;
+
+        INLINE Mutex load() const {
+            return load_acquire(this->obj);
+        }
+        INLINE void store(Mutex mu0) {
+            store_release(this->obj, mu0.obj);
+        }
+        INLINE bool cas(Mutex& mu0, Mutex mu1) {
+            return compare_exchange(this->obj, mu0.obj, mu1.obj);
+        }
+        INLINE bool cas_acquire(Mutex& mu0, Mutex mu1) {
+            return compare_exchange_acquire(this->obj, mu0.obj, mu1.obj);
+        }
+        INLINE bool cas_release(Mutex& mu0, Mutex mu1) {
+            return compare_exchange_release(this->obj, mu0.obj, mu1.obj);
+        }
+    };
+
+private:
+    Mutex *mutexp_;
+    Mode mode_;
+    TxId tx_id_;
+
+public:
+    INLINE WaitDieLock2() noexcept : mutexp_(nullptr), mode_(Mode::INVALID), tx_id_(MAX_TXID) {}
+    INLINE ~WaitDieLock2() noexcept { unlock(); }
+    INLINE WaitDieLock2(const WaitDieLock2& ) = delete;
+    INLINE WaitDieLock2(WaitDieLock2&& rhs) noexcept : WaitDieLock2() { swap(rhs); }
+    INLINE WaitDieLock2& operator=(const WaitDieLock2& rhs) = delete;
+    INLINE WaitDieLock2& operator=(WaitDieLock2&& rhs) noexcept { swap(rhs); return *this; }
+
+    /**
+     * This is for blind-write.
+     */
+    INLINE void setMutex(Mutex& mutex) noexcept { mutexp_ = &mutex; }
+
+    /**
+     * If true, locked.
+     * If false, you must abort your running transaction.
+     */
+    INLINE bool readLock(Mutex& mutex, TxId tx_id) noexcept {
+        assert(tx_id != MAX_TXID);
+        Mutex mu0 = mutex.load();
+        for (;;) {
+            _mm_pause();
+            if (mu0.write_locked > 0) {
+                if (mu0.tx_id < tx_id) return false; // die
+                mu0 = mutex.load();
+                continue; // wait
+            }
+            if (mu0.tx_id < tx_id && mu0.cumulo_readers >= Threshold_cumulo_readers) {
+                return false; // die
+            }
+            // try to lock
+            Mutex mu1 = mu0;
+            mu1.readers++;
+            mu1.cumulo_readers++;
+            mu1.tx_id = std::min(mu1.tx_id, tx_id);
+            if (mutex.cas_acquire(mu0, mu1)) {
+                mutexp_ = &mutex;
+                mode_ = Mode::S;
+                tx_id_ = tx_id;
+                return true;
+            }
+            // retry
+        }
+    }
+    INLINE bool writeLock(Mutex& mutex, TxId tx_id) noexcept {
+        assert(tx_id != MAX_TXID);
+        Mutex mu0 = mutex.load();
+        for (;;) {
+            _mm_pause();
+            if (mu0.write_locked || mu0.readers != 0) {
+                assert(mu0.tx_id != tx_id);
+                if (mu0.tx_id < tx_id) return false; // die
+                mu0 = mutex.load();
+                continue; // wait
+            }
+            // try to lock
+            Mutex mu1 = mu0;
+            mu1.write_locked = 1;
+            mu1.tx_id = tx_id;
+            if (mutex.cas_acquire(mu0, mu1)) {
+                mutexp_ = &mutex;
+                mode_ = Mode::X;
+                tx_id_ = tx_id;
+                return true;
+            }
+            // retry
+        }
+    }
+    INLINE void unlock() noexcept {
+        // mutexp_ may not be nullptr due to setMutex().
+        // so we do not use nullcheck of mutexp_ to switch case.
+        switch (mode_) {
+        case Mode::INVALID: return;
+        case Mode::S: readUnlock(); return;
+        case Mode::X: writeUnlock(); return;
+        default: assert(false);
+        }
+    }
+    INLINE void readUnlock() noexcept {
+        verify_locked(Mode::S);
+        Mutex& mutex = *mutexp_;
+        Mutex mu0 = mutex.load();
+        for (;;) {
+            _mm_pause();
+            Mutex mu1 = mu0;
+            assert(mu1.readers > 0);
+            mu1.readers--;
+            if (mu1.readers == 0) {
+                mu1.cumulo_readers = 0;
+                mu1.tx_id = MAX_TXID;
+            }
+            if (mutex.cas_release(mu0, mu1)) {
+                init();
+                return;
+            }
+            // retry
+        }
+    }
+    INLINE void writeUnlock() noexcept {
+        verify_locked(Mode::X);
+        Mutex& mutex = *mutexp_;
+#ifndef NDEBUG
+        Mutex mu0 = mutex.load();
+        assert(mu0.write_locked == 1);
+        assert(mu0.readers == 0);
+        assert(mu0.cumulo_readers == 0);
+        assert(mu0.tx_id == tx_id_);
+#endif
+        Mutex mu1;
+        assert(mu1.is_unlocked());
+        mutex.store(mu1);
+        init();
+    }
+    INLINE bool upgrade() noexcept {
+        verify_locked(Mode::S);
+        Mutex& mutex = *mutexp_;
+        Mutex mu0 = mutex.load();
+        while (mu0.readers == 1) {
+            assert(mu0.tx_id <= tx_id_);
+            _mm_pause();
+            Mutex mu1 = mu0;
+            mu1.write_locked = 1;
+            mu1.readers = 0;
+            mu1.cumulo_readers = 0;
+            mu1.tx_id = tx_id_;
+            if (mutex.cas(mu0, mu1)) {
+                mode_ = Mode::X;
+                return true;
+            }
+            // retry
+        }
+        return false; // failed.
+    }
+    INLINE Mode mode() const noexcept {
+        return mode_;
+    }
+    INLINE uintptr_t getMutexId() const noexcept {
+        return uintptr_t(mutexp_);
+    }
+private:
+    INLINE void init() noexcept {
+        mutexp_ = nullptr;
+        mode_ = Mode::INVALID;
+        tx_id_ = MAX_TXID;
+    }
+    INLINE void swap(WaitDieLock2& rhs) noexcept {
+        std::swap(mutexp_, rhs.mutexp_);
+        std::swap(mode_, rhs.mode_);
+        std::swap(tx_id_, rhs.tx_id_);
+    }
+    INLINE void verify_locked(Mode mode) const noexcept {
+        unused(mode);
+        assert(mode_ == mode);
+        assert(mutexp_ != nullptr);
+        assert(tx_id_ != MAX_TXID);
+    }
+};
+
+
+class LockSet
+{
+public:
+    using Lock = WaitDieLock2<1>;
+    using Mode = Lock::Mode;
+    using Mutex = Lock::Mutex;
+private:
     using OpEntryL = OpEntry<Lock>;
     using Vec = std::vector<OpEntryL>;
 

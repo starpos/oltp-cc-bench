@@ -16,7 +16,7 @@
 #endif
 
 
-using Lock = cybozu::wait_die::WaitDieLock;
+using Lock = cybozu::wait_die::LockSet::Lock;
 using Mutex = Lock::Mutex;
 using Mode = Lock::Mode;
 
