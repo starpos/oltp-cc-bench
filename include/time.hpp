@@ -70,7 +70,11 @@ uint64_t rdtscp()
 {
     // Precision is about 10nsec.
     uint64_t ts;
+#if 0 // isb is costly.
     __asm__ volatile ("isb; mrs %0, cntvct_el0" : "=r" (ts));
+#else
+    __asm__ volatile ("mrs %0, cntvct_el0" : "=r" (ts));
+#endif
     return ts;
 }
 #else
