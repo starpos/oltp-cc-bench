@@ -528,6 +528,10 @@ void runExec(const CmdLineOption& opt, SharedData& shared, Worker&& worker, Resu
 }
 
 
+/**
+ * t0: tx begging time.
+ * retry: 0 in the first trial.
+ */
 template <typename Random>
 void backOff(uint64_t& t0, size_t retry, Random& rand)
 {
@@ -536,7 +540,8 @@ void backOff(uint64_t& t0, size_t retry, Random& rand)
     auto randState = rand.getState();
     randState += retry;
     rand.setState(randState);
-    uint64_t waitTic = rand() % (tdiff << std::min<size_t>(retry + 1, 4));
+    const uint64_t maxWaitTic = (tdiff << std::min<size_t>(retry + 1, 4)) + 1;
+    const uint64_t waitTic = rand() % maxWaitTic;
     //uint64_t waitTic = rand() % (tdiff << 18);
     uint64_t t2 = t1;
     while (t2 - t1 < waitTic) {
