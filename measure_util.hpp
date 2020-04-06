@@ -10,6 +10,7 @@
 #include <limits>
 #include <type_traits>
 #include <thread>
+#include <array>
 #include "util.hpp"
 #include "random.hpp"
 #include "cmdline_option.hpp"
@@ -33,6 +34,15 @@
 #undef USE_RETRY_COUNT
 #endif
 
+/**
+ * To enable latency histogram.
+ * This takes a bit overhead.
+ */
+#if 0
+#define USE_LATENCY_HISTOGRAM
+#else
+#undef USE_LATENCY_HISTOGRAM
+#endif
 
 
 void sleepMs(size_t ms)
@@ -203,6 +213,75 @@ public:
 };
 
 
+/**
+ * Histogram of size_t values.
+ */
+struct Histogram
+{
+    static constexpr size_t HISTOGRAM_SIZE = sizeof(size_t) * 8;
+    std::array<size_t, HISTOGRAM_SIZE + 1> data;
+
+    Histogram() : data() {
+        for (auto& e : data) e = 0;
+    }
+    void add(size_t value) {
+        if (value == 0) {
+            data[0]++;
+            return;
+        }
+        static_assert(sizeof(unsigned long) == sizeof(size_t));
+        const size_t b = __builtin_clzl(value);
+        assert(b >= 0);
+        assert(b < HISTOGRAM_SIZE);
+        data[HISTOGRAM_SIZE - b]++;  // HISTOGRAM_SIZE - b is in range [1, 64].
+    }
+    void merge(const Histogram& rhs) {
+        for (size_t i = 0; i <= HISTOGRAM_SIZE; i++) {
+            this->data[i] += rhs.data[i];
+        }
+    }
+    const size_t& operator[](size_t i) const {
+#ifndef NDEBUG
+        if (i > HISTOGRAM_SIZE) {
+            throw cybozu::Exception("Histogram::operator[] error") << i;
+        }
+#endif
+        return data[i];
+    }
+
+    /**
+     * 0: xxx
+     * 1: xxx
+     * 2: xxx 2, 3
+     * 2^2: xxx [4, 8)
+     * 2^3: xxx [8, 16)
+     * 2^4: xxx [16, 32)
+     * ...
+     * 2^63: xxx [2^63, 2^64)
+     */
+    void put_to(std::ostream& os) const {
+        size_t max = HISTOGRAM_SIZE + 1;
+        while (max > 0) {
+            if (data[max - 1] != 0) break;
+            --max;
+        }
+        for (size_t i = 0; i <= 2; i++) {
+            os << i << ": " << data[i] << "\n";
+        }
+        for (size_t i = 3; i < max; i++) {
+            os << "2^" << (i - 1) << ": " << data[i] << "\n";
+        }
+    }
+};
+
+
+std::ostream& operator<<(std::ostream& os, const Histogram& h)
+{
+    h.put_to(os);
+    return os;
+}
+
+
 struct RetryCounts
 {
     using Umap = std::unordered_map<size_t, size_t>;
@@ -262,11 +341,13 @@ struct Result1
 {
     RetryCounts rcS;
     RetryCounts rcL;
+    Histogram latencyH;
     size_t value[6];
     Result1() : rcS(), rcL(), value() {}
     void operator+=(const Result1& rhs) {
         rcS.merge(rhs.rcS);
         rcL.merge(rhs.rcL);
+        latencyH.merge(rhs.latencyH);
         for (size_t i = 0; i < 6; i++) {
             value[i] += rhs.value[i];
         }
@@ -277,18 +358,21 @@ struct Result1
     void incAbort(bool isLongTx) { value[isLongTx ? 3 : 2]++; }
     void incIntercepted(bool isLongTx) { value[isLongTx ? 5 : 4]++; }
     void addRetryCount(bool isLongTx, size_t nrRetry) {
+        unused(isLongTx, nrRetry);
 #ifdef USE_RETRY_COUNT
         if (isLongTx) {
             rcL.add(nrRetry);
         } else {
             rcS.add(nrRetry);
         }
-#else
-        unused(isLongTx);
-        unused(nrRetry);
 #endif
     }
-
+    void addLatency(size_t latency) {
+        unused(latency);
+#ifdef USE_LATENCY_HISTOGRAM
+        latencyH.add(latency);
+#endif
+    }
     friend std::ostream& operator<<(std::ostream& os, const Result1& res) {
         os << cybozu::util::formatString(
             "commitS:%zu commitL:%zu abortS:%zu abortL:%zu interceptedS:%zu interceptedL:%zu"
@@ -297,6 +381,9 @@ struct Result1
             , res.value[4], res.value[5]);
 #ifdef USE_RETRY_COUNT
         os << "\n" << "  " << res.rcS << "  " << res.rcL;
+#endif
+#ifdef USE_LATENCY_HISTOGRAM
+        os << "\n" << res.latencyH;
 #endif
         return os;
     }
