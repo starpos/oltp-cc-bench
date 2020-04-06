@@ -22,7 +22,6 @@ using TxId = uint64_t;
 #endif
 
 const TxId MAX_TXID = TxId(-1);
-const uint16_t MAX_READERS = (1 << 15) - 1;
 
 
 /**
@@ -33,7 +32,11 @@ const uint16_t MAX_READERS = (1 << 15) - 1;
 template <size_t Threshold_cumulo_readers>
 struct WaitDieData2
 {
-    static_assert(Threshold_cumulo_readers < (1 << 7));
+    static constexpr size_t Cumulo_readers_bits = 7;
+    static constexpr size_t Readers_bits = 7;
+    static_assert(Threshold_cumulo_readers < (1 << Cumulo_readers_bits));
+    static constexpr uint32_t Max_readers = (1 << Readers_bits) - 1;
+
     using Mode = cybozu::lock::LockStateXS::Mode;
 
 #pragma GCC diagnostic push
@@ -48,9 +51,9 @@ struct WaitDieData2
                 uint32_t mutex_obj;
                 struct {
                     uint32_t write_locked:1;
-                    uint32_t readers:7;
+                    uint32_t readers:Readers_bits;
                     uint32_t reserved0:1;
-                    uint32_t cumulo_readers:7;
+                    uint32_t cumulo_readers:Cumulo_readers_bits;
                     uint32_t reserved1:16;
                 };
             };
@@ -78,6 +81,8 @@ struct WaitDieData2
     }
 };
 
+static_assert(sizeof(WaitDieData2<1>) == sizeof(uint64_t));
+
 
 template <size_t Threshold_cumulo_readers>
 struct WaitDieLock2
@@ -103,6 +108,8 @@ struct WaitDieLock2
             return compare_exchange_release(this->obj, mu0.obj, mu1.obj);
         }
     };
+
+    static constexpr uint32_t Max_readers = WaitDieData2<Threshold_cumulo_readers>::Max_readers;
 
 private:
     Mutex *mutexp_;
@@ -138,6 +145,10 @@ public:
             }
             if (mu0.tx_id < tx_id && mu0.cumulo_readers >= Threshold_cumulo_readers) {
                 return false; // die
+            }
+            if (mu0.readers >= Max_readers) {
+                mu0 = mutex.load();
+                continue; // wait
             }
             // try to lock
             Mutex mu1 = mu0;
