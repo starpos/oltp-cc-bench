@@ -77,6 +77,12 @@ uint64_t rdtscp()
 #endif
     return ts;
 }
+uint64_t counter_frequency()
+{
+    uint64_t freq;
+    __asm__ volatile ("mrs %0, cntfrq_el0" : "=r" (freq));
+    return freq;
+}
 #else
 uint64_t rdtscp()
 {
