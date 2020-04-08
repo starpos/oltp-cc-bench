@@ -36,3 +36,4 @@ test_licc2
 test_acquire_release
 test_memory_barrier
 test_histogram
+test_llsc
