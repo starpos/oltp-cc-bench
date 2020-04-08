@@ -44,6 +44,11 @@ message(STATUS "gcc_major_version: " ${gcc_major_version})
 execute_process(COMMAND uname -m COMMAND tr -d '\n' OUTPUT_VARIABLE architecture)
 message(STATUS "architecture: " ${architecture})
 
+# Use -MMD -MP instead -MD option in dependencies file generation.
+if (CMAKE_GENERATOR MATCHES "Ninja")
+	STRING(REPLACE "-MD" "-MMD -MP" CMAKE_DEPFILE_FLAGS_C "${CMAKE_DEPFILE_FLAGS_C}")
+	STRING(REPLACE "-MD" "-MMD -MP" CMAKE_DEPFILE_FLAGS_CXX "${CMAKE_DEPFILE_FLAGS_CXX}")
+endif()
 
 set(cflagItems "")
 set(ldflagItems "")
