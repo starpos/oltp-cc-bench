@@ -25,18 +25,29 @@ const TxId MAX_TXID = TxId(-1);
 
 
 /**
+ * Constants.
+ */
+constexpr size_t Cumulo_readers_bits = 7;
+constexpr size_t Max_cumulo_readers = (1 << Cumulo_readers_bits) - 1;
+constexpr size_t Readers_bits = 7;
+constexpr uint32_t Max_readers = (1 << Readers_bits) - 1;
+
+
+/**
  * Wait-die deadlock avoidance revision 2.
  *
- * It is a bit fairer lock to reduce aborts.
+ * This variant uses 64bit mutex object only.
+ * A merit of the design is it does not require any queues.
+ * A demerit of the design is additional possibility of abort(die).
+ *
+ * Smaller values of Threshold_cumulo_readers are expected to reduce
+ * lock waiting time of transactions with higher priority.
+ * We have not found the efficiency of Threshold_cumulo_readers yet.
  */
 template <size_t Threshold_cumulo_readers>
 struct WaitDieData2
 {
-    static constexpr size_t Cumulo_readers_bits = 7;
-    static constexpr size_t Readers_bits = 7;
-    static_assert(Threshold_cumulo_readers < (1 << Cumulo_readers_bits));
-    static constexpr uint32_t Max_readers = (1 << Readers_bits) - 1;
-
+    static_assert(Threshold_cumulo_readers <= Max_cumulo_readers);
     using Mode = cybozu::lock::LockStateXS::Mode;
 
 #pragma GCC diagnostic push
@@ -108,8 +119,6 @@ struct WaitDieLock2
             return compare_exchange_release(this->obj, mu0.obj, mu1.obj);
         }
     };
-
-    static constexpr uint32_t Max_readers = WaitDieData2<Threshold_cumulo_readers>::Max_readers;
 
 private:
     Mutex *mutexp_;
@@ -282,7 +291,7 @@ private:
 class LockSet
 {
 public:
-    using Lock = WaitDieLock2<1>;
+    using Lock = WaitDieLock2<Max_cumulo_readers>;
     using Mode = Lock::Mode;
     using Mutex = Lock::Mutex;
 private:
