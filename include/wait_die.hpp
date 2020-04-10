@@ -353,6 +353,11 @@ struct WaitDieData3
         return compare_exchange(header.obj, h0.obj, h1.obj);
     }
 
+    /*
+     * add_tx_id(), remove_tx_id(), and get_min_tx_id() access the txids,
+     * so you need to get latch before calling them.
+     */
+
     /**
      * return vector index.
      */
