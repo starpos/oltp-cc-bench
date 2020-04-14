@@ -32,6 +32,10 @@
 #define DEPRECATED __attribute__((deprecated))
 #endif
 
+
+#define fmtstr(...) cybozu::util::formatString(__VA_ARGS__)
+
+
 #define RT_ERR(...)                                             \
     std::runtime_error(cybozu::util::formatString(__VA_ARGS__))
 
