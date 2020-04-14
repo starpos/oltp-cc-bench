@@ -356,6 +356,82 @@ struct Result1
 
 
 /**
+ * Helper function.
+ * In order to reduce rdtscp() calls.
+ */
+void log_timestamp_if_necessary_on_tx_start(uint64_t& tx_start_ts, bool uses_backoff)
+{
+    unused(uses_backoff);
+#if defined(USE_TX_LATENCY_HISTOGRAM)
+    tx_start_ts = cybozu::time::rdtscp();
+#else
+    if (uses_backoff) tx_start_ts = cybozu::time::rdtscp();
+#endif
+}
+
+
+/**
+ * Helper function.
+ */
+void log_timestamp_if_necessary_on_trial_start(
+    const uint64_t& tx_start_ts, uint64_t& trial_start_ts, const uint64_t& trial_end_ts,
+    size_t retry, bool uses_backoff)
+{
+    unused(tx_start_ts, trial_start_ts, trial_end_ts, retry, uses_backoff);
+#if defined(USE_TRIAL_LATENCY_HISTOGRAM)
+    if (retry == 0) {
+#if defined(USE_TX_LATENCY_HISTOGRAM)
+        trial_start_ts = tx_start_ts;
+#else
+        trial_start_ts = cybozu::time::rdtscp();
+#endif
+    } else if (!uses_backoff) {
+        trial_start_ts = trial_end_ts;
+    } else {
+        // backoff() function has already set trial_start_ts.
+    }
+#else
+    if (retry == 0 && uses_backoff) {
+        trial_start_ts = tx_start_ts;
+    }
+#endif
+}
+
+
+/**
+ * Helper function.
+ */
+void log_timestamp_if_necessary_on_commit(
+    Result1& res, const uint64_t& tx_start_ts, const uint64_t& trial_start_ts, uint64_t& trial_end_ts)
+{
+    unused(res, tx_start_ts, trial_start_ts, trial_end_ts);
+#if defined(USE_TX_LATENCY_HISTOGRAM) || defined(USE_TRIAL_LATENCY_HISTOGRAM)
+    trial_end_ts = cybozu::time::rdtscp();
+#endif
+#if defined(USE_TX_LATENCY_HISTOGRAM)
+    res.addTxLatency(trial_end_ts - tx_start_ts);
+#endif
+#if defined(USE_TRIAL_LATENCY_HISTOGRAM)
+    res.addTrialLatency(trial_end_ts - trial_start_ts);
+#endif
+}
+
+
+/**
+ * Helper function.
+ */
+void log_timestamp_if_necessary_on_abort(
+    Result1& res, const uint64_t& trial_start_ts, uint64_t& trial_end_ts)
+{
+    unused(res, trial_start_ts, trial_end_ts);
+#if defined(USE_TRIAL_LATENCY_HISTOGRAM)
+    trial_end_ts = cybozu::time::rdtscp();
+    res.addTrialLatency(trial_end_ts - trial_start_ts);
+#endif
+}
+
+
+/**
  * For workloads with several kinds of long transactions.
  */
 struct Result2
