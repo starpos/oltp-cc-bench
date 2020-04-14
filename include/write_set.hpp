@@ -49,6 +49,7 @@ struct LocalValInfo
 
 /**
  * Lock object and localValInfo object.
+ * Lock object must be default constructible and movable.
  */
 template <typename Lock>
 struct OpEntry
