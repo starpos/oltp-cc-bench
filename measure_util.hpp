@@ -606,3 +606,28 @@ void initRecordVector(Vec& v, const Opt& opt)
     v.resize(opt.getNrMu());
 #endif
 }
+
+
+
+/**
+ * This is for debug.
+ * first item is used to store key.
+ * second item is used to store is_write value.
+ */
+using Access = std::pair<size_t, bool>;
+
+
+template <typename Ostream>
+Ostream& put_access_pattern(Ostream& os, const std::vector<Access>& access_pattern)
+{
+    if (access_pattern.empty()) return os;
+    {
+        const auto& ap = access_pattern[0];
+        os << fmtstr("%zu_%c", ap.first, (ap.second ? 'W' : 'R'));
+    }
+    for (size_t i = 1; i < access_pattern.size(); i++) {
+        const auto& ap = access_pattern[i];
+        os << fmtstr(", %zu_%c", ap.first, (ap.second ? 'W' : 'R'));
+    }
+    return os;
+}
