@@ -80,13 +80,14 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     size_t count = 0; unused(count);
     while (!loadAcquire(quit)) {
         size_t firstRecIdx = 0;
-        uint64_t t0 = 0;
-        if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
+        uint64_t t0 = -1, t1 = -1, t2 = -1;
+        log_timestamp_if_necessary_on_tx_start(t0, shared.usesBackOff);
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
             if (loadAcquire(quit)) break; // to quit under starvation.
             assert(lockSet.empty());
             rand.setState(randState);
+            log_timestamp_if_necessary_on_trial_start(t0, t1, t2, retry, shared.usesBackOff);
             for (size_t i = 0; i < realNrOp; i++) {
                 size_t key = getRecordIdx(rand, fastZipf, recV.size(), realNrOp, i, firstRecIdx);
                 Mode mode = getMode(rand, realNrOp, realNrWr, wrRatio, i);
@@ -108,13 +109,15 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
             }
             if (!lockSet.blindWriteLockAll()) goto abort;
             lockSet.updateAndUnlock();
+            log_timestamp_if_necessary_on_commit(res, t0, t1, t2);
             res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);
             break; // retry is not required.
 
           abort:
-            res.incAbort(isLongTx);
             lockSet.unlock();
+            log_timestamp_if_necessary_on_abort(res, t1, t2);
+            res.incAbort(isLongTx);
             if (shared.usesBackOff) backOff(t0, retry, rand);
             // continue
         }
