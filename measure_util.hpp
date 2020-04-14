@@ -22,6 +22,7 @@
 #include "inline.hpp"
 #include "zipf.hpp"
 #include "atomic_wrapper.hpp"
+#include "sleep.hpp"
 
 
 /**
@@ -35,20 +36,24 @@
 #endif
 
 /**
- * To enable latency histogram.
+ * To enable tx latency histogram.
  * This takes a bit overhead.
  */
 #if 0
-#define USE_LATENCY_HISTOGRAM
+#define USE_TX_LATENCY_HISTOGRAM
 #else
-#undef USE_LATENCY_HISTOGRAM
+#undef USE_TX_LATENCY_HISTOGRAM
 #endif
 
-
-void sleepMs(size_t ms)
-{
-    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-}
+/**
+ * To enable tx trial latency histogram.
+ * This takes a bit overhead.
+ */
+#if 0
+#define USE_TRIAL_LATENCY_HISTOGRAM
+#else
+#undef USE_TRIAL_LATENCY_HISTOGRAM
+#endif
 
 
 template <typename Random>
@@ -266,11 +271,12 @@ struct Histogram
             --max;
         }
         for (size_t i = 0; i <= 2; i++) {
-            os << i << ": " << data[i] << "\n";
+            os << i << " " << data[i] << "\n";
         }
         for (size_t i = 3; i < max; i++) {
-            os << "2^" << (i - 1) << ": " << data[i] << "\n";
+            os << "2^{" << (i - 1) << "} " << data[i] << "\n";
         }
+        // Gnuplot can parse the format like "2^{13}" well.
     }
 };
 
@@ -282,72 +288,20 @@ std::ostream& operator<<(std::ostream& os, const Histogram& h)
 }
 
 
-struct RetryCounts
-{
-    using Umap = std::unordered_map<size_t, size_t>;
-    using Pair = std::pair<size_t, size_t>;
-    Umap retryCounts;
-
-    void add(size_t nrRetry, size_t nr = 1) {
-        std::unordered_map<size_t, size_t>::iterator it = retryCounts.find(nrRetry);
-        if (it == retryCounts.end()) {
-            retryCounts.emplace(nrRetry, nr);
-        } else {
-            it->second += nr;
-        }
-    }
-    void merge(const RetryCounts& rhs) {
-        for (const Umap::value_type& p : rhs.retryCounts) {
-            add(p.first, p.second);
-        }
-    }
-    friend std::ostream& out(std::ostream& os, const RetryCounts& rc, bool verbose) {
-        std::vector<Pair> v;
-        v.reserve(rc.retryCounts.size());
-        for (const Umap::value_type& p : rc.retryCounts) {
-            v.push_back(p);
-        }
-        std::sort(v.begin(), v.end());
-
-#ifdef USE_RETRY_COUNT
-        if (verbose) {
-            for (const Pair& p : v) {
-                os << cybozu::util::formatString("%5zu %zu\n", p.first, p.second);
-            }
-        } else {
-            if (!v.empty()) {
-                os << cybozu::util::formatString("max_retry %zu", v.back().first);
-            } else {
-                os << "max_retry 0";
-            }
-        }
-#else
-        unused(verbose);
-#endif
-        return os;
-    }
-    friend std::ostream& operator<<(std::ostream& os, const RetryCounts& rc) {
-        return out(os, rc, true);
-    }
-    std::string str(bool verbose = true) const {
-        std::stringstream ss;
-        out(ss, *this, verbose);
-        return ss.str();
-    }
-};
-
-
 struct Result1
 {
-    RetryCounts rcS;
-    RetryCounts rcL;
-    Histogram latencyH;
+    Histogram retryCountH;
+    Histogram txLatencyH;
+    Histogram trialLatencyH;
+
     size_t value[6];
-    Result1() : rcS(), rcL(), value() {}
+
+    Result1() : retryCountH(), txLatencyH(), trialLatencyH(), value() {
+    }
     void operator+=(const Result1& rhs) {
-        rcS.merge(rhs.rcS);
-        rcL.merge(rhs.rcL);
-        latencyH.merge(rhs.latencyH);
+        retryCountH.merge(rhs.retryCountH);
+        txLatencyH.merge(rhs.txLatencyH);
+        trialLatencyH.merge(rhs.trialLatencyH);
         for (size_t i = 0; i < 6; i++) {
             value[i] += rhs.value[i];
         }
@@ -360,17 +314,20 @@ struct Result1
     void addRetryCount(bool isLongTx, size_t nrRetry) {
         unused(isLongTx, nrRetry);
 #ifdef USE_RETRY_COUNT
-        if (isLongTx) {
-            rcL.add(nrRetry);
-        } else {
-            rcS.add(nrRetry);
-        }
+        // TODO: distinguish short/long tx.
+        retryCountH.add(nrRetry);
 #endif
     }
-    void addLatency(size_t latency) {
+    void addTxLatency(size_t latency) {
         unused(latency);
-#ifdef USE_LATENCY_HISTOGRAM
-        latencyH.add(latency);
+#ifdef USE_TX_LATENCY_HISTOGRAM
+        txLatencyH.add(latency);
+#endif
+    }
+    void addTrialLatency(size_t latency) {
+        unused(latency);
+#ifdef USE_TRIAL_LATENCY_HISTOGRAM
+        trialLatencyH.add(latency);
 #endif
     }
     friend std::ostream& operator<<(std::ostream& os, const Result1& res) {
@@ -380,10 +337,13 @@ struct Result1
             , res.value[2], res.value[3]
             , res.value[4], res.value[5]);
 #ifdef USE_RETRY_COUNT
-        os << "\n" << "  " << res.rcS << "  " << res.rcL;
+        os << "\nRETRY_COUNT_HISTOGRAM\n" << res.retryCountH;
 #endif
-#ifdef USE_LATENCY_HISTOGRAM
-        os << "\n" << res.latencyH;
+#ifdef USE_TX_LATENCY_HISTOGRAM
+        os << "\nTX_LATENCY_HISTOGRAM\n" << res.txLatencyH;
+#endif
+#ifdef USE_TRIAL_LATENCY_HISTOGRAM
+        os << "\nTRIAL_LATENCY_HISTOGRAM\n" << res.trialLatencyH;
 #endif
         return os;
     }
@@ -473,7 +433,7 @@ void waitForAllTrue(const std::vector<uint8_t>& v)
         if (std::all_of(v.cbegin(), v.cend(), [](const uint8_t& b) { return loadAcquire(b) != 0; })) {
             break;
         }
-        sleepMs(100);
+        sleep_ms(100);
     }
 }
 
@@ -508,7 +468,7 @@ void runExec(const CmdLineOption& opt, SharedData& shared, Worker&& worker, Resu
         if (opt.verbose) {
             ::printf("%zu\n", i);
         }
-        sleepMs(1000);
+        sleep_ms(1000);
         sec++;
         if (shouldQuit) break;
     }
@@ -529,26 +489,26 @@ void runExec(const CmdLineOption& opt, SharedData& shared, Worker&& worker, Resu
 
 
 /**
- * t0: tx begging time.
- * retry: 0 in the first trial.
+ * trial_start_ts: the latest ts will be set.
+ * retry: 0 in the first trial. This is used for the seed of random value generator.
  */
 template <typename Random>
-void backOff(uint64_t& t0, size_t retry, Random& rand)
+void backOff(uint64_t& trial_start_ts, size_t retry, Random& rand)
 {
-    const uint64_t t1 = cybozu::time::rdtscp();
-    const uint64_t tdiff = std::max<uint64_t>(t1 - t0, 2);
+    const uint64_t trial_end_ts = cybozu::time::rdtscp();
+    const uint64_t tdiff = std::max<uint64_t>(trial_end_ts - trial_start_ts, 2);
     auto randState = rand.getState();
     randState += retry;
     rand.setState(randState);
     const uint64_t maxWaitTic = (tdiff << std::min<size_t>(retry + 1, 4)) + 1;
     const uint64_t waitTic = rand() % maxWaitTic;
     //uint64_t waitTic = rand() % (tdiff << 18);
-    uint64_t t2 = t1;
-    while (t2 - t1 < waitTic) {
+    uint64_t ts = trial_end_ts;
+    while (ts - trial_end_ts < waitTic) {
         _mm_pause();
-        t2 = cybozu::time::rdtscp();
+        ts = cybozu::time::rdtscp();
     }
-    t0 = t2;
+    trial_start_ts = ts;
 }
 
 
