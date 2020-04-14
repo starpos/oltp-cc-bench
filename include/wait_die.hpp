@@ -609,7 +609,7 @@ private:
 class LockSet
 {
 public:
-#if 0
+#if 1
     using Lock = WaitDieLock2<Max_cumulo_readers>;
 #else
     using Lock = WaitDieLock3;
