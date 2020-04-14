@@ -55,23 +55,9 @@ struct Shared
 };
 
 
-#if 0
-std::atomic<size_t> g_cas_success(0);
-std::atomic<size_t> g_cas_total(0);
-std::atomic<size_t> g_retry_total(0);
-std::atomic<size_t> g_tx_success(0);
-std::atomic<size_t> g_ts_total(0);
-#endif
-
-
 template <int txIdGenType>
 Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
-#if 0
-    cybozu::wait_die::cas_success = 0;
-    cybozu::wait_die::cas_total = 0;
-#endif
-
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
@@ -106,13 +92,6 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 
     lockSet.init(shared.payload, realNrOp);
 
-
-#if 0
-    uint64_t ts_total = 0;
-    uint64_t nr_success = 0;
-    uint64_t retry_total = 0;
-#endif
-
     storeRelease(ready, 1);
     while (!loadAcquire(start)) _mm_pause();
     size_t count = 0; unused(count);
@@ -131,20 +110,14 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
         }
         lockSet.setTxId(txId);
         size_t firstRecIdx;
-        uint64_t t0;
-        if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
-#if 0
-        uint64_t ts[3];
-        ts[0] = cybozu::time::rdtscp();
-#endif
+        uint64_t t0 = -1, t1 = -1, t2 = -1; // -1 for debug.
+        log_timestamp_if_necessary_on_tx_start(t0, shared.usesBackOff);
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
             if (loadAcquire(quit)) break; // to quit under starvation.
             assert(lockSet.empty());
             rand.setState(randState);
-#if 0
-            ts[1] = cybozu::time::rdtscp();
-#endif
+            log_timestamp_if_necessary_on_trial_start(t0, t1, t2, retry, shared.usesBackOff);
             for (size_t i = 0; i < realNrOp; i++) {
                 size_t key = getRecordIdx(rand, fastZipf, recV.size(), realNrOp, i, firstRecIdx);
                 Mode mode = getMode(rand, realNrOp, realNrWr, wrRatio, i);
@@ -165,35 +138,19 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
             }
             if (!lockSet.blindWriteLockAll()) goto abort;
             lockSet.updateAndUnlock();
+            log_timestamp_if_necessary_on_commit(res, t0, t1, t2);
             res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);
-#if 0
-            ts[2] = cybozu::time::rdtscp();
-            ts_total += ts[2] - ts[0];
-            nr_success++;
-            retry_total += retry;
-#endif
-            //::printf("last trial latency %" PRIu64 " total latency %" PRIu64 "\n", ts[2] - ts[1], ts[2] - ts[0]);
             break; // retry is not required.
 
           abort:
             lockSet.unlock();
+            log_timestamp_if_necessary_on_abort(res, t1, t2);
             res.incAbort(isLongTx);
-            if (shared.usesBackOff) backOff(t0, retry, rand);
+            if (shared.usesBackOff) backOff(t1, retry, rand);
             // continue
         }
     }
-
-#if 0
-    g_cas_success += cybozu::wait_die::cas_success;
-    g_cas_total += cybozu::wait_die::cas_total;
-    g_retry_total += retry_total;
-    g_tx_success += nr_success;
-    g_ts_total += ts_total;
-#endif
-    //::printf("average latency %f\n", (double)ts_total / (double)nr_success);
-    //::printf("average retry %f\n", (double)retry_total / (double)nr_success);
-
     return res;
 }
 
@@ -309,64 +266,6 @@ Result2 worker3(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 }
 
 
-void runTest()
-{
-#if 0
-    //for (size_t nrResPerTh : {40}) {
-    //for (size_t nrResPerTh : {4, 4000}) {
-    for (size_t nrResPerTh : {4000}) {
-        for (size_t nrTh : {32}) {
-            //for (size_t nrTh = 1; nrTh <= 32; nrTh++) {
-            if (nrTh > 2 && nrTh % 2 != 0) continue;
-            for (size_t i = 0; i < 10; i++) {
-                bool verbose = false;
-                runExec(nrResPerTh * nrTh, nrTh, 10, verbose, 0, 4, 2);
-                //sleepMs(1000);
-            }
-        }
-    }
-#endif
-#if 0
-    // high-contention expr.
-    for (size_t nrMutex : {40}) {
-        //for (size_t nrTh = 1; nrTh <= 32; nrTh++) {
-        for (size_t nrTh : {8, 16, 24, 32}) {
-            if (nrTh > 16 && nrTh % 2 != 0) continue;
-            const size_t nrOp = 10;
-            for (size_t nrWr = 0; nrWr <= nrOp; nrWr++) {
-                for (size_t i = 0; i < 10; i++) {
-                    bool verbose = false;
-                    runExec(nrMutex, nrTh, 10, verbose, 0, nrOp, nrWr);
-                }
-            }
-        }
-    }
-#endif
-#if 0
-    runExec(5000, 8, 10, true);
-#endif
-#if 0
-    // starvation expr.
-    //const size_t nrMutex = 400 * 1000 * 1000;
-    //const size_t nrTh = 16;
-    const size_t nrMutex = 40 * 1000;
-    const size_t nrTh = 8;
-    //for (size_t longTxPct : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 50, 60}) {
-    for (size_t longTxPml : {1, 2, 3, 4, 5, 6, 7, 8, 9,
-                10, 20, 30, 40, 50, 60, 70, 80, 90,
-                100, 200, 300, 400, 500, 600, 700, 800, 900, 1000}) {
-        const size_t longTxSize = longTxPml * nrMutex / 1000;
-        for (size_t i = 0; i < 10; i++) {
-            bool verbose = false;
-            //size_t maxSec = longTxPml >= 50 ? 50000 : 100;
-            size_t maxSec = 100;
-            runExec(nrMutex, nrTh, maxSec, verbose, longTxSize);
-            sleepMs(1000);
-        }
-    }
-#endif
-}
-
 struct CmdLineOptionPlus : CmdLineOption
 {
     using base = CmdLineOption;
@@ -463,15 +362,6 @@ int main(int argc, char *argv[]) try
     } else {
         throw cybozu::Exception("bad workload.") << opt.workload;
     }
-
-#if 0
-    ::printf("CAS success %zu total %zu  rate %f\n"
-             , g_cas_success.load(), g_cas_total.load()
-             , (double)(g_cas_success.load()) / (double)g_cas_total.load());
-    ::printf("average retry %f\n", (double)g_retry_total.load() / (double)g_tx_success.load());
-    ::printf("average latency %f\n", (double)g_ts_total.load() / (double)g_tx_success.load());
-#endif
-
 } catch (std::exception& e) {
     ::fprintf(::stderr, "exeption: %s\n", e.what());
 } catch (...) {
