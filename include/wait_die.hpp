@@ -174,7 +174,6 @@ public:
         for (;;) {
             _mm_pause();
             if (mu0.write_locked || mu0.readers != 0) {
-                assert(mu0.tx_id != tx_id);
                 if (mu0.tx_id < tx_id) return false; // die
                 mu0 = mutex.load();
                 continue; // wait
