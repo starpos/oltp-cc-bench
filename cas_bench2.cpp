@@ -112,7 +112,7 @@ void runBenchmark(Worker &&worker, const char *name, size_t nrTh, size_t nrSec)
     }
     thSet.start();
     start = true;
-    sleepMs(1000 * nrSec);
+    sleep_ms(1000 * nrSec);
     quit = true;
     thSet.join();
 

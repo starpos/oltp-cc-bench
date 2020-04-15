@@ -141,7 +141,7 @@ void runTest()
             if (nrTh > 2 && nrTh % 2 != 0) continue;
             for(size_t i = 0; i < 10; i++) {
                 runExec(nrResPerTh * nrTh, nrTh, 10, false, 0, nrOp, 0);
-                //sleepMs(1000);
+                //sleep_ms(1000);
             }
         }
     }

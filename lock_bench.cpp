@@ -102,7 +102,7 @@ void runExec(size_t nrMutex, size_t nrTh, size_t runSec, bool verbose, size_t lo
     size_t sec = 0;
     for (size_t i = 0; i < runSec; i++) {
         if (verbose) ::printf("%zu\n", i);
-        sleepMs(1000);
+        sleep_ms(1000);
         sec++;
         if (shouldQuit) break;
     }
@@ -138,7 +138,7 @@ int main()
             for (size_t i = 0; i < 20; i++) {
                 bool verbose = false;
                 runExec(nrResPerTh * nrTh, nrTh, 10, verbose, 0);
-                //sleepMs(1000);
+                //sleep_ms(1000);
             }
         }
     }
@@ -180,7 +180,7 @@ int main()
             //size_t maxSec = longTxPct >= 5 ? 50000 : 100;
             size_t maxSec = 100;
             runExec(nrMutex, nrTh, maxSec, verbose, longTxSize);
-            //sleepMs(1000);
+            //sleep_ms(1000);
         }
     }
 #endif

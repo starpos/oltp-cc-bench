@@ -43,7 +43,7 @@ void runExec(size_t nrTh, size_t runSec, bool verbose)
     start = true;
     for (size_t i = 0; i < runSec; i++) {
         if (verbose) ::printf("%zu\n", i);
-        sleepMs(1000);
+        sleep_ms(1000);
     }
     quit = true;
     thS.join();
@@ -65,7 +65,7 @@ int main()
         for (size_t i = 0; i < 10; i++) {
             bool verbose = false;
             runExec(nrTh, 10, verbose);
-            sleepMs(1000);
+            sleep_ms(1000);
         }
     }
 #endif

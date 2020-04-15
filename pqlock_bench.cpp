@@ -103,7 +103,7 @@ size_t worker(size_t idx, bool& start, bool& quit, std::vector<typename PQLock::
 #endif
 
 #if 0
-        sleepMs(500);
+        sleep_ms(500);
 #endif
         unused(resV);
 #if 0
@@ -157,7 +157,7 @@ void runExecT(size_t nrRes, size_t nrTh, size_t runSec, bool verbose, LockType l
         if (verbose) {
             ::printf("%zu %u\n", i, txIdGen.sniff());
         }
-        sleepMs(1000);
+        sleep_ms(1000);
     }
     quit = true;
     thS.join();

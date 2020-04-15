@@ -231,7 +231,7 @@ void runTest()
             for(size_t i = 0; i < 10; i++) {
                 bool verbose = false;
                 runExec(nrResPerTh * nrTh, nrTh, 10, verbose, 0, 4, 0);
-                //sleepMs(1000);
+                //sleep_ms(1000);
             }
         }
     }
@@ -271,7 +271,7 @@ void runTest()
             bool verbose = false;
             size_t maxSec = 100;
             runExec(nrMutex, nrTh, maxSec, verbose, longTxSize);
-            sleepMs(1000);
+            sleep_ms(1000);
         }
     }
 #endif

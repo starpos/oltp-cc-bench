@@ -133,10 +133,10 @@ void run_exec(const Option& opt)
     for (size_t i = 0; i < opt.nr_threads; i++) {
         th_v.emplace_back(worker, i, std::ref(shared));
     }
-    sleepMs(100);
+    sleep_ms(100);
     storeRelease(shared.started, true);
     for (size_t i = 0; i < opt.run_period; i++) {
-        sleepMs(1000);
+        sleep_ms(1000);
     }
     storeRelease(shared.quit, true);
     for (auto& th : th_v) th.join();

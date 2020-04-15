@@ -59,7 +59,7 @@ void runExec(size_t nrTh, uint8_t allocBits, size_t nrTxIdGen, size_t runSec, bo
         if (verbose) {
             ::printf("%zu %u\n", i, txIdGen[0].sniff());
         }
-        sleepMs(1000);
+        sleep_ms(1000);
     }
     quit = true;
     thS.join();
@@ -110,7 +110,7 @@ void runExec2(size_t nrTh, size_t runSec, bool verbose)
         if (verbose) {
             ::printf("%zu\n", i);
         }
-        sleepMs(1000);
+        sleep_ms(1000);
     }
     quit = true;
     thS.join();
@@ -141,7 +141,7 @@ int main()
         for (uint8_t allocBits : {2, 6, 10, 14}) {
             for(size_t i = 0; i < 10; i++) {
                 runExec(nrTh, allocBits, 1, 10, false);
-                sleepMs(1000);
+                sleep_ms(1000);
             }
         }
     }
@@ -150,7 +150,7 @@ int main()
     for (size_t nrTh = 1; nrTh <= 24; nrTh++) {
         for(size_t i = 0; i < 10; i++) {
             runExec(nrTh, 0, 10, false);
-            sleepMs(1000);
+            sleep_ms(1000);
         }
     }
 #endif
@@ -163,7 +163,7 @@ int main()
     for (size_t nrTh = 1; nrTh <= 24; nrTh++) {
         for(size_t i = 0; i < 10; i++) {
             runExec2(nrTh, 10, false);
-            sleepMs(1000);
+            sleep_ms(1000);
         }
     }
 #endif
