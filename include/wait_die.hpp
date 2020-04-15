@@ -37,6 +37,8 @@ constexpr uint32_t Max_readers = (1 << Readers_bits) - 1;
  * Smaller values of Threshold_cumulo_readers are expected to reduce
  * lock waiting time of transactions with higher priority.
  * We have not found the efficiency of Threshold_cumulo_readers yet.
+ *
+ * This is not fair locking protocol too.
  */
 template <size_t Threshold_cumulo_readers>
 struct WaitDieData2
@@ -284,6 +286,11 @@ private:
 
 /**
  * Simpler version with additional store for txids of readers.
+ *
+ * Comparing with WaitDieData2/WaitDieLock2, this takes more change to wait lock instead abort.
+ * Its disadvantage is overhead.
+ *
+ * This is not fair locking protocol too.
  */
 struct WaitDieData3
 {
