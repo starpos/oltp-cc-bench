@@ -37,3 +37,4 @@ test_acquire_release
 test_memory_barrier
 test_histogram
 test_llsc
+test_wait_die
