@@ -129,13 +129,8 @@ public:
         node->next = head_;
         head_ = node;
     }
-    Node* front() const {
-        return head_;
-    }
-    /**
-     * debug
-     */
-    Node* tail() const { return tail_; }
+    Node* front() const { return head_; }
+    Node* back() const { return tail_; }
     void pop_front() {
         assert(size_ > 0);
         size_--;
@@ -158,7 +153,20 @@ public:
         }
         node_list.init();
     }
-    bool empty() const { return size_ == 0; }
+    bool empty() const {
+#if 0
+        return size_ == 0;
+#else
+        return head_ == nullptr;
+#endif
+    }
+    bool size_is_one() const {
+#if 0
+        return size_ == 1;
+#else
+        return !empty() && head_ == tail_;
+#endif
+    }
     size_t size() const { return size_; }
 
     /**
@@ -184,6 +192,22 @@ public:
             if (node != nullptr) node = node->next;
         }
         ::printf("tail: %p\n", tail_);
+    }
+    /**
+     * debug
+     */
+    template <typename Ostream>
+    void out(Ostream& os) const {
+        // TODO
+        os << " ";
+    }
+    /**
+     * debug
+     */
+    template <typename Ostream>
+    friend Ostream& operator<<(Ostream& os, const NodeListT& list) {
+        list.out(os);
+        return os;
     }
     /**
      * debug
