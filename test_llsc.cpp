@@ -1,5 +1,6 @@
 #include <thread>
 #include <cinttypes>
+#include <vector>
 #include "arch.hpp"
 #include "sleep.hpp"
 #include "atomic_wrapper.hpp"
