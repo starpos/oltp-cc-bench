@@ -1,67 +1,141 @@
+/**
+ * Thin wrappers of atomic builtin.
+ */
 #pragma once
+#include <cinttypes>
+#include <type_traits>
+#include <cstring>
 #include "inline.hpp"
 
-// Thin wrappers of atomic builtin.
 
-template <typename Int>
-INLINE Int load(Int& m)
+/**
+ * Convert a trivially_copyable type to the corresponding unsigned type
+ * for builtin atomic operations to support non-scalar types.
+ */
+template <typename T, typename Enable = void>
+struct to_uint_type {};
+
+template <typename T>
+struct to_uint_type<T, std::enable_if_t<sizeof(T) == 1> > { using type = uint8_t; };
+
+template <typename T>
+struct to_uint_type<T, std::enable_if_t
+                    <sizeof(T) == 2 && alignof(uint16_t) <= alignof(T)> >
+{ using type = uint16_t; };
+
+template <typename T>
+struct to_uint_type<T, std::enable_if_t
+                    <sizeof(T) == 4 && alignof(uint32_t) <= alignof(T)> >
+{ using type = uint32_t; };
+
+
+template <typename T>
+struct to_uint_type<T, std::enable_if_t
+                    <sizeof(T) == 8 && alignof(uint64_t) <= alignof(T)> >
+{ using type = uint64_t; };
+
+template <typename T>
+struct to_uint_type<T, std::enable_if_t
+                    <sizeof(T) == 16 && alignof(uint64_t) <= alignof(T)> >
+{ using type = __uint128_t; };
+
+
+template <typename T>
+INLINE T load(const T& m, int order = __ATOMIC_RELAXED)
 {
-    return __atomic_load_n(&m, __ATOMIC_RELAXED);
+    static_assert(std::is_trivially_copyable_v<T>);
+    using Int = typename to_uint_type<T>::type;
+    Int tmp = __atomic_load_n((Int*)&m, order);
+    return *(T*)&tmp;
 }
 
 
-template <typename Int>
-INLINE Int load_acquire(Int& m)
+template <typename T>
+INLINE T load_acquire(const T& m)
 {
-    return __atomic_load_n(&m, __ATOMIC_ACQUIRE);
+    return load(m, __ATOMIC_ACQUIRE);
 }
 
 
-template <typename Int0, typename Int1>
-INLINE void store(Int0& m, Int1 v)
+template <typename T0, typename T1>
+INLINE void store(T0& m, T1 v, int order = __ATOMIC_RELAXED)
 {
-    __atomic_store_n(&m, (Int0)v, __ATOMIC_RELAXED);
+    static_assert(std::is_trivially_copyable_v<T0>);
+    static_assert(std::is_trivially_copyable_v<T1>);
+    using Int = typename to_uint_type<T0>::type;
+    __atomic_store_n((Int*)&m, (Int)v, order);
 }
 
 
-template <typename Int0, typename Int1>
-INLINE void store_release(Int0& m, Int1 v)
+template <typename T0, typename T1>
+INLINE void store_release(T0& m, T1 v)
 {
-    __atomic_store_n(&m, (Int0)v, __ATOMIC_RELEASE);
+    store(m, v, __ATOMIC_RELEASE);
 }
 
 
-template <typename Int0, typename Int1>
-INLINE Int0 exchange(Int0& m, Int1 v, int mode = __ATOMIC_ACQ_REL) {
-    return __atomic_exchange_n(&m, v, mode);
-}
-
-
-#define exchange_acquire(m, v) exchange(m, v, __AOTMIC_ACQUIRE)
-#define exchange_release(m, v) exchange(m, v, __AOTMIC_RELEASE)
-
-
-template <typename Int0, typename Int1>
-INLINE bool compare_exchange(Int0& m, Int0& before, Int1 after, int mode = __ATOMIC_ACQ_REL, int fail_mode = __ATOMIC_ACQUIRE) {
-    return __atomic_compare_exchange_n(&m, &before, (Int0)after, false, mode, fail_mode);
-}
-
-
-#define compare_exchange_acquire(m, b, a) compare_exchange(m, b, a, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)
-#define compare_exchange_release(m, b, a) compare_exchange(m, b, a, __ATOMIC_RELEASE, __ATOMIC_RELAXED)
-
-
-template <typename Int0, typename Int1>
-INLINE Int0 fetch_add(Int0& m, Int1 v, int mode = __ATOMIC_ACQ_REL)
+template <typename T0, typename T1>
+INLINE T0 exchange(T0& m, T1 v, int mode = __ATOMIC_ACQ_REL)
 {
-    return __atomic_fetch_add(&m, static_cast<Int0>(v), mode);
+    static_assert(std::is_trivially_copyable_v<T0>);
+    static_assert(std::is_trivially_copyable_v<T1>);
+    using Int = typename to_uint_type<T0>::type;
+    Int tmp = __atomic_exchange_n((Int*)&m, (Int)v, mode);
+    return *(T0*)&tmp;
 }
 
 
-template <typename Int0, typename Int1>
-INLINE Int0 fetch_sub(Int0& m, Int1 v, int mode = __ATOMIC_ACQ_REL)
+template <typename T0, typename T1>
+INLINE T0 exchange_acquire(T0& m, T1 v) { return exchange(m, v, __ATOMIC_ACQUIRE); }
+
+template <typename T0, typename T1>
+INLINE T0 exchange_release(T0& m, T1 v) { return exchange(m, v, __ATOMIC_RELEASE); }
+
+
+template <typename T0, typename T1>
+INLINE bool compare_exchange(
+    T0& m, T0& before, T1 after,
+    int mode = __ATOMIC_ACQ_REL, int fail_mode = __ATOMIC_ACQUIRE)
 {
-    return __atomic_fetch_sub(&m, static_cast<Int0>(v), mode);
+    static_assert(std::is_trivially_copyable_v<T0>);
+    static_assert(std::is_trivially_copyable_v<T1>);
+    using Int = typename to_uint_type<T0>::type;
+    return __atomic_compare_exchange_n(
+        (Int*)&m, (Int*)&before, (Int)after, false, mode, fail_mode);
+}
+
+
+template <typename T0, typename T1>
+INLINE bool compare_exchange_acquire(T0& m, T0& before, T1 after)
+{
+    return compare_exchange(m, before, after, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+}
+
+
+template <typename T0, typename T1>
+INLINE bool compare_exchange_release(T0& m, T0& before, T1 after)
+{
+    return compare_exchange(m, before, after, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+}
+
+
+template <typename T0, typename T1>
+INLINE T0 fetch_add(T0& m, T1 v, int mode = __ATOMIC_ACQ_REL)
+{
+    static_assert(std::is_trivially_copyable_v<T0>);
+    static_assert(std::is_trivially_copyable_v<T1>);
+    using Int = typename to_uint_type<T0>::type;
+    return (T0)__atomic_fetch_add((Int*)&m, (Int)v, mode);
+}
+
+
+template <typename T0, typename T1>
+INLINE T0 fetch_sub(T0& m, T1 v, int mode = __ATOMIC_ACQ_REL)
+{
+    static_assert(std::is_trivially_copyable_v<T0>);
+    static_assert(std::is_trivially_copyable_v<T1>);
+    using Int = typename to_uint_type<T0>::type;
+    return (T0)__atomic_fetch_sub((Int*)&m, (Int)v, mode);
 }
 
 
