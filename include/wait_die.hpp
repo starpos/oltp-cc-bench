@@ -127,7 +127,7 @@ static_assert(sizeof(WaitDieData2<1>) == sizeof(uint64_t));
 
 
 template <size_t Threshold_cumulo_readers>
-struct WaitDieLock2
+struct WaitDieLock2T
 {
     using Mode = cybozu::lock::LockStateXS::Mode;
     using Mutex = WaitDieData2<Threshold_cumulo_readers>;
@@ -138,12 +138,12 @@ private:
     TxId tx_id_;
 
 public:
-    INLINE WaitDieLock2() noexcept : mutexp_(nullptr), mode_(Mode::INVALID), tx_id_(MAX_TXID) {}
-    INLINE ~WaitDieLock2() noexcept { unlock(); }
-    INLINE WaitDieLock2(const WaitDieLock2& ) = delete;
-    INLINE WaitDieLock2(WaitDieLock2&& rhs) noexcept : WaitDieLock2() { swap(rhs); }
-    INLINE WaitDieLock2& operator=(const WaitDieLock2& rhs) = delete;
-    INLINE WaitDieLock2& operator=(WaitDieLock2&& rhs) noexcept { swap(rhs); return *this; }
+    INLINE WaitDieLock2T() noexcept : mutexp_(nullptr), mode_(Mode::INVALID), tx_id_(MAX_TXID) {}
+    INLINE ~WaitDieLock2T() noexcept { unlock(); }
+    INLINE WaitDieLock2T(const WaitDieLock2T& ) = delete;
+    INLINE WaitDieLock2T(WaitDieLock2T&& rhs) noexcept : WaitDieLock2T() { swap(rhs); }
+    INLINE WaitDieLock2T& operator=(const WaitDieLock2T& rhs) = delete;
+    INLINE WaitDieLock2T& operator=(WaitDieLock2T&& rhs) noexcept { swap(rhs); return *this; }
 
     /**
      * This is for blind-write.
@@ -285,7 +285,7 @@ private:
         mode_ = Mode::INVALID;
         tx_id_ = MAX_TXID;
     }
-    INLINE void swap(WaitDieLock2& rhs) noexcept {
+    INLINE void swap(WaitDieLock2T& rhs) noexcept {
         std::swap(mutexp_, rhs.mutexp_);
         std::swap(mode_, rhs.mode_);
         std::swap(tx_id_, rhs.tx_id_);
@@ -297,6 +297,9 @@ private:
         assert(tx_id_ != MAX_TXID);
     }
 };
+
+
+using WaitDieLock2 = WaitDieLock2T<Max_cumulo_readers>;
 
 
 /**
@@ -1213,7 +1216,7 @@ class LockSet
 {
 public:
 #if 0
-    using Lock = WaitDieLock2<Max_cumulo_readers>;
+    using Lock = WaitDieLock2;
 #elif 0
     using Lock = WaitDieLock3;
 #elif 1
