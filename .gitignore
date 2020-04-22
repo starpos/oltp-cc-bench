@@ -38,3 +38,4 @@ test_memory_barrier
 test_histogram
 test_llsc
 test_wait_die
+test_node_list
