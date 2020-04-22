@@ -24,6 +24,7 @@
 #include "vector_payload.hpp"
 #include "cache_line_size.hpp"
 #include "list_util.hpp"
+#include "mcslikelock.hpp"
 
 
 namespace cybozu {
@@ -801,6 +802,8 @@ enum Message : uint8_t
  */
 struct Request
 {
+    using Message = Message;
+
     alignas(CACHE_LINE_SIZE)
     Request* next;  // for linked list as a request queue.
 
@@ -812,6 +815,7 @@ struct Request
 
     // Current lock data should be set before enquing the request.
     // If the request is successfully done, new lockdata will be set.
+    // Only the owner can access this member.
     LockData ld;
 
     /**
@@ -847,16 +851,24 @@ struct Request
 
     INLINE bool operator<(const Request& rhs) const noexcept { return ord_id < rhs.ord_id; }
 
+    INLINE Request* get_next_ptr() {
+        Request* next0;
+        while ((next0 = load(next)) == nullptr) _mm_pause();
+        return next0;
+    }
+    INLINE void notify(Message msg0) { store_release(msg, msg0); }
+
+    INLINE void set_next(Request* next0) { store_release(next, next0); }
+    INLINE void delegate_ownership() { notify(OWNER); }
+    INLINE void wait_for_ownership() {
+        Message msg0 = local_spin_wait();
+        unused(msg0); assert(msg0 == OWNER);
+    }
     INLINE Message local_spin_wait() {
         Message msg0;
         while ((msg0 = load_acquire(msg)) == WAITING) _mm_pause();
-        store_release(msg, WAITING);
+        store(msg, WAITING);
         return msg0;
-    }
-    INLINE Request* get_next_ptr() {
-        Request* next0;
-        while ((next0 = load_acquire(next)) == nullptr) _mm_pause();
-        return next0;
     }
 };
 
@@ -864,24 +876,17 @@ struct Request
 using ReqList = NodeListT<Request>;
 
 
-/**
- * These are tags stored in the tail pointer.
- * They never be the pointer value.
- */
-Request* const UNOWNED = (Request*)0;
-Request* const OWNED = (Request*)1;
-
 
 class Mutex
 {
     alignas(sizeof(uintptr_t))
-    Request* tail_;
+    uintptr_t tail_;
     // alignas(CACHE_LINE_SIZE)
     Request* head_;
     ReqList waiting_;
     MutexData md_;
 public:
-    INLINE Mutex() : tail_(UNOWNED), head_(nullptr), waiting_(), md_() {
+    INLINE Mutex() : tail_(mcslike::UNOWNED), head_(nullptr), waiting_(), md_() {
         md_.init();
     }
     /**
@@ -898,65 +903,144 @@ public:
     INLINE bool cas(MutexData& md0, MutexData md1) { return compare_exchange(md_, md0, md1); }
 #endif
 
+    INLINE bool do_request(Request& req) {
+        Message msg = mcslike::do_request_sync(
+            req, tail_, head_, [&](Request& tail) { owner_task(req, tail); });
+        assert(msg == DONE); unused(msg);
+        return req.succeeded;
+    }
+
+private:
+    INLINE void owner_task(Request& head, Request& tail) {
+        ReqList protect_list;
+        MutexData md0 = load();
+        bool version_changed = owner_process_unlock_requests(&head, &tail, protect_list, waiting_, md0);
+        owner_process_protect_requests(protect_list, md0);
+        owner_process_reserve_requests(waiting_, md0);
+        if (version_changed) owner_fail_checking_version_requests(waiting_);
+    }
     /**
-     * Enqueue an request.
-     *
+     * process unlock (unreserve and unprotect) operations.
+     * head and tail is included.
      * RETURN:
-     *   true if you have become owner.
-     *   The owner must call begin_owner_task(), do owner task, and then call end_owner_task().
+     *   true if version was updated.
+     *   false if version was unchanged.
      */
-    INLINE bool enqueue(Request& req) {
-        Request* prev = exchange(tail_, &req);
-        if (prev == UNOWNED) {
+    INLINE bool owner_process_unlock_requests(Request* head, Request* tail, ReqList& protect_list, ReqList& waiting_list, MutexData& md0) {
+        bool version_changed = false;
+        Request* req = head;
+        while (req != nullptr) {
+            Request* next = (req == tail ? nullptr : req->get_next_ptr());
+
+            // The following insert operations breaks req->next pointer.
+            if (req->type == RequestType::PROTECT) {
+                insert_sort<Request>(protect_list, req);
+            } else if (req->type == RequestType::UNLOCK) {
+                version_changed |= owner_process_one_unlock_request(*req, md0);
+                req->notify(DONE); // DO NOT touch the request from now.
+            } else {
+                insert_sort<Request>(waiting_list, req);
+            }
+            req = next;
+        }
+        return version_changed;
+    }
+    INLINE bool owner_process_one_unlock_request(Request& req, MutexData& md0) {
+        auto moc1 = MutexOpCreator(req.ld, md0).unlock_general();
+        assert(moc1.possible());
+        store(moc1.md);
+        md0 = moc1.md;
+        req.ld = moc1.ld;
+        ::store(req.succeeded, true);
+        return moc1.md.version != md0.version;
+    }
+    INLINE void owner_process_protect_requests(ReqList& protect_list, MutexData& md0) {
+        while (!protect_list.empty()) {
+            Request& req = *protect_list.front();
+            owner_process_one_protect_request(req, md0);
+            protect_list.pop_front(); // do this before notification.
+            req.notify(DONE);
+        }
+    }
+    INLINE void owner_process_one_protect_request(Request& req, MutexData& md0) {
+        assert(::load(req.type) == RequestType::PROTECT);
+        MutexOpCreator moc0(req.ld, md0);
+        MutexOpCreator moc1;
+        if (::load(req.checks_version)) moc1 = moc0.reserve<LockState::READ_MODIFY_WRITE, true>().protect<true>();
+        else moc1 = moc0.reserve<LockState::BLIND_WRITE, false>().protect<false>();
+        if (!moc1.possible()) {
+            ::store(req.succeeded, false);
+            return;
+        }
+        store(moc1.md);
+        md0 = moc1.md;
+        req.ld = moc1.ld;
+        ::store(req.succeeded, true);
+    }
+    INLINE void owner_process_reserve_requests(ReqList& waiting_list, MutexData& md0) {
+        while (!waiting_list.empty()) {
+            Request& req = *waiting_list.front();
+            if (!owner_process_one_reserve_request(req, md0)) return;
+            waiting_list.pop_front(); // do this before notification.
+            req.notify(DONE);
+        }
+    }
+    /**
+     * RETURN:
+     *   true if the request has been done (with success or failure).
+     */
+    INLINE bool owner_process_one_reserve_request(Request& req, MutexData& md0) {
+        MutexOpCreator moc0(req.ld, md0);
+        MutexOpCreator moc1;
+        switch(::load(req.type)) {
+        case RequestType::READ:
+            assert(req.ld.state == LockState::INIT || req.ld.state == LockState::READ);
+            if (::load(req.checks_version)) moc1 = moc0.reserve<LockState::READ, true>();
+            else moc1 = moc0.reserve<LockState::READ, false>();
+            break;
+        case RequestType::BLIND_WRITE:
+            assert(req.ld.state == LockState::PRE_BLIND_WRITE || req.ld.state == LockState::BLIND_WRITE);
+            // do not use req.checks_version.
+            moc1 = moc0.reserve<LockState::BLIND_WRITE, false>();
+            break;
+        case RequestType::READ_MODIFY_WRITE:
+            assert(req.ld.state == LockState::INIT || req.ld.state == LockState::READ || req.ld.state == LockState::READ_MODIFY_WRITE);
+            if (::load(req.checks_version)) moc1 = moc0.reserve<LockState::READ_MODIFY_WRITE, true>();
+            else moc1 = moc0.reserve<LockState::READ_MODIFY_WRITE, false>();
+            break;
+        default:
+            BUG();
+        }
+        if (moc1.capability == MUST_WAIT) {
+            return false;
+        }
+        if (moc1.capability == IMPOSSIBLE) {
+            ::store(req.succeeded, false);
             return true;
         }
-        if (prev == OWNED) {
-            store_release(head_, &req);
-            Message msg = req.local_spin_wait();
-            unused(msg); assert(msg == OWNER);
-            return true;
-        }
-        // prev is the pointer of the previous request.
-        store_release(prev->next, &req);
-        Message msg = req.local_spin_wait();
-        unused(msg); assert(msg == DONE);
-        return false;
-    }
-
-    /**
-     * The owner request itself is the head.
-     * The request queue contains at least one request, i.e., the owner itself.
-     *
-     * tail is the tail of the dequeued request list.
-     * If the request list includes one request, the tail indicates the owner.
-     *
-     * waiting should be an empty list.
-     */
-    INLINE void begin_owner_task(Request*& tail, ReqList& waiting) {
-        tail = exchange(tail_, OWNED);
-        assert(tail != UNOWNED); assert(tail != OWNED);
-        waiting = std::move(waiting_);
+        assert(moc1.possible());
+        store(moc1.md);
+        md0 = moc1.md;
+        req.ld = moc1.ld;
+        ::store(req.succeeded, true);
+        return true;
     }
     /**
-     * req is the owner itself.
-     * waiting will be the new head of the waiting list.
+     * Notify requests with failure that checks version unchanged.
      */
-    INLINE void end_owner_task(Request& req, ReqList&& waiting) {
-        waiting_ = std::move(waiting);
-
-        // This must be done during the request is owner.
-        const bool done = (req.msg == DONE);
-        ::store(req.msg, WAITING);
-
-        Request* tail = load_acquire(tail_);
-        if (tail != OWNED || !compare_exchange(tail_, tail, UNOWNED)) {
-            Request* head;
-            while ((head = load_acquire(head_)) == nullptr) _mm_pause();
-            ::store(head_, nullptr);
-            store_release(head->msg, OWNER); // release ownership.
+    INLINE void owner_fail_checking_version_requests(ReqList& waiting_list) {
+        ReqList tmp_list;
+        while (!waiting_list.empty()) {
+            Request& req = *waiting_list.front();
+            waiting_list.pop_front();
+            if (::load(req.checks_version)) {
+                ::store(req.succeeded, false);
+                req.notify(DONE);
+            } else {
+                tmp_list.push_back(&req);
+            }
         }
-        // The request is not the owner now.
-        if (!done) req.local_spin_wait();
+        waiting_list = std::move(tmp_list);
     }
 };
 
@@ -1127,154 +1211,13 @@ public:
 
 private:
     INLINE bool do_request(RequestType type, bool checks_version) {
+        assert(mutex_ != nullptr);
         req_.init(type, ld_, checks_version);
-        if (mutex_->enqueue(req_)) do_owner_task();
-        if (!req_.succeeded) return false;
-        ld_ = req_.ld;
-        return true;
-    }
-    /**
-     * Owner must do almost all the md modifying operations.
-     */
-    INLINE void do_owner_task() {
-        Request *tail;
-        ReqList waiting_list, protect_list;
-        mutex_->begin_owner_task(tail, waiting_list);
-        MutexData md0 = mutex_->load();
-        bool version_changed = owner_process_unlock_requests(&req_, tail, protect_list, waiting_list, md0);
-        owner_process_protect_requests(protect_list, md0);
-        owner_process_reserve_requests(waiting_list, md0);
-        if (version_changed) owner_fail_checking_version_requests(waiting_list);
-        mutex_->end_owner_task(req_, std::move(waiting_list));
-    }
-    /**
-     * process unlock (unreserve and unprotect) operations.
-     * head and tail is included.
-     * RETURN:
-     *   true if version was updated.
-     *   false if version was unchanged.
-     */
-    INLINE bool owner_process_unlock_requests(Request* head, Request* tail, ReqList& protect_list, ReqList& waiting_list, MutexData& md0) {
-        bool version_changed = false;
-        while (head != nullptr) {
-            if (head->type == RequestType::UNLOCK) {
-                version_changed |= owner_process_one_unlock_request(*head, md0);
-                // notification must be done later due to next pointer.
-            }
-            Request* next;
-            if (head != tail) {
-                next = head->get_next_ptr();
-            } else {
-                next = nullptr;
-            }
-            // The following insert operations breaks head->next pointer.
-            if (head->type == RequestType::PROTECT) {
-                insert_sort<Request>(protect_list, head);
-            } else if (head->type == RequestType::UNLOCK) {
-                store_release(head->msg, DONE); // notification. don't touch the request from now.
-            } else {
-                insert_sort<Request>(waiting_list, head);
-            }
-            head = next;
-        }
-        return version_changed;
-    }
-    INLINE bool owner_process_one_unlock_request(Request& req, MutexData& md0) {
-        auto moc1 = MutexOpCreator(req.ld, md0).unlock_general();
-        assert(moc1.possible());
-        mutex_->store(moc1.md);
-        md0 = moc1.md;
-        req.ld = moc1.ld;
-        req.succeeded = true;
-        return moc1.md.version != md0.version;
-    }
-    INLINE void owner_process_protect_requests(ReqList& protect_list, MutexData& md0) {
-        while (!protect_list.empty()) {
-            Request& req = *protect_list.front();
-            owner_process_one_protect_request(req, md0);
-            protect_list.pop_front(); // do this before notification.
-            store_release(req.msg, DONE);
-        }
-    }
-    INLINE void owner_process_one_protect_request(Request& req, MutexData& md0) {
-        assert(req.type == RequestType::PROTECT);
-        MutexOpCreator moc0(req.ld, md0);
-        MutexOpCreator moc1;
-        if (req.checks_version) moc1 = moc0.reserve<LockState::READ_MODIFY_WRITE, true>().protect<true>();
-        else moc1 = moc0.reserve<LockState::BLIND_WRITE, false>().protect<false>();
-        if (!moc1.possible()) {
-            req.succeeded = false;
-            return;
-        }
-        mutex_->store(moc1.md);
-        md0 = moc1.md;
-        req.ld = moc1.ld;
-        req.succeeded = true;
-    }
-    INLINE void owner_process_reserve_requests(ReqList& waiting_list, MutexData& md0) {
-        while (!waiting_list.empty()) {
-            Request& req = *waiting_list.front();
-            if (!owner_process_one_reserve_request(req, md0)) return;
-            waiting_list.pop_front(); // do this before notification.
-            store_release(req.msg, DONE);
-        }
-    }
-    /**
-     * RETURN:
-     *   true if the request has been done (with success or failure).
-     */
-    INLINE bool owner_process_one_reserve_request(Request& req, MutexData& md0) {
-        MutexOpCreator moc0(req.ld, md0);
-        MutexOpCreator moc1;
-        switch(req.type) {
-        case RequestType::READ:
-            assert(req.ld.state == LockState::INIT || req.ld.state == LockState::READ);
-            if (req.checks_version) moc1 = moc0.reserve<LockState::READ, true>();
-            else moc1 = moc0.reserve<LockState::READ, false>();
-            break;
-        case RequestType::BLIND_WRITE:
-            assert(req.ld.state == LockState::PRE_BLIND_WRITE || req.ld.state == LockState::BLIND_WRITE);
-            // do not use req.checks_version.
-            moc1 = moc0.reserve<LockState::BLIND_WRITE, false>();
-            break;
-        case RequestType::READ_MODIFY_WRITE:
-            assert(req.ld.state == LockState::INIT || req.ld.state == LockState::READ || req.ld.state == LockState::READ_MODIFY_WRITE);
-            if (req.checks_version) moc1 = moc0.reserve<LockState::READ_MODIFY_WRITE, true>();
-            else moc1 = moc0.reserve<LockState::READ_MODIFY_WRITE, false>();
-            break;
-        default:
-            BUG();
-        }
-        if (moc1.capability == MUST_WAIT) {
-            return false;
-        }
-        if (moc1.capability == IMPOSSIBLE) {
-            req.succeeded = false;
+        if (mutex_->do_request(req_)) {
+            ld_ = req_.ld;
             return true;
         }
-        assert(moc1.possible());
-        mutex_->store(moc1.md);
-        md0 = moc1.md;
-        req.ld = moc1.ld;
-        req.succeeded = true;
-        return true;
-    }
-    /**
-     * Notify requests with failure that checks version unchanged.
-     */
-    INLINE void owner_fail_checking_version_requests(ReqList& waiting_list) {
-        ReqList tmp_list;
-        while (!waiting_list.empty()) {
-            Request& req = *waiting_list.front();
-            waiting_list.pop_front();
-            if (req.checks_version) {
-                req.succeeded = false;
-                store_release(req.msg, DONE); // notification.
-            } else {
-                tmp_list.push_back(&req);
-            }
-        }
-        waiting_list = std::move(tmp_list);
+        return false;
     }
 };
 
