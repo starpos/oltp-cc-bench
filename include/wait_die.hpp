@@ -312,12 +312,6 @@ using WaitDieLock2 = WaitDieLock2T<Max_cumulo_readers>;
  */
 struct WaitDieData3
 {
-    /**
-     * Max number of readers is limited to Txids_size.
-     */
-    static constexpr size_t Txids_size = CACHE_LINE_SIZE / sizeof(TxId);
-    static_assert(Txids_size <= Max_readers);
-
     struct Header {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wattributes"
@@ -350,7 +344,7 @@ struct WaitDieData3
         INLINE bool is_locked() const noexcept { return tx_id != MAX_TXID; }
         INLINE bool is_write_locked() const noexcept { return is_locked() && readers == 0; }
         INLINE bool is_read_locked() const noexcept { return readers > 0; }
-        INLINE bool is_read_locked_full() const noexcept { return readers >= Txids_size; }
+        INLINE bool is_read_locked_full() const noexcept { return readers >= Max_txids; }
     };
     static_assert(sizeof(Header) == sizeof(uint64_t));
 
@@ -359,13 +353,17 @@ struct WaitDieData3
     /**
      * Transactions that have locks.
      * This is preallocated to eliminate benchmark overhead.
-     * The size of the vector is Txids_size.
      * You need to have the latch to access this vector.
      * The element value MAX_TXID means empty.
      */
-    std::vector<TxId> txids;
+    static constexpr size_t Reserved_size = 16; // for small payload.
+    static constexpr size_t Max_txids = (CACHE_LINE_SIZE - sizeof(Header) - Reserved_size) / sizeof(TxId);
+    static_assert(Max_txids <= Max_readers);
+    TxId txids2[Max_txids];
 
-    INLINE WaitDieData3() : header(), txids(Txids_size, MAX_TXID) {
+
+    INLINE WaitDieData3() : header(), txids2() {
+        for (size_t i = 0; i < Max_txids; i++) txids2[i] = MAX_TXID;
     }
 
     /** Wrappers of each atomic operation. */
@@ -384,9 +382,9 @@ struct WaitDieData3
      * return vector index.
      */
     INLINE size_t add_tx_id(TxId tx_id) noexcept {
-        for (size_t i = 0; i < Txids_size; i++) {
-            if (txids[i] == MAX_TXID) {
-                txids[i] = tx_id;
+        for (size_t i = 0; i < Max_txids; i++) {
+            if (txids2[i] == MAX_TXID) {
+                txids2[i] = tx_id;
                 return i;
             }
         }
@@ -395,13 +393,13 @@ struct WaitDieData3
         return SIZE_MAX;
     }
     INLINE void remove_tx_id(size_t idx) noexcept {
-        assert(idx < Txids_size);
-        txids[idx] = MAX_TXID;
+        assert(idx < Max_txids);
+        txids2[idx] = MAX_TXID;
     }
     INLINE TxId get_min_tx_id() const noexcept {
         TxId min_tx_id = MAX_TXID;
-        for (size_t i = 0; i < Txids_size; i++) {
-            min_tx_id = std::min(min_tx_id, txids[i]);
+        for (size_t i = 0; i < Max_txids; i++) {
+            min_tx_id = std::min(min_tx_id, txids2[i]);
         }
         return min_tx_id;
     }
