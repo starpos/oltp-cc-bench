@@ -1401,7 +1401,7 @@ public:
 private:
     INLINE typename Vec::iterator find_entry(uintptr_t key) {
         // at most 4KiB scan.
-        const size_t threshold = 4096 / sizeof(OpEntryL);
+        constexpr size_t threshold = 4096 / sizeof(OpEntryL);
         if (vec_.size() > threshold) {
             // create indexes.
             for (size_t i = index_.size(); i < vec_.size(); i++) {
