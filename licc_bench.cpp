@@ -206,9 +206,9 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     size_t factor = 1;
 #endif
 
-    storeRelease(ready, 1);
-    while (!loadAcquire(start)) _mm_pause();
-    while (!loadAcquire(quit)) {
+    store_release(ready, 1);
+    while (!load_acquire(start)) _mm_pause();
+    while (!load_acquire(quit)) {
 #if 0
         ordIdGen.epochId = epochGen.get();
         const uint32_t ordId = ordIdGen.ordId;
@@ -221,12 +221,10 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
         size_t firstRecIdx;
 
         uint64_t t0;
-        if (shared.usesBackOff) {
-            t0 = cybozu::time::rdtscp();
-        }
+        if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (loadAcquire(quit)) break; // to quit under starvation.
+            if (load_acquire(quit)) break; // to quit under starvation.
             assert(lockSet.is_empty());
             rand.setState(randState);
             //::printf("begin\n"); // QQQQQ
@@ -249,17 +247,17 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
                         (rmode == ReadMode::OCC) ||
                         (rmode == ReadMode::HYBRID && !isLongTx && retry == 0);
                     if (tryInvisibleRead) {
-                        if (!lockSet.optimistic_read(mutex, sharedValue, &value[0])) goto abort;
+                        if (unlikely(!lockSet.optimistic_read(mutex, sharedValue, &value[0]))) goto abort;
                     } else {
-                        if (!lockSet.pessimistic_read(mutex, sharedValue, &value[0])) goto abort;
+                        if (unlikely(!lockSet.pessimistic_read(mutex, sharedValue, &value[0]))) goto abort;
                     }
                 } else {
                     assert(mode == IMode::X);
                     if (usesRMW) {
-                        if (!lockSet.read_for_update(mutex, sharedValue, &value[0])) goto abort;
-                        if (!lockSet.write(mutex, sharedValue, &value[0])) goto abort;
+                        if (unlikely(!lockSet.read_for_update(mutex, sharedValue, &value[0]))) goto abort;
+                        if (unlikely(!lockSet.write(mutex, sharedValue, &value[0]))) goto abort;
                     } else {
-                        if (!lockSet.write(mutex, sharedValue, &value[0])) goto abort;
+                        if (unlikely(!lockSet.write(mutex, sharedValue, &value[0]))) goto abort;
                     }
                 }
             }
@@ -271,11 +269,11 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 #ifdef MONITOR_LATENCY
             ts[2] = cybozu::time::rdtscp();
 #endif
-            if (!lockSet.protect_all()) goto abort;
+            if (unlikely(!lockSet.protect_all())) goto abort;
 #ifdef MONITOR_LATENCY
             ts[3] = cybozu::time::rdtscp();
 #endif
-            if (!lockSet.verify_and_unlock()) goto abort;
+            if (unlikely(!lockSet.verify_and_unlock())) goto abort;
 #ifdef MONITOR_LATENCY
             ts[4] = cybozu::time::rdtscp();
 #endif
@@ -316,9 +314,7 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 #if 0
             nrAbort++;
 #endif
-            if (shared.usesBackOff) {
-                backOff(t0, retry, rand);
-            }
+            if (shared.usesBackOff) backOff(t0, retry, rand);
 #elif 0
             nrAbort++;
             if ((rand() & 0x1) == 0) continue; // do not use backoff.
@@ -429,9 +425,9 @@ Result2 worker1(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     ILockSet lockSet;
     lockSet.init(shared.payload, realNrOp);
 
-    storeRelease(ready, 1);
-    while (!loadAcquire(start)) _mm_pause();
-    while (!loadAcquire(quit)) {
+    store_release(ready, 1);
+    while (!load_acquire(start)) _mm_pause();
+    while (!load_acquire(quit)) {
 #if 0
         ordIdGen.epochId = epochGen.get();
         const uint32_t ordId = ordIdGen.ordId;
@@ -444,7 +440,7 @@ Result2 worker1(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (loadAcquire(quit)) break; // to quit under starvation.
+            if (load_acquire(quit)) break; // to quit under starvation.
             assert(lockSet.is_empty());
             rand.setState(randState);
             boolRand.reset();
@@ -463,23 +459,23 @@ Result2 worker1(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
                         (rmode == ReadMode::OCC) ||
                         (rmode == ReadMode::HYBRID && !isLongTx && retry == 0);
                     if (tryInvisibleRead) {
-                        if (!lockSet.optimistic_read(mutex, sharedValue, &value[0])) goto abort;
+                        if (unlikely(!lockSet.optimistic_read(mutex, sharedValue, &value[0]))) goto abort;
                     } else {
-                        if (!lockSet.pessimistic_read(mutex, sharedValue, &value[0])) goto abort;
+                        if (unlikely(!lockSet.pessimistic_read(mutex, sharedValue, &value[0]))) goto abort;
                     }
                 } else {
                     assert(mode == IMode::X);
                     if (shared.usesRMW) {
-                        if (!lockSet.read_for_update(mutex, sharedValue, &value[0])) goto abort;
-                        if (!lockSet.write(mutex, sharedValue, &value[0])) goto abort;
+                        if (unlikely(!lockSet.read_for_update(mutex, sharedValue, &value[0]))) goto abort;
+                        if (unlikely(!lockSet.write(mutex, sharedValue, &value[0]))) goto abort;
                     } else {
-                        if (!lockSet.write(mutex, sharedValue, &value[0])) goto abort;
+                        if (unlikely(!lockSet.write(mutex, sharedValue, &value[0]))) goto abort;
                     }
                 }
             }
             lockSet.reserve_all_blind_writes();
-            if (!lockSet.protect_all()) goto abort;
-            if (!lockSet.verify_and_unlock()) goto abort;
+            if (unlikely(!lockSet.protect_all())) goto abort;
+            if (unlikely(!lockSet.verify_and_unlock())) goto abort;
             lockSet.update_and_unlock();
             res.incCommit(txSize);
             res.addRetryCount(txSize, retry);

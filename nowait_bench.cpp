@@ -84,7 +84,7 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
         log_timestamp_if_necessary_on_tx_start(t0, shared.usesBackOff);
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (loadAcquire(quit)) break; // to quit under starvation.
+            if (unlikely(load_acquire(quit))) break; // to quit under starvation.
             assert(lockSet.empty());
             rand.setState(randState);
             log_timestamp_if_necessary_on_trial_start(t0, t1, t2, retry, shared.usesBackOff);
@@ -96,18 +96,18 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
                 Mutex& mutex = item.value;
 
                 if (mode == Mode::S) {
-                    if (!lockSet.read(mutex, item.payload, &value[0])) goto abort;
+                    if (unlikely(!lockSet.read(mutex, item.payload, &value[0]))) goto abort;
                 } else {
                     assert(mode == Mode::X);
                     if (shared.usesRMW) {
-                        if (!lockSet.readForUpdate(mutex, item.payload, &value[0])) goto abort;
-                        if (!lockSet.write(mutex, item.payload, &value[0])) goto abort;
+                        if (unlikely(!lockSet.readForUpdate(mutex, item.payload, &value[0]))) goto abort;
+                        if (unlikely(!lockSet.write(mutex, item.payload, &value[0]))) goto abort;
                     } else {
-                        if (!lockSet.write(mutex, item.payload, &value[0])) goto abort;
+                        if (unlikely(!lockSet.write(mutex, item.payload, &value[0]))) goto abort;
                     }
                 }
             }
-            if (!lockSet.blindWriteLockAll()) goto abort;
+            if (unlikely(!lockSet.blindWriteLockAll())) goto abort;
             lockSet.updateAndUnlock();
             log_timestamp_if_necessary_on_commit(res, t0, t1, t2);
             res.incCommit(isLongTx);

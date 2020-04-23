@@ -141,7 +141,7 @@ public:
     }
     INLINE void prepareRetry() {
         assert(mutex_);
-        if (!tsw_.lock) return;
+        if (likely(!tsw_.lock)) return;
         spinForUnlocked();
     }
     INLINE bool validate(uint64_t commitTs, bool isInWriteSet) {
@@ -165,7 +165,7 @@ public:
         }
         return true;
 #else  // algorithm from 20180222
-        if (tsw_.rts() >= commitTs) {
+        if (unlikely(tsw_.rts() >= commitTs)) {
             // tsw_.rts() <= v1.rts is invariant so we can avoid checking.
             assert(!isInWriteSet); // This must happen on read-only records.
 #ifdef USE_TICTOC_RTS_COUNT
@@ -175,7 +175,7 @@ public:
         }
         TsWord v1 = mutex_->load_acquire();
         for (;;) {
-            if (tsw_.wts != v1.wts || (v1.rts() < commitTs && v1.lock && !isInWriteSet)) {
+            if (unlikely(tsw_.wts != v1.wts || (v1.rts() < commitTs && v1.lock && !isInWriteSet))) {
                 /* In the original tictoc paper,
                    the predicate is
                    (tsw_.wts != v1.wts || (v1.rts() <= commitTs && v1.lock && !isInWriteSet).
@@ -183,7 +183,7 @@ public:
                    because v1.wts() <= commitTs <= v1.rts() is satisfied. */
                 return false;
             }
-            if (v1.rts() >= commitTs || isInWriteSet) {
+            if (likely(v1.rts() >= commitTs || isInWriteSet)) {
                 /* In the original tictoc paper,
                  * the predicate is (v1.rts() > commitTs).
                  * However, if v1.rts() == commitTs then extend is not necessary.
@@ -200,7 +200,7 @@ public:
             TsWord v2 = v1;
             v2.wts += shift;
             v2.delta = delta - shift;
-            if (mutex_->cas_relaxed(v1, v2)) {
+            if (likely(mutex_->cas_relaxed(v1, v2))) {
 #ifdef USE_TICTOC_RTS_COUNT
                 read_count_++;
                 update_rts_count_++;
@@ -291,10 +291,10 @@ public:
     INLINE bool tryLock(Mutex& mutex) {
         assert(!mutexp_);
         TsWord tsw0 = mutex.load();
-        if (tsw0.lock) return false;
+        if (unlikely(tsw0.lock)) return false;
         TsWord tsw1 = tsw0;
         tsw1.lock = 1;
-        if (!mutex.cas_acq(tsw0, tsw1)) return false;
+        if (unlikely(!mutex.cas_acq(tsw0, tsw1))) return false;
         mutexp_ = &mutex;
         tsw_ = tsw1;
         return true;
@@ -304,16 +304,16 @@ public:
         TsWord tsw0 = mutex.load();
         TsWord tsw1;
         for (;;) {
-            while (tsw0.lock) tsw0 = waitFor(mutex);
+            if (unlikely(tsw0.lock)) tsw0 = waitFor(mutex);
             tsw1 = tsw0;
             tsw1.lock = 1;
-            if (mutex.cas_acq(tsw0, tsw1)) break;
+            if (likely(mutex.cas_acq(tsw0, tsw1))) break;
         }
         tsw_ = tsw1;
         mutexp_ = &mutex;
     }
     INLINE void updateAndUnlock(uint64_t commitTs) {
-        if (!mutexp_) return;
+        if (unlikely(!mutexp_)) return;
         TsWord tsw0 = tsw_;
         assert(tsw0.lock);
         tsw0.lock = 0;
@@ -323,7 +323,7 @@ public:
         mutexp_ = nullptr;
     }
     INLINE void unlock() {
-        if (!mutexp_) return;
+        if (unlikely(!mutexp_)) return;
         TsWord tsw0 = tsw_;
         assert(tsw0.lock);
         tsw0.lock = 0;
@@ -377,7 +377,7 @@ INLINE bool preCommit(
     for (Writer& w : ws) {
         Lock& lk = ls.emplace_back();
         if (nowait) {
-            if (!lk.tryLock(*w.mutex)) goto fin;
+            if (unlikely(!lk.tryLock(*w.mutex))) goto fin;
         } else {
             lk.lock(*w.mutex);
         }
@@ -408,7 +408,7 @@ INLINE bool preCommit(
 
     // Validate the Read Set.
     for (size_t i = 0; i < rs.size(); i++) {
-        if (!rs[i].validate(commitTs, flags[i])) goto fin;
+        if (unlikely(!rs[i].validate(commitTs, flags[i]))) goto fin;
     }
 
     // Write phase.
@@ -481,11 +481,11 @@ public:
         unused(sharedVal); unused(dst);
         size_t lvidx; // local value index.
         ReadSet::iterator itR = findInReadSet(uintptr_t(&mutex));
-        if (itR != rs_.end()) {
+        if (unlikely(itR != rs_.end())) {
             lvidx = itR->localValIdx;
         } else {
             WriteSet::iterator itW = findInWriteSet(uintptr_t(&mutex));
-            if (itW != ws_.end()) {
+            if (unlikely(itW != ws_.end())) {
                 // This is blind-written entry.
                 lvidx = itW->localValIdx;
             } else {
@@ -497,7 +497,7 @@ public:
                 for (;;) {
                     copyValue(&local_[lvidx], sharedVal); // read shared
                     r.readFence();
-                    if (r.isReadSucceeded()) break;
+                    if (likely(r.isReadSucceeded())) break;
                     r.prepareRetry();
                 }
             }
@@ -508,11 +508,11 @@ public:
         unused(sharedVal); unused(src);
         size_t lvidx;
         WriteSet::iterator itW = findInWriteSet(uintptr_t(&mutex));
-        if (itW != ws_.end()) {
+        if (unlikely(itW != ws_.end())) {
             lvidx = itW->localValIdx;
         } else {
             ReadSet::iterator itR = findInReadSet(uintptr_t(&mutex));
-            if (itR == rs_.end()) {
+            if (likely(itR == rs_.end())) {
                 lvidx = allocateLocalVal();
             } else {
                 lvidx = itR->localValIdx;
@@ -551,12 +551,12 @@ private:
     }
     template <typename Vector, typename Map, typename Func>
     INLINE typename Vector::iterator findInSet(uintptr_t key, Vector& vec, Map& map, Func&& func) {
-        if (shouldUseIndex(vec)) {
+        if (unlikely(shouldUseIndex(vec))) {
             for (size_t i = map.size(); i < vec.size(); i++) {
                 map[func(vec[i])] = i;
             }
             typename Map::iterator it = map.find(key);
-            if (it == map.end()) {
+            if (unlikely(it == map.end())) {
                 return vec.end();
             } else {
                 size_t idx = it->second;

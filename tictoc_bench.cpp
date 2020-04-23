@@ -79,16 +79,16 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     localSet.init(shared.payload, realNrOp);
     localSet.setNowait(shared.nowait);
 
-    storeRelease(ready, 1);
-    while (!loadAcquire(start)) _mm_pause();
+    store_release(ready, 1);
+    while (!load_acquire(start)) _mm_pause();
     size_t count = 0; unused(count);
-    while (!loadAcquire(quit)) {
+    while (!load_acquire(quit)) {
         size_t firstRecIdx = 0;
         uint64_t t0 = 0;
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (loadAcquire(quit)) break; // to quit under starvation.
+            if (load_acquire(quit)) break; // to quit under starvation.
             rand.setState(randState);
             // Try to run transaction.
             for (size_t i = 0; i < realNrOp; i++) {
@@ -105,7 +105,7 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
                     localSet.write(mutex, item.payload, &value[0]);
                 }
             }
-            if (!localSet.preCommit()) {
+            if (unlikely(!localSet.preCommit())) {
                 goto abort;
             }
             res.incCommit(isLongTx);

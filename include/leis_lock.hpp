@@ -28,30 +28,20 @@ struct MutexWithMcs
     int obj;
     McsSpinlock::Mutex mcsMu;
 
-    MutexWithMcs() : obj(0), mcsMu() {
-    }
-
-    // This is used for lock or upgrade.
-    bool compareAndSwap(int& before, int after, int mode) {
-        return __atomic_compare_exchange_n(
-            &obj, &before, after, false, mode, __ATOMIC_RELAXED);
-    }
-
-    int atomicLoad() const {
-        return __atomic_load_n(&obj, __ATOMIC_ACQUIRE);
-    }
-
-    // These are used for unlock.
-    int atomicFetchAdd(int value, int mode) {
-        return __atomic_fetch_add(&obj, value, mode);
-    }
-    int atomicFetchSub(int value, int mode) {
-        return __atomic_fetch_sub(&obj, value, mode);
+    INLINE MutexWithMcs() : obj(0), mcsMu() {
     }
 
     std::string str() const {
-        return cybozu::util::formatString("MutexWithMcs(%d)", obj);
+        return fmtstr("MutexWithMcs(%d)", obj);
     }
+
+    INLINE int load() const { return ::load(obj); }
+    INLINE int load_acquire() const { return ::load_acquire(obj); }
+    INLINE bool cas_acq(int& obj0, int obj1) {
+        return compare_exchange_acquire(obj, obj0, obj1);
+    }
+    INLINE int fetch_add_rel(int obj0) { return ::fetch_add_rel(obj, obj0); }
+    INLINE int fetch_sub_rel(int obj0) { return ::fetch_sub_rel(obj, obj0); }
 };
 
 
@@ -70,164 +60,185 @@ public:
     using Mutex = MutexWithMcs;
     using Mode = Mutex::Mode;
 private:
-    Mutex *mutex_;
+    Mutex *mutexp_;
     Mode mode_;
 public:
-    LockWithMcs() : mutex_(nullptr), mode_(Mode::Invalid) {
+    INLINE LockWithMcs() : mutexp_(nullptr), mode_(Mode::Invalid) {
     }
-    LockWithMcs(Mutex* mutex, Mode mode) : LockWithMcs() {
+    INLINE LockWithMcs(Mutex& mutex, Mode mode) : LockWithMcs() {
         lock(mutex, mode);
         verify();
     }
-    ~LockWithMcs() noexcept {
+    INLINE ~LockWithMcs() noexcept {
         unlock();
         verify();
     }
     LockWithMcs(const LockWithMcs&) = delete;
-    LockWithMcs(LockWithMcs&& rhs) noexcept : LockWithMcs() { swap(rhs); verify(); }
     LockWithMcs& operator=(const LockWithMcs&) = delete;
-    LockWithMcs& operator=(LockWithMcs&& rhs) noexcept { swap(rhs); verify(); return *this; }
+    INLINE LockWithMcs(LockWithMcs&& rhs) noexcept : LockWithMcs() { swap(rhs); verify(); }
+    INLINE LockWithMcs& operator=(LockWithMcs&& rhs) noexcept { swap(rhs); verify(); return *this; }
+
+    INLINE void reset(Mutex* mutexp = nullptr, Mode mode = Mode::Invalid) {
+        mutexp_ = mutexp;
+        mode_ = mode;
+    }
 
     // debug
     void verify() const {
 #if 0
         if (mode_ == Mode::X || mode_ == Mode::S) {
-            assert(mutex_);
+            assert(mutexp_);
         } else {
             assert(mode_ == Mode::Invalid);
         }
 #endif
     }
     std::string str() const {
-        return cybozu::util::formatString("LockWithMcs mutex:%p mode:%hhu", mutex_, mode_);
+        return cybozu::util::formatString("LockWithMcs mutex:%p mode:%hhu", mutexp_, mode_);
     }
 
-    void lock(Mutex* mutex, Mode mode) {
+    INLINE void lock(Mutex& mutex, Mode mode) {
         verify();
-        assert(mutex);
-        assert(!mutex_);
+        assert(!mutexp_);
         assert(mode_ == Mode::Invalid);
 
-        mutex_ = mutex;
-        mode_ = mode;
-        int v = mutex_->atomicLoad();
         if (mode == Mode::X) {
-            for (;;) {
-                if (v != 0) waitForWrite(v);
-                if (mutex_->compareAndSwap(v, -1, __ATOMIC_ACQUIRE)) {
-                    return;
-                }
-            }
+            write_lock(mutex);
+        } else {
+            read_lock(mutex);
         }
-        assert(mode == Mode::S);
+    }
+    INLINE void write_lock(Mutex& mutex) {
+        int v0 = mutex.load();
         for (;;) {
-            if (v < 0) waitForRead(v);
-            if (mutex_->compareAndSwap(v, v + 1, __ATOMIC_ACQUIRE)) {
+            if (unlikely(v0 != 0)) v0 = waitForWrite(mutex);
+            if (likely(mutex.cas_acq(v0, -1))) {
+                reset(&mutex, Mode::X);
                 return;
             }
         }
     }
-    bool tryLock(Mutex* mutex, Mode mode) {
+    INLINE void read_lock(Mutex& mutex) {
+        int v0 = mutex.load();
+        for (;;) {
+            if (unlikely(v0 < 0)) v0 = waitForRead(mutex);
+            if (likely(mutex.cas_acq(v0, v0 + 1))) {
+                reset(&mutex, Mode::S);
+                return;
+            }
+        }
+    }
+
+    INLINE bool tryLock(Mutex& mutex, Mode mode) {
         verify();
-        assert(mutex);
-        assert(!mutex_);
-        assert(mode_ == Mode::Invalid);
+        assert(!mutexp_);
         assert(mode != Mode::Invalid);
 
-        int v = mutex->atomicLoad();
         if (mode == Mode::X) {
-            while (v == 0) {
-                if (mutex->compareAndSwap(v, -1, __ATOMIC_ACQUIRE)) {
-                    mutex_ = mutex;
-                    mode_ = mode;
-                    return true;
-                }
-                _mm_pause();
-            }
-            return false;
+            return write_trylock(mutex);
+        } else {
+            assert(mode == Mode::S);
+            return read_trylock(mutex);
         }
-        assert(mode == Mode::S);
-        while (v >= 0) {
-            if (mutex->compareAndSwap(v, v + 1, __ATOMIC_ACQUIRE)) {
-                mutex_ = mutex;
-                mode_ = mode;
+    }
+    INLINE bool write_trylock(Mutex& mutex) {
+        assert(mode_ == Mode::Invalid); assert(!mutexp_);
+        int v0 = mutex.load();
+        while (likely(v0 == 0)) {
+            if (likely(mutex.cas_acq(v0, -1))) {
+                reset(&mutex, Mode::X);
                 return true;
             }
-            _mm_pause();
         }
         return false;
     }
-    bool tryUpgrade() {
-        verify();
-        assert(mutex_);
-        assert(mode_ == Mode::S);
+    INLINE bool read_trylock(Mutex& mutex) {
+        assert(mode_ == Mode::Invalid); assert(!mutexp_);
+        int v0 = mutex.load();
+        while (likely(v0 >= 0)) {
+            if (likely(mutex.cas_acq(v0, v0 + 1))) {
+                reset(&mutex, Mode::S);
+                return true;
+            }
+        }
+        return false;
+    }
 
-        int v = mutex_->atomicLoad();
-        while (v == 1) {
-            if (mutex_->compareAndSwap(v, -1, __ATOMIC_RELAXED)) {
+    INLINE bool tryUpgrade() {
+        verify();
+        assert(mode_ == Mode::S); assert(mutexp_);
+        int v0 = mutexp_->load();
+        while (v0 == 1) {
+            if (mutexp_->cas_acq(v0, -1)) {
                 mode_ = Mode::X;
                 return true;
             }
-            _mm_pause();
         }
         return false;
     }
-    void unlock() noexcept {
+    INLINE void unlock() noexcept {
         verify();
         if (mode_ == Mode::Invalid) {
-            mutex_ = nullptr;
+            mutexp_ = nullptr;
             return;
         }
-        assert(mutex_);
-
+        assert(mutexp_);
         if (mode_ == Mode::X) {
-            int ret = mutex_->atomicFetchAdd(1, __ATOMIC_RELEASE);
-            unused(ret);
-            assert(ret == -1);
+            write_unlock();
         } else {
-            assert(mode_ == Mode::S);
-            int ret = mutex_->atomicFetchSub(1, __ATOMIC_RELEASE);
-            unused(ret);
-            assert(ret >= 1);
+            read_unlock();
         }
-        mode_ = Mode::Invalid;
-        mutex_ = nullptr;
+    }
+    INLINE void write_unlock() noexcept {
+        assert(mode_ == Mode::X); assert(mutexp_);
+        int ret = mutexp_->fetch_add_rel(1);
+        assert(ret == -1); unused(ret);
+        reset();
+    }
+    INLINE void read_unlock() noexcept {
+        assert(mode_ == Mode::S); assert(mutexp_);
+        int ret = mutexp_->fetch_sub_rel(1);
+        unused(ret);
+        assert(ret >= 1);
+        reset();
     }
 
-    bool isShared() const { return mode_ == Mode::S; }
-    const Mutex* mutex() const { return mutex_; }
-    Mutex* mutex() { return mutex_; }
-    uintptr_t getMutexId() const { return uintptr_t(mutex_); }
-    Mode mode() const { return mode_; }
+    INLINE bool isShared() const { return mode_ == Mode::S; }
+    INLINE const Mutex* mutex() const { return mutexp_; }
+    INLINE Mutex* mutex() { return mutexp_; }
+    INLINE uintptr_t getMutexId() const { return uintptr_t(mutexp_); }
+    INLINE Mode mode() const { return mode_; }
 
     // This is used for dummy object to comparison.
-    void setMutex(Mutex *mutex) {
-        mutex_ = mutex;
+    INLINE void setMutex(Mutex *mutexp) {
+        mutexp_ = mutexp;
         mode_ = Mode::Invalid;
     }
 
 private:
-    void waitForWrite(int& v) {
-        McsSpinlock lock(mutex_->mcsMu);
+    INLINE int waitForWrite(Mutex& mutex) {
+        McsSpinlock lock(mutex.mcsMu);
         // Up to one thread can spin.
-        v = mutex_->atomicLoad();
-        while (v != 0) {
+        int v0 = mutex.load();
+        while (v0 != 0) {
             _mm_pause();
-            v = mutex_->atomicLoad();
+            v0 = mutex.load();
         }
+        return v0;
     }
-    void waitForRead(int& v) {
-        McsSpinlock lock(mutex_->mcsMu);
+    INLINE int waitForRead(Mutex& mutex) {
+        McsSpinlock lock(mutex.mcsMu);
         // Up to one thread can spin.
-        v = mutex_->atomicLoad();
-        while (v < 0) {
+        int v0 = mutex.load();
+        while (v0 < 0) {
             _mm_pause();
-            v = mutex_->atomicLoad();
+            v0 = mutex.load();
         }
+        return v0;
     }
-    void swap(LockWithMcs& rhs) noexcept {
+    INLINE void swap(LockWithMcs& rhs) noexcept {
         rhs.verify();
-        std::swap(mutex_, rhs.mutex_);
+        std::swap(mutexp_, rhs.mutexp_);
         std::swap(mode_, rhs.mode_);
     }
 };
@@ -269,16 +280,16 @@ struct OpEntryForLeis
     bool isValid; /* localValInfo is valid or not.
                    * This is meaningful only when info is not empty. */
 
-    OpEntryForLeis() : lock(), info(), isShared(false), isValid(false) {
+    INLINE OpEntryForLeis() : lock(), info(), isShared(false), isValid(false) {
     }
-    explicit OpEntryForLeis(Lock&& lock0) : OpEntryForLeis() {
+    INLINE explicit OpEntryForLeis(Lock&& lock0) : OpEntryForLeis() {
         lock = std::move(lock0);
     }
     OpEntryForLeis(const OpEntryForLeis&) = delete;
     OpEntryForLeis& operator=(const OpEntryForLeis&) = delete;
-    OpEntryForLeis(OpEntryForLeis&& rhs) noexcept : OpEntryForLeis() { swap(rhs); }
-    OpEntryForLeis& operator=(OpEntryForLeis&& rhs) noexcept { swap(rhs); return *this; }
-    void swap(OpEntryForLeis& rhs) noexcept {
+    INLINE OpEntryForLeis(OpEntryForLeis&& rhs) noexcept : OpEntryForLeis() { swap(rhs); }
+    INLINE OpEntryForLeis& operator=(OpEntryForLeis&& rhs) noexcept { swap(rhs); return *this; }
+    INLINE void swap(OpEntryForLeis& rhs) noexcept {
         std::swap(lock, rhs.lock);
         std::swap(info, rhs.info);
         std::swap(isShared, rhs.isShared);
@@ -315,14 +326,14 @@ private:
                                    * This is just cache data. */
 
 public:
-    LeisLockSet() = default;
-    ~LeisLockSet() noexcept {
+    INLINE LeisLockSet() = default;
+    INLINE ~LeisLockSet() noexcept {
         unlock();
     }
     /**
      * You must call this at first.
      */
-    void init(size_t valueSize, size_t nrReserve) {
+    INLINE void init(size_t valueSize, size_t nrReserve) {
         valueSize_ = valueSize;
 
         if (valueSize == 0) valueSize++;
@@ -330,11 +341,11 @@ public:
         local_.reserve(nrReserve);
     }
 
-    bool read(Mutex& mutex, const void* sharedVal, void* dst) {
+    INLINE bool read(Mutex& mutex, const void* sharedVal, void* dst) {
         typename Map::iterator it = map_.lower_bound(&mutex);
-        if (it == map_.end()) {
+        if (unlikely(it == map_.end())) {
             // Lock order is preserved so the lock operation can block.
-            auto pair = map_.emplace(&mutex, OpEntryL(Lock(&mutex, Mode::S)));
+            auto pair = map_.emplace(&mutex, OpEntryL(Lock(mutex, Mode::S)));
             assert(pair.second);
             OpEntryL& ope = pair.first->second;
             ope.isShared = true;
@@ -342,7 +353,7 @@ public:
             return true;
         }
         Mutex *mu = it->first;
-        if (mu == &mutex) {
+        if (unlikely(mu == &mutex)) {
             // Already exists.
             OpEntryL& ope = it->second;
             Lock& lk = ope.lock;
@@ -361,7 +372,7 @@ public:
         assert(pair.second);
         OpEntryL& ope = pair.first->second;
         ope.isShared = true;
-        if (ope.lock.tryLock(&mutex, Mode::S)) {
+        if (likely(ope.lock.read_trylock(mutex))) {
             copyValue(dst, sharedVal); // read shared data.
             return true;
         } else {
@@ -372,7 +383,7 @@ public:
     }
     INLINE bool write(Mutex& mutex, void* sharedVal, const void* src) {
         typename Map::iterator it = map_.lower_bound(&mutex);
-        if (it == map_.end() || it->first != &mutex) {
+        if (likely(it == map_.end() || it->first != &mutex)) {
             // Blind write.
             auto pair = map_.emplace(&mutex, OpEntryL());
             assert(pair.second);
@@ -393,7 +404,7 @@ public:
         // Try upgrade.
         ope.isShared = false;
         ope.info.set(allocateLocalVal(), sharedVal);
-        if (lk.tryUpgrade()) {
+        if (likely(lk.tryUpgrade())) {
             writeLocalVal(ope, src);
             return true;
         } else {
@@ -402,11 +413,11 @@ public:
             return false;
         }
     }
-    bool readForUpdate(Mutex& mutex, void* sharedVal, void* dst) {
+    INLINE bool readForUpdate(Mutex& mutex, void* sharedVal, void* dst) {
         typename Map::iterator it = map_.lower_bound(&mutex);
-        if (it == map_.end()) {
+        if (unlikely(it == map_.end())) {
             // Lock order is preserved so the lock operation can block.
-            auto pair = map_.emplace(&mutex, OpEntryL(Lock(&mutex, Mode::X)));
+            auto pair = map_.emplace(&mutex, OpEntryL(Lock(mutex, Mode::X)));
             assert(pair.second);
             OpEntryL& ope = pair.first->second;
             ope.isShared = false;
@@ -415,7 +426,7 @@ public:
             return true;
         }
         Mutex *mu = it->first;
-        if (mu == &mutex) {
+        if (unlikely(mu == &mutex)) {
             // Already exists.
             OpEntryL& ope = it->second;
             Lock& lk = ope.lock;
@@ -437,7 +448,7 @@ public:
             }
             assert(lk.mode() == Mode::Invalid);
             assert(ope.info.sharedVal != nullptr);
-            if (lk.tryLock(&mutex, Mode::X)) {
+            if (lk.write_trylock(mutex)) {
                 copyValue(dst, getValidLocalValPtr(ope, sharedVal));
                 return true;
             } else {
@@ -453,7 +464,7 @@ public:
         Lock& lk = ope.lock;
         ope.isShared = false;
         ope.info.set(allocateLocalVal(), sharedVal);
-        if (lk.tryLock(&mutex, Mode::X)) {
+        if (likely(lk.write_trylock(mutex))) {
             copyValue(dst, getValidLocalValPtr(ope, sharedVal));
             return true;
         } else {
@@ -461,7 +472,7 @@ public:
             return false;
         }
     }
-    bool blindWriteLockAll() {
+    INLINE bool blindWriteLockAll() {
 #if 0
         std::sort(notYetV_.begin(), notYetV_.end());
 #endif
@@ -472,7 +483,7 @@ public:
             OpEntryL& ope = pair.second;
 
             if (ope.lock.mode() == Mode::IsValid) {
-                if (!ope.lock.tryLock(mu, ope.isShared ? Mode::S : Mode::X)) {
+                if (unlikely(!ope.lock.tryLock(mu, ope.isShared ? Mode::S : Mode::X))) {
                     return false;
                 }
             }
@@ -487,7 +498,7 @@ public:
             assert(it != map_.end());
             assert(it->first == mu);
             OpEntryL& ope = it->second;
-            if (!ope.lock.tryLock(mu, ope.isShared ? Mode::S : Mode::X)) {
+            if (unlikely(!ope.lock.tryLock(*mu, ope.isShared ? Mode::S : Mode::X))) {
                 return false;
             }
             notYetV_[i] = nullptr;
@@ -496,8 +507,7 @@ public:
         return true;
 #endif
     }
-
-    void recover() {
+    INLINE void recover() {
         // Find the smallest mutex to lock.
         assert(!notYetV_.empty());
         Mutex* minMu = (Mutex*)uintptr_t(-1);
@@ -531,7 +541,7 @@ public:
         // Re-lock in order.
         it = target;
         while (it != map_.end()) {
-            Mutex* mu = it->first;
+            Mutex& mu = *it->first;
             OpEntryL& ope = it->second;
             ope.lock.lock(mu, ope.isShared ? Mode::S : Mode::X); // block.
             ++it;
@@ -541,7 +551,7 @@ public:
     /**
      * Writeback local writeset and unlock.
      */
-    void updateAndUnlock() {
+    INLINE void updateAndUnlock() {
         // here is serialized point.
         assert(notYetV_.empty());
 
@@ -562,7 +572,7 @@ public:
     /**
      * If you want to abort, use this instead of updateAndUnlock().
      */
-    void unlock() noexcept {
+    INLINE void unlock() noexcept {
 #if 1
         map_.clear(); // automatically unlocked in their destructor.
 #else
@@ -576,12 +586,8 @@ public:
         local_.clear();
         notYetV_.clear();
     }
-    bool empty() const {
-        return map_.empty();
-    }
-    size_t size() const {
-        return map_.size();
-    }
+    INLINE bool empty() const { return map_.empty(); }
+    INLINE size_t size() const { return map_.size(); }
 
     void printVec(const char *prefix) const {
         ::printf("%p %s BEGIN\n", this, prefix);
@@ -605,7 +611,7 @@ private:
     /**
      * DO NOT call this if the lock is not held.
      */
-    void* getValidLocalValPtr(OpEntryL& ope, const void* sharedVal) {
+    INLINE void* getValidLocalValPtr(OpEntryL& ope, const void* sharedVal) {
         void* localVal = getLocalValPtr(ope.info);
         if (!ope.isValid) {
             assert(ope.info.sharedVal == sharedVal);
@@ -614,7 +620,7 @@ private:
         }
         return localVal;
     }
-    void* getLocalValPtr(const LocalValInfo& info) {
+    INLINE void* getLocalValPtr(const LocalValInfo& info) {
 #ifdef NO_PAYLOAD
         unused(info);
         return nullptr;
@@ -626,14 +632,14 @@ private:
         }
 #endif
     }
-    void copyValue(void* dst, const void* src) {
+    INLINE void copyValue(void* dst, const void* src) {
 #ifndef NO_PAYLOAD
         ::memcpy(dst, src, valueSize_);
 #else
         unused(dst); unused(src);
 #endif
     }
-    void writeLocalVal(OpEntryL& ope, const void* src) {
+    INLINE void writeLocalVal(OpEntryL& ope, const void* src) {
         copyValue(getLocalValPtr(ope.info), src);
         ope.isValid = true;
     }
@@ -674,16 +680,16 @@ private:
     size_t valueSize_;
 
 public:
-    LeisLockSet() : vec_(), maxMutex_(0), nrSorted_(0) {
+    INLINE LeisLockSet() : vec_(), maxMutex_(0), nrSorted_(0) {
     }
-    ~LeisLockSet() noexcept {
+    INLINE ~LeisLockSet() noexcept {
         unlock();
     }
 
     /**
      * You must call this at first.
      */
-    void init(size_t valueSize, size_t nrReserve) {
+    INLINE void init(size_t valueSize, size_t nrReserve) {
         valueSize_ = valueSize;
 
         if (valueSize == 0) valueSize++;
@@ -693,10 +699,10 @@ public:
         local_.reserve(nrReserve);
     }
 
-    bool read(Mutex& mutex, const void* sharedVal, void* dst) {
-        if (maxMutex_ < uintptr_t(&mutex)) {
+    INLINE bool read(Mutex& mutex, const void* sharedVal, void* dst) {
+        if (unlikely(maxMutex_ < uintptr_t(&mutex))) {
             // Lock order is preserved so the lock operation can block.
-            OpEntryL& ope = vec_.emplace_back(OpEntryL(Lock(&mutex, Mode::S)));
+            OpEntryL& ope = vec_.emplace_back(OpEntryL(Lock(mutex, Mode::S)));
             maxMutex_ = uintptr_t(&mutex);
             if (nrSorted_ + 1 == vec_.size()) nrSorted_++;
             ope.isShared = true;
@@ -704,7 +710,7 @@ public:
             return true;
         }
         typename Vec::iterator it = find(&mutex);
-        if (it != vec_.end()) {
+        if (unlikely(it != vec_.end())) {
             // Already exists.
             OpEntryL& ope = *it;
             Lock& lk = ope.lock;
@@ -723,7 +729,7 @@ public:
         // If tryLock failed, we must goto retrospective mode.
         OpEntryL& ope = vec_.emplace_back();
         ope.isShared = true;
-        if (ope.lock.tryLock(&mutex, Mode::S)) {
+        if (likely(ope.lock.read_trylock(mutex))) {
             copyValue(dst, sharedVal);
             return true;
         } else {
@@ -734,7 +740,7 @@ public:
     }
     INLINE bool write(Mutex& mutex, void* sharedVal, const void* src) {
         typename Vec::iterator it = find(&mutex);
-        if (it == vec_.end()) {
+        if (likely(it == vec_.end())) {
             // Blind write.
             OpEntryL& ope = vec_.emplace_back();
             ope.isShared = false;
@@ -755,7 +761,7 @@ public:
         // Try upgrade.
         ope.isShared = false;
         ope.info.set(allocateLocalVal(), sharedVal);
-        if (lk.tryUpgrade()) {
+        if (likely(lk.tryUpgrade())) {
             writeLocalVal(ope, src);
             return true;
         } else {
@@ -764,10 +770,10 @@ public:
             return false;
         }
     }
-    bool readForUpdate(Mutex& mutex, void* sharedVal, void* dst) {
-        if (maxMutex_ < uintptr_t(&mutex)) {
+    INLINE bool readForUpdate(Mutex& mutex, void* sharedVal, void* dst) {
+        if (unlikely(maxMutex_ < uintptr_t(&mutex))) {
             // Lock order is preserved so the lock operation can block.
-            OpEntryL& ope = vec_.emplace_back(OpEntryL(Lock(&mutex, Mode::X)));
+            OpEntryL& ope = vec_.emplace_back(OpEntryL(Lock(mutex, Mode::X)));
             maxMutex_ = uintptr_t(&mutex);
             if (nrSorted_ + 1 == vec_.size()) nrSorted_++;
             ope.isShared = false;
@@ -776,7 +782,7 @@ public:
             return true;
         }
         typename Vec::iterator it = find(&mutex);
-        if (it != vec_.end()) {
+        if (unlikely(it != vec_.end())) {
             OpEntryL& ope = *it;
             Lock& lk = ope.lock;
             assert(lk.getMutexId() == uintptr_t(&mutex));
@@ -799,7 +805,7 @@ public:
             assert(lk.mode() == Mode::Invalid);
             assert(!ope.isShared);
             assert(ope.info.sharedVal != nullptr);
-            if (lk.tryLock(&mutex, Mode::X)) {
+            if (lk.write_trylock(mutex)) {
                 copyValue(dst, getValidLocalValPtr(ope, sharedVal));
                 return true;
             } else {
@@ -813,7 +819,7 @@ public:
         Lock& lk = ope.lock;
         ope.isShared = false;
         ope.info.set(allocateLocalVal(), sharedVal);
-        if (lk.tryLock(&mutex, Mode::X)) {
+        if (likely(lk.write_trylock(mutex))) {
             copyValue(dst, getValidLocalValPtr(ope, sharedVal));
             return true;
         } else {
@@ -821,20 +827,20 @@ public:
             return false;
         }
     }
-    bool blindWriteLockAll() {
+    INLINE bool blindWriteLockAll() {
         for (OpEntryL& ope : vec_) {
             Lock& lk = ope.lock;
             if (lk.mode() != Mode::Invalid) continue;
             assert(!ope.isShared);
-            Mutex *mu = (Mutex*)lk.getMutexId();
-            if (!lk.tryLock(mu, ope.isShared ? Mode::S : Mode::X)) {
-                lk.setMutex(mu);
+            Mutex& mu = *lk.mutex();
+            if (unlikely(!lk.tryLock(mu, ope.isShared ? Mode::S : Mode::X))) {
+                lk.setMutex(&mu);
                 return false;
             }
         }
         return true;
     }
-    void recover() {
+    INLINE void recover() {
 #if 0
         // for debug.
         for (size_t i = 0; i < vec_.size(); i++) {
@@ -879,7 +885,7 @@ public:
         it = target;
         while (it != vec_.end()) {
             Lock& lk = it->lock;
-            Mutex* mu = (Mutex*)lk.getMutexId();
+            Mutex& mu = *reinterpret_cast<Mutex*>(lk.getMutexId());
             lk.lock(mu, it->isShared ? Mode::S : Mode::X);
             ++it;
         }
@@ -890,7 +896,7 @@ public:
     /**
      * Writeback local writeset and unlock.
      */
-    void updateAndUnlock() {
+    INLINE void updateAndUnlock() {
         // Here is serialization point.
 
         for (OpEntryL& ope : vec_) {
@@ -908,20 +914,16 @@ public:
         nrSorted_ = 0;
         local_.clear();
     }
-    void unlock() noexcept {
+    INLINE void unlock() noexcept {
         vec_.clear();  // automatically release the locks.
         maxMutex_ = 0; // smaller than any valid pointers.
         nrSorted_ = 0;
         local_.clear();
     }
-    bool empty() const {
-        return vec_.empty();
-    }
-    size_t size() const {
-        return vec_.size();
-    }
+    INLINE bool empty() const { return vec_.empty(); }
+    INLINE size_t size() const { return vec_.size(); }
 private:
-    typename Vec::iterator find(Mutex *mutex) {
+    INLINE typename Vec::iterator find(Mutex *mutex) {
         const uintptr_t key = uintptr_t(mutex);
 #if 1
         // Binary search in sorted area.
@@ -957,7 +959,7 @@ private:
     /**
      * DO NOT call this if the lock is not held.
      */
-    void* getValidLocalValPtr(OpEntryL& ope, const void* sharedVal) {
+    INLINE void* getValidLocalValPtr(OpEntryL& ope, const void* sharedVal) {
         void* localVal = getLocalValPtr(ope.info);
         if (!ope.isValid) {
             assert(ope.info.sharedVal == sharedVal);
@@ -966,18 +968,18 @@ private:
         }
         return localVal;
     }
-    void copyValue(void* dst, const void* src) {
+    INLINE void copyValue(void* dst, const void* src) {
 #ifndef NO_PAYLOAD
         ::memcpy(dst, src, valueSize_);
 #else
         unused(dst); unused(src);
 #endif
     }
-    void writeLocalVal(OpEntryL& ope, const void* src) {
+    INLINE void writeLocalVal(OpEntryL& ope, const void* src) {
         copyValue(getLocalValPtr(ope.info), src);
         ope.isValid = true;
     }
-    void* getLocalValPtr(const LocalValInfo& info) {
+    INLINE void* getLocalValPtr(const LocalValInfo& info) {
 #ifdef NO_PAYLOAD
         unused(info);
         return nullptr;
@@ -1000,7 +1002,7 @@ public:
         }
         ::printf("%p %s END\n", this, prefix);
     }
-    typename Vec::iterator lower_bound(Mutex *mutex, typename Vec::iterator end) {
+    INLINE typename Vec::iterator lower_bound(Mutex *mutex, typename Vec::iterator end) {
         Lock lkcmp;
         lkcmp.setMutex(mutex);
         OpEntryL ope(std::move(lkcmp));

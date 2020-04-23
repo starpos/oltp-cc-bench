@@ -55,7 +55,7 @@ public:
 
     INLINE bool read(Mutex& mutex, void* sharedVal, void* dst) {
         Vec::iterator it = find(uintptr_t(&mutex));
-        if (it != vec_.end()) {
+        if (unlikely(it != vec_.end())) {
             Lock& lk = it->lock;
             if (lk.mode() == Mode::S) {
                 copyValue(dst, sharedVal); // read shared data.
@@ -68,7 +68,7 @@ public:
         // Try to read lock.
         OpEntryL& ope = vec_.emplace_back();
         Lock& lk = ope.lock;
-        if (!lk.tryLock(&mutex, Mode::S)) {
+        if (unlikely(!lk.read_trylock(mutex))) {
             return false; // should die.
         }
         copyValue(dst, sharedVal); // read shared data.
@@ -76,10 +76,10 @@ public:
     }
     INLINE bool write(Mutex& mutex, void* sharedVal, void* src) {
         Vec::iterator it = find(uintptr_t(&mutex));
-        if (it != vec_.end()) {
+        if (unlikely(it != vec_.end())) {
             Lock& lk = it->lock;
             if (lk.mode() == Mode::S) {
-                if (!lk.tryUpgrade()) return false;
+                if (unlikely(!lk.tryUpgrade())) return false;
                 it->info.set(allocateLocalVal(), sharedVal);
             }
             assert(lk.mode() == Mode::X || lk.mode() == Mode::Invalid);
@@ -97,7 +97,7 @@ public:
     }
     INLINE bool readForUpdate(Mutex& mutex, void* sharedVal, void* dst) {
         Vec::iterator it = find(uintptr_t(&mutex));
-        if (it != vec_.end()) {
+        if (unlikely(it != vec_.end())) {
             Lock& lk = it->lock;
             LocalValInfo& info = it->info;
             if (lk.mode() == Mode::X) {
@@ -120,7 +120,7 @@ public:
         OpEntryL& ope = vec_.emplace_back();
         Lock& lk = ope.lock;
         LocalValInfo& info = ope.info;
-        if (!lk.tryLock(&mutex, Mode::X)) {
+        if (unlikely(!lk.write_trylock(mutex))) {
             return false; // should die.
         }
         info.set(allocateLocalVal(), sharedVal);
@@ -134,7 +134,7 @@ public:
         for (BlindWriteInfo& bwInfo : bwV_) {
             OpEntryL& ope = vec_[bwInfo.idx];
             assert(ope.lock.mode() == Mode::Invalid);
-            if (!ope.lock.tryLock(bwInfo.mutex, Mode::X)) {
+            if (unlikely(!ope.lock.write_trylock(*bwInfo.mutex))) {
                 return false; // should die
             }
         }
@@ -149,12 +149,11 @@ public:
                 // update.
                 LocalValInfo& info = ope.info;
                 copyValue(info.sharedVal, getLocalValPtr(info));
+                ope.lock.write_unlock();
             } else {
                 assert(lk.mode() == Mode::S);
+                ope.lock.read_unlock();
             }
-#if 1  // unlock one by one.
-            ope.lock.unlock();
-#endif
         }
         vec_.clear();
         index_.clear();
@@ -174,7 +173,7 @@ private:
     INLINE Vec::iterator find(uintptr_t key) {
         // at most 4KiB scan.
         const size_t threshold = 4096 / sizeof(OpEntryL);
-        if (vec_.size() > threshold) {
+        if (unlikely(vec_.size() > threshold)) {
             for (size_t i = index_.size(); i < vec_.size(); i++) {
                 index_[vec_[i].lock.getMutexId()] = i;
             }

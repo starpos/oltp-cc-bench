@@ -64,7 +64,7 @@ Result1 lockWorker(size_t idx, const bool& start, const bool& quit, bool& should
         for (size_t i = 0; i < aiV.size(); i++) {
             const AccessInfo& ai = aiV[i];
             if (ai.key == prevKey) continue;
-            lockV.emplace_back(&muV[ai.key], ai.is_write ? Mode::X : Mode::S);
+            lockV.emplace_back(muV[ai.key], ai.is_write ? Mode::X : Mode::S);
             prevKey = ai.key;
         }
         res.incCommit(isLongTx);

@@ -326,17 +326,17 @@ struct MutexOpCreator
     INLINE MutexOpCreator reserve() const {
         static_assert(is_lock_state_in(to_state, {LockState::READ, LockState::READ_MODIFY_WRITE, LockState::BLIND_WRITE}));
         MutexOpCreator moc(*this);
-        if (!moc) return moc;
+        if (unlikely(!moc)) return moc;
         LockData& ld = moc.ld; MutexData& md = moc.md;
         assert_from_lock_states<to_state>(ld.state);
-        if (checks_version && (md.version != ld.version || md.protected_)) {
+        if (checks_version && unlikely((md.version != ld.version || md.protected_))) {
             moc.capability = IMPOSSIBLE;
             return moc;
         }
         bool can_reserve = (to_state == LockState::READ)
             ? md.can_read_reserve(ld.ord_id)
             : md.can_write_reserve(ld.ord_id);
-        if (!can_reserve || md.protected_) {
+        if (unlikely(!can_reserve || md.protected_)) {
             moc.capability = MUST_WAIT;
             return moc;
         }
@@ -354,12 +354,12 @@ struct MutexOpCreator
         constexpr LockState from_state = checks_version ? LockState::READ_MODIFY_WRITE : LockState::BLIND_WRITE;
         unused(from_state);
         MutexOpCreator moc(*this);
-        if (!moc) return moc;
+        if (unlikely(!moc)) return moc;
         LockData& ld = moc.ld; MutexData& md = moc.md;
         assert(ld.state == from_state);
-        if ((checks_version && ld.version != md.version)
-            || ld.ord_id != md.ord_id
-            || md.protected_) {
+        if (unlikely((checks_version && ld.version != md.version)
+                     || ld.ord_id != md.ord_id
+                     || md.protected_)) {
             moc.capability = IMPOSSIBLE;
             return moc;
         }
@@ -373,18 +373,18 @@ struct MutexOpCreator
     template <LockState from_state>
     INLINE MutexOpCreator unlock_special() const {
         MutexOpCreator moc(*this);
-        if (!moc) return moc;
+        if (unlikely(!moc)) return moc;
         LockData& ld = moc.ld; MutexData& md = moc.md;
         assert(ld.state == from_state);
         switch (from_state) {
         case LockState::READ:
         case LockState::BLIND_WRITE:
         case LockState::READ_MODIFY_WRITE:
-            if (ld.ord_id == md.ord_id) md.ord_id = MAX_ORD_ID;
+            if (unlikely(ld.ord_id == md.ord_id)) md.ord_id = MAX_ORD_ID;
             break;
         case LockState::PROTECTED:
             md.protected_ = 0;
-            if (ld.updated) md.version++;
+            if (likely(ld.updated)) md.version++;
             break;
         case LockState::INIT:
         case LockState::PRE_BLIND_WRITE:
@@ -427,7 +427,7 @@ INLINE void invisible_read(Mutex& mutex, LockData& ld, const void* shared, void*
     MutexData md0 = mutex.load();
     for (;;) {
         _mm_pause();
-        if (md0.protected_) {
+        if (unlikely(md0.protected_)) {
             md0 = mutex.load();
             continue;
         }
@@ -436,7 +436,7 @@ INLINE void invisible_read(Mutex& mutex, LockData& ld, const void* shared, void*
 #endif
         acquire_fence();
         MutexData md1 = mutex.load();
-        if (!md1.is_valid(md0.version)) {
+        if (unlikely(!md1.is_valid(md0.version))) {
             md0 = md1;
             continue;
         }
@@ -529,7 +529,7 @@ public:
         for (;;) {
             _mm_pause();
             auto moc1 = MutexOpCreator(ld_, md0).reserve<to_state, false>();
-            if (moc1.capability == MUST_WAIT) {
+            if (unlikely(moc1.capability == MUST_WAIT)) {
                 md0 = mutex_->load();
                 continue;
             }
@@ -539,17 +539,17 @@ public:
             ::memcpy(local, shared, size);
 #endif
             acquire_fence();
-            if (!does_write_reserve && md0 == moc1.md) {
+            if (!does_write_reserve && unlikely(md0 == moc1.md)) {
                 // CAS is not required but verify is required.
                 MutexData md1 = mutex_->load();
-                if (md1.is_valid(md0.version)) {
+                if (likely(md1.is_valid(md0.version))) {
                     ld_ = moc1.ld;
                     return;
                 }
                 md0 = md1;
                 continue;
             }
-            if (mutex_->cas_acq(md0, moc1.md)) {
+            if (likely(mutex_->cas_acq(md0, moc1.md))) {
                 ld_ = moc1.ld;
                 return;
             }
@@ -570,13 +570,13 @@ public:
         for (;;) {
             _mm_pause();
             auto moc1 = MutexOpCreator(ld_, md0).reserve<to_state, false>();
-            if (moc1.capability == MUST_WAIT) {
+            if (unlikely(moc1.capability == MUST_WAIT)) {
                 md0 = mutex_->load();
                 continue;
             }
             assert(moc1.capability == POSSIBLE);
             assert(!moc1.md.protected_);
-            if ((!does_write_reserve && md0 == moc1.md) || mutex_->cas_acq(md0, moc1.md)) {
+            if (likely((!does_write_reserve && md0 == moc1.md) || mutex_->cas_acq(md0, moc1.md))) {
                 ld_ = moc1.ld;
                 return moc1.md;
             }
@@ -599,7 +599,7 @@ public:
 #endif
             acquire_fence();
             MutexData md1 = mutex_->load();
-            if (md1.is_valid(md0.version)) return;
+            if (likely(md1.is_valid(md0.version))) return;
             md0 = reserve_for_read<does_write_reserve, true>(md1);
         }
     }
@@ -614,13 +614,13 @@ public:
         MutexData md0 = mutex_->load();
         for (;;) {
             auto moc1 = MutexOpCreator(ld_, md0).reserve<lock_state, true>();
-            if (moc1.capability == IMPOSSIBLE) return false;
-            if (moc1.capability == MUST_WAIT) {
+            if (unlikely(moc1.capability == IMPOSSIBLE)) return false;
+            if (unlikely(moc1.capability == MUST_WAIT)) {
                 md0 = mutex_->load();
                 continue;
             }
             assert(moc1.capability == POSSIBLE);
-            if (md0 == moc1.md || mutex_->cas_acq(md0, moc1.md)) {
+            if (likely(md0 == moc1.md || mutex_->cas_acq(md0, moc1.md))) {
                 ld_ = moc1.ld;
                 return true;
             }
@@ -637,13 +637,13 @@ public:
         for (;;) {
             _mm_pause();
             auto moc1 = MutexOpCreator(ld_, md0).reserve<LockState::BLIND_WRITE, false>();
-            if (moc1.capability == MUST_WAIT) {
+            if (unlikely(moc1.capability == MUST_WAIT)) {
                 md0 = mutex_->load();
                 continue;
             }
             assert(moc1.capability == POSSIBLE);
             assert(md0 != moc1.md);
-            if (mutex_->cas_acq(md0, moc1.md)) {
+            if (likely(mutex_->cas_acq(md0, moc1.md))) {
                 ld_ = moc1.ld;
                 return;
             }
@@ -656,14 +656,14 @@ public:
         for (;;) {
             _mm_pause();
             auto moc1 = MutexOpCreator(ld_, md0).reserve<LockState::READ_MODIFY_WRITE, true>();
-            if (moc1.capability == IMPOSSIBLE) return false;
-            if (moc1.capability == MUST_WAIT) {
+            if (unlikely(moc1.capability == IMPOSSIBLE)) return false;
+            if (unlikely(moc1.capability == MUST_WAIT)) {
                 md0 = mutex_->load();
                 continue;
             }
             assert(moc1.capability == POSSIBLE);
             assert(md0 != moc1.md);
-            if (mutex_->cas_acq(md0, moc1.md)) {
+            if (likely(mutex_->cas_acq(md0, moc1.md))) {
                 ld_ = moc1.ld;
                 return true;
             }
@@ -680,8 +680,8 @@ public:
             auto moc1 = MutexOpCreator(ld_, md0)
                 .reserve<to_state, checks_version>()
                 .template protect<checks_version>();
-            if (!moc1.possible()) return false;
-            if (mutex_->cas_acq_rel(md0, moc1.md)) {
+            if (unlikely(!moc1.possible())) return false;
+            if (likely(mutex_->cas_acq_rel(md0, moc1.md))) {
                 ld_ = moc1.ld;
                 return true;
             }
@@ -689,14 +689,14 @@ public:
         }
     }
     INLINE void unlock_general() noexcept {
-        if (mutex_ == nullptr) return;
-        if (ld_.is_state_in({LockState::INIT, LockState::PRE_BLIND_WRITE})) {
+        if (unlikely(mutex_ == nullptr)) return;
+        if (unlikely(ld_.is_state_in({LockState::INIT, LockState::PRE_BLIND_WRITE}))) {
             mutex_ = nullptr;
             return;
         }
         MutexData md0 = mutex_->load();
-        if (ld_.is_state_in({LockState::READ, LockState::BLIND_WRITE, LockState::READ_MODIFY_WRITE}) &&
-            ld_.ord_id != md0.ord_id) {
+        if (unlikely(ld_.is_state_in({LockState::READ, LockState::BLIND_WRITE, LockState::READ_MODIFY_WRITE})
+                     && ld_.ord_id != md0.ord_id)) {
             mutex_ = nullptr;
             return;
         }
@@ -704,7 +704,7 @@ public:
             _mm_pause();
             auto moc1 = MutexOpCreator(ld_, md0).unlock_general();
             assert(moc1.possible());
-            if (md0 == moc1.md || mutex_->cas_rel(md0, moc1.md)) {
+            if (likely(md0 == moc1.md || mutex_->cas_rel(md0, moc1.md))) {
                 ld_ = moc1.ld;
                 mutex_ = nullptr;
                 return;
@@ -729,7 +729,7 @@ public:
             _mm_pause();
             auto moc1 = MutexOpCreator(ld_, md0).unlock_special<from_state>();
             assert(moc1.possible());
-            if (md0 == moc1.md || mutex_->cas_rel(md0, moc1.md)) {
+            if (likely(md0 == moc1.md || mutex_->cas_rel(md0, moc1.md))) {
                 ld_ = moc1.ld;
                 mutex_ = nullptr;
                 return;
@@ -968,7 +968,7 @@ private:
         MutexOpCreator moc1;
         if (::load(req.checks_version)) moc1 = moc0.reserve<LockState::READ_MODIFY_WRITE, true>().protect<true>();
         else moc1 = moc0.reserve<LockState::BLIND_WRITE, false>().protect<false>();
-        if (!moc1.possible()) {
+        if (unlikely(!moc1.possible())) {
             ::store(req.succeeded, false);
             return;
         }
@@ -980,7 +980,7 @@ private:
     INLINE void owner_process_reserve_requests(ReqList& waiting_list, MutexData& md0) {
         while (!waiting_list.empty()) {
             Request& req = *waiting_list.front();
-            if (!owner_process_one_reserve_request(req, md0)) return;
+            if (unlikely(!owner_process_one_reserve_request(req, md0))) return;
             waiting_list.pop_front(); // do this before notification.
             req.notify(DONE);
         }
@@ -1011,10 +1011,10 @@ private:
         default:
             BUG();
         }
-        if (moc1.capability == MUST_WAIT) {
+        if (unlikely(moc1.capability == MUST_WAIT)) {
             return false;
         }
-        if (moc1.capability == IMPOSSIBLE) {
+        if (unlikely(moc1.capability == IMPOSSIBLE)) {
             ::store(req.succeeded, false);
             return true;
         }
@@ -1097,7 +1097,7 @@ public:
         MutexData md0 = mutex_->load();
         for (;;) {
 #if 1
-            if (req_type == RequestType::READ && md0.can_read_reserve_without_changing(ld_.ord_id)) {
+            if (likely(req_type == RequestType::READ && md0.can_read_reserve_without_changing(ld_.ord_id))) {
                 // fast path.
                 ld_.state = LockState::READ;
                 ld_.version = md0.version;
@@ -1115,7 +1115,7 @@ public:
 #endif
             acquire_fence();
             md0 = mutex_->load();
-            if (md0.is_valid(ld_.version)) return;
+            if (likely(md0.is_valid(ld_.version))) return;
         }
     }
     INLINE void read_and_reserve(const void *shared, void *local, size_t size) {
@@ -1133,9 +1133,11 @@ public:
         constexpr RequestType req_type = (lock_state == LockState::READ ? RequestType::READ : RequestType::READ_MODIFY_WRITE);
         // fast path.
         MutexData md0 = mutex_->load();
-        if (!md0.is_valid(ld_.version)) return false;
-        if (md0.ord_id == ld_.ord_id) return true;
-        if (req_type == RequestType::READ && md0.can_read_reserve_without_changing(ld_.ord_id)) return true;
+        if (unlikely(!md0.is_valid(ld_.version))) return false;
+        if (unlikely(md0.ord_id == ld_.ord_id)) return true;
+        if (likely(req_type == RequestType::READ && md0.can_read_reserve_without_changing(ld_.ord_id))) {
+            return true;
+        }
         // slow path.
         return do_request(req_type, true);
     }
@@ -1177,12 +1179,12 @@ public:
         mutex_ = nullptr;
     }
     INLINE void unlock_general() noexcept {
-        if (mutex_ == nullptr) return;
-        if (ld_.is_state_in({LockState::INIT, LockState::PRE_BLIND_WRITE})) {
+        if (unlikely(mutex_ == nullptr)) return;
+        if (unlikely(ld_.is_state_in({LockState::INIT, LockState::PRE_BLIND_WRITE}))) {
             mutex_ = nullptr;
             return;
         }
-        if (ld_.is_state_in({LockState::READ, LockState::BLIND_WRITE, LockState::READ_MODIFY_WRITE})) {
+        if (likely(ld_.is_state_in({LockState::READ, LockState::BLIND_WRITE, LockState::READ_MODIFY_WRITE}))) {
             MutexData md0 = mutex_->load();
             if (md0.ord_id != ld_.ord_id) {
                 mutex_ = nullptr;
@@ -1213,7 +1215,7 @@ private:
     INLINE bool do_request(RequestType type, bool checks_version) {
         assert(mutex_ != nullptr);
         req_.init(type, ld_, checks_version);
-        if (mutex_->do_request(req_)) {
+        if (likely(mutex_->do_request(req_))) {
             ld_ = req_.ld;
             return true;
         }
@@ -1267,7 +1269,7 @@ public:
         unused(shared_val, dst);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it = find_entry(key);
-        if (it == vec_.end()) {
+        if (likely(it == vec_.end())) {
             OpEntryL& ope = vec_.emplace_back(Lock(mutex, ord_id_));
             ope.info.set(allocate_local_val(), (void*)shared_val);
             Lock& lk = ope.lock;
@@ -1288,12 +1290,12 @@ public:
         Lock& lk = it->lock;
         if (lk.is_state(LockState::READ)) {
             if (read_type == OPTIMISTIC) {
-                if (!lk.is_unchanged()) return false;
+                if (unlikely(!lk.is_unchanged())) return false;
             } else {
-                if (!lk.template try_keep_reservation<LockState::READ>()) return false;
+                if (unlikely(!lk.template try_keep_reservation<LockState::READ>())) return false;
             }
         } else if (lk.is_state(LockState::READ_MODIFY_WRITE)) {
-            if (!lk.template try_keep_reservation<LockState::READ_MODIFY_WRITE>()) return false;
+            if (unlikely(!lk.template try_keep_reservation<LockState::READ_MODIFY_WRITE>())) return false;
         } else {
             // do nothing.
         }
@@ -1314,7 +1316,7 @@ public:
         unused(shared_val, src);
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it = find_entry(key);
-        if (it == vec_.end()) {
+        if (likely(it == vec_.end())) {
             OpEntryL& ope = vec_.emplace_back(Lock(mutex, ord_id_));
             Lock& lk = ope.lock;
             lk.blind_write();
@@ -1323,7 +1325,7 @@ public:
             return true;
         }
         Lock& lk = it->lock;
-        if (lk.is_state(LockState::READ) && !lk.upgrade()) return false;
+        if (unlikely(lk.is_state(LockState::READ) && !lk.upgrade())) return false;
         copy_value(get_local_val_ptr(it->info), src);
         return true;
     }
@@ -1355,9 +1357,9 @@ public:
         for (OpEntryL& ope : vec_) {
             Lock& lk = ope.lock;
             if (lk.is_state(LockState::BLIND_WRITE)) {
-                if (!lk.template protect<false>()) return false;
+                if (unlikely(!lk.template protect<false>())) return false;
             } else if (lk.is_state(LockState::READ_MODIFY_WRITE)) {
-                if (!lk.template protect<true>()) return false;
+                if (unlikely(!lk.template protect<true>())) return false;
             } else {
                 assert(lk.is_state(LockState::READ));
             }
@@ -1370,7 +1372,7 @@ public:
             Lock& lk = ope.lock;
             // read-modify-write entries have been checked in protect_all() already.
             if (lk.is_state(LockState::READ)) {
-                if (!lk.is_unchanged()) return false;
+                if (unlikely(!lk.is_unchanged())) return false;
                 // S2PL allows unlocking of read locks here.
                 lk.template unlock_special<LockState::READ>();
             }
@@ -1400,14 +1402,14 @@ private:
     INLINE typename Vec::iterator find_entry(uintptr_t key) {
         // at most 4KiB scan.
         constexpr size_t threshold = 4096 / sizeof(OpEntryL);
-        if (vec_.size() > threshold) {
+        if (unlikely(vec_.size() > threshold)) {
             // create indexes.
             for (size_t i = index_.size(); i < vec_.size(); i++) {
                 index_[vec_[i].lock.get_mutex_id()] = i;
             }
             // use indexes.
             UMap::iterator it = index_.find(key);
-            if (it == index_.end()) {
+            if (unlikely(it == index_.end())) {
                 return vec_.end();
             } else {
                 size_t idx = it->second;

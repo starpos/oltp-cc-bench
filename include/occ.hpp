@@ -97,10 +97,10 @@ public:
         mutex_ = mutex;
         MutexData md0 = mutex_->load();
         for (;;) {
-            if (md0.locked) md0 = waitFor();
+            if (unlikely(md0.locked)) md0 = waitFor();
             MutexData md1 = md0;
             md1.locked = 1;
-            if (mutex_->cas_acq(md0, md1)) {
+            if (likely(mutex_->cas_acq(md0, md1))) {
                 md_ = md1;
                 return;
             }
@@ -110,10 +110,10 @@ public:
         assert(mutex != nullptr);
         MutexData md0 = mutex->load();
         for (;;) {
-            if (md0.locked) return false;
+            if (unlikely(md0.locked)) return false;
             MutexData md1 = md0;
             md1.locked = 1;
-            if (mutex->cas_acq(md0, md1)) {
+            if (likely(mutex->cas_acq(md0, md1))) {
                 mutex_ = mutex;
                 md_ = md1;
                 return true;
@@ -121,10 +121,10 @@ public:
         }
     }
     INLINE void unlock(bool updated = false) {
-        if (!mutex_) return;
+        if (unlikely(!mutex_)) return;
         MutexData md0 = md_;
         assert(md0.locked);
-        if (updated) md0.version++;
+        if (likely(updated)) md0.version++;
         md0.locked = 0;
         mutex_->store_release(md0);
         mutex_ = nullptr;
@@ -305,12 +305,12 @@ public:
         unused(sharedVal); unused(localVal);
         size_t localValIdx;
         ReadV::iterator itR = findInReadSet(uintptr_t(&mutex));
-        if (itR != readV_.end()) {
+        if (unlikely(itR != readV_.end())) {
             localValIdx = itR->localValIdx;
         } else {
             // For blind-write, you must check write set also.
             WriteV::iterator itW = findInWriteSet(uintptr_t(&mutex));
-            if (itW != writeV_.end()) {
+            if (unlikely(itW != writeV_.end())) {
                 // This is blind write, so we just read from local write set.
                 localValIdx = itW->localValIdx;
             } else {
@@ -341,7 +341,7 @@ public:
         }
     }
     INLINE bool tryReadToLocal(OccReader& r, bool inWriteSet) {
-        if (!r.tryPrepare()) return false;
+        if (unlikely(!r.tryPrepare())) return false;
 #ifndef NO_PAYLOAD
         ::memcpy(&local_[r.localValIdx], r.sharedVal, valueSize_);
 #endif
@@ -352,11 +352,11 @@ public:
         unused(sharedVal); unused(localVal);
         size_t localValIdx;
         WriteV::iterator itW = findInWriteSet(uintptr_t(&mutex));
-        if (itW != writeV_.end()) {
+        if (unlikely(itW != writeV_.end())) {
             localValIdx = itW->localValIdx;
         } else {
             ReadV::iterator itR = findInReadSet(uintptr_t(&mutex));
-            if (itR == readV_.end()) {
+            if (likely(itR == readV_.end())) {
                 // allocate new local value area.
                 localValIdx = local_.size();
 #ifndef NO_PAYLOAD
@@ -385,20 +385,20 @@ public:
         std::sort(writeV_.begin(), writeV_.end());
         for (WriteEntry& w : writeV_) {
             OccLock& lk = lockV_.emplace_back();
-            if (!lk.tryLock(w.mutex)) return false;
+            if (unlikely(!lk.tryLock(w.mutex))) return false;
         }
         // Serialization point.
         SERIALIZATION_POINT_BARRIER();
         return true;
     }
     INLINE bool verify() {
-        const bool useIndex = shouldUseIndex(writeV_);
-        if (!useIndex) {
+        const bool useIndex = shouldUseIndex(writeV_); // QQQQQ
+        if (likely(!useIndex)) {
             std::sort(writeV_.begin(), writeV_.end());
         }
         for (OccReader& r : readV_) {
             bool inWriteSet;
-            if (useIndex) {
+            if (unlikely(useIndex)) {
                 inWriteSet = findInWriteSet(r.getMutexId()) != writeV_.end();
             } else {
                 WriteEntry w;
@@ -406,7 +406,7 @@ public:
                 inWriteSet = std::binary_search(writeV_.begin(), writeV_.end(), w);
             }
             const bool valid = inWriteSet ? r.verifyVersion() : r.verifyAll();
-            if (!valid) return false;
+            if (unlikely(!valid)) return false;
         }
         return true;
     }
@@ -415,7 +415,7 @@ public:
      */
     INLINE bool verifyWithHealing() {
         const bool useIndex = shouldUseIndex(writeV_);
-        if (!useIndex) {
+        if (likely(!useIndex)) {
             std::sort(writeV_.begin(), writeV_.end());
         }
         bool isHealed = true;
@@ -423,7 +423,7 @@ public:
             isHealed = false;
             for (OccReader& r : readV_) {
                 bool inWriteSet;
-                if (useIndex) {
+                if (unlikely(useIndex)) {
                     inWriteSet = findInWriteSet(r.getMutexId()) != writeV_.end();
                 } else {
                     WriteEntry w;
@@ -433,7 +433,7 @@ public:
                 const bool valid = inWriteSet ? r.verifyVersion() : r.verifyAll();
                 if (!valid) {
                     // do healing
-                    if (!tryReadToLocal(r, inWriteSet)) {
+                    if (unlikely(!tryReadToLocal(r, inWriteSet))) {
                         // try read failed. (We can not wait for lock to avoid deadlock.)
                         return false;
                     }
@@ -491,14 +491,14 @@ private:
      */
     template <typename Vector, typename Map, typename Func>
     INLINE typename Vector::iterator findInSet(uintptr_t key, Vector& vec, Map& map, Func&& func) {
-        if (shouldUseIndex(vec)) {
+        if (unlikely(shouldUseIndex(vec))) {
             // create indexes.
             for (size_t i = map.size(); i < vec.size(); i++) {
                 map[func(vec[i])] = i;
             }
             // use indexes.
             typename Map::iterator it = map.find(key);
-            if (it == map.end()) {
+            if (unlikely(it == map.end())) {
                 return vec.end();
             } else {
                 size_t idx = it->second;

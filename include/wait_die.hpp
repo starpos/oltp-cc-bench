@@ -100,7 +100,7 @@ struct WaitDieData2
             , tx_id, write_locked, readers, cumulo_readers);
     }
 
-    bool is_unlocked() const {
+    INLINE bool is_unlocked() const {
         return tx_id == MAX_TXID && write_locked == 0
             && readers == 0 && cumulo_readers == 0;
     }
@@ -114,10 +114,10 @@ struct WaitDieData2
     INLINE bool cas(WaitDieData2& d0, WaitDieData2 d1) {
         return compare_exchange(obj, d0.obj, d1.obj);
     }
-    INLINE bool cas_acquire(WaitDieData2& d0, WaitDieData2 d1) {
+    INLINE bool cas_acq(WaitDieData2& d0, WaitDieData2 d1) {
         return compare_exchange_acquire(obj, d0.obj, d1.obj);
     }
-    INLINE bool cas_release(WaitDieData2& d0, WaitDieData2 d1) {
+    INLINE bool cas_rel(WaitDieData2& d0, WaitDieData2 d1) {
         return compare_exchange_release(obj, d0.obj, d1.obj);
     }
 };
@@ -140,15 +140,21 @@ private:
 public:
     INLINE WaitDieLock2T() noexcept : mutexp_(nullptr), mode_(Mode::INVALID), tx_id_(MAX_TXID) {}
     INLINE ~WaitDieLock2T() noexcept { unlock(); }
-    INLINE WaitDieLock2T(const WaitDieLock2T& ) = delete;
+    WaitDieLock2T(const WaitDieLock2T& ) = delete;
+    WaitDieLock2T& operator=(const WaitDieLock2T& rhs) = delete;
     INLINE WaitDieLock2T(WaitDieLock2T&& rhs) noexcept : WaitDieLock2T() { swap(rhs); }
-    INLINE WaitDieLock2T& operator=(const WaitDieLock2T& rhs) = delete;
     INLINE WaitDieLock2T& operator=(WaitDieLock2T&& rhs) noexcept { swap(rhs); return *this; }
 
     /**
      * This is for blind-write.
      */
     INLINE void setMutex(Mutex& mutex) noexcept { mutexp_ = &mutex; }
+
+    INLINE void set(Mutex& mutex, Mode mode, TxId tx_id) {
+        mutexp_ = &mutex;
+        mode_ = mode;
+        tx_id_ = tx_id;
+    }
 
     /**
      * If true, locked.
@@ -159,15 +165,15 @@ public:
         Mutex mu0 = mutex.load();
         for (;;) {
             _mm_pause();
-            if (mu0.write_locked > 0) {
-                if (mu0.tx_id < tx_id) return false; // die
+            if (unlikely(mu0.write_locked > 0)) {
+                if (unlikely(mu0.tx_id < tx_id)) return false; // die
                 mu0 = mutex.load();
                 continue; // wait
             }
-            if (mu0.tx_id < tx_id && mu0.cumulo_readers >= Threshold_cumulo_readers) {
+            if (unlikely(mu0.tx_id < tx_id && mu0.cumulo_readers >= Threshold_cumulo_readers)) {
                 return false; // die
             }
-            if (mu0.readers >= Max_readers) {
+            if (unlikely(mu0.readers >= Max_readers)) {
                 mu0 = mutex.load();
                 continue; // wait
             }
@@ -176,10 +182,8 @@ public:
             mu1.readers++;
             mu1.cumulo_readers++;
             mu1.tx_id = std::min(mu1.tx_id, tx_id);
-            if (mutex.cas_acquire(mu0, mu1)) {
-                mutexp_ = &mutex;
-                mode_ = Mode::S;
-                tx_id_ = tx_id;
+            if (likely(mutex.cas_acq(mu0, mu1))) {
+                set(mutex, Mode::S, tx_id);
                 return true;
             }
             // retry
@@ -190,8 +194,8 @@ public:
         Mutex mu0 = mutex.load();
         for (;;) {
             _mm_pause();
-            if (mu0.write_locked || mu0.readers != 0) {
-                if (mu0.tx_id < tx_id) return false; // die
+            if (unlikely(mu0.write_locked || mu0.readers != 0)) {
+                if (unlikely(mu0.tx_id < tx_id)) return false; // die
                 mu0 = mutex.load();
                 continue; // wait
             }
@@ -199,10 +203,8 @@ public:
             Mutex mu1 = mu0;
             mu1.write_locked = 1;
             mu1.tx_id = tx_id;
-            if (mutex.cas_acquire(mu0, mu1)) {
-                mutexp_ = &mutex;
-                mode_ = Mode::X;
-                tx_id_ = tx_id;
+            if (likely(mutex.cas_acq(mu0, mu1))) {
+                set(mutex, Mode::X, tx_id);
                 return true;
             }
             // retry
@@ -227,11 +229,11 @@ public:
             Mutex mu1 = mu0;
             assert(mu1.readers > 0);
             mu1.readers--;
-            if (mu1.readers == 0) {
+            if (unlikely(mu1.readers == 0)) {
                 mu1.cumulo_readers = 0;
                 mu1.tx_id = MAX_TXID;
             }
-            if (mutex.cas_release(mu0, mu1)) {
+            if (likely(mutex.cas_rel(mu0, mu1))) {
                 init();
                 return;
             }
@@ -265,7 +267,7 @@ public:
             mu1.readers = 0;
             mu1.cumulo_readers = 0;
             mu1.tx_id = tx_id_;
-            if (mutex.cas(mu0, mu1)) {
+            if (likely(mutex.cas(mu0, mu1))) {
                 mode_ = Mode::X;
                 return true;
             }
@@ -433,6 +435,13 @@ public:
      */
     INLINE void setMutex(Mutex& mutex) noexcept { mutexp_ = &mutex; }
 
+    INLINE void set(Mutex* mutexp, Mode mode, TxId tx_id, size_t idx_in_txids = SIZE_MAX) {
+        mutexp_ = mutexp;
+        mode_ = mode;
+        tx_id_ = tx_id;
+        idx_in_txids_ = idx_in_txids;
+    }
+
     /**
      * If true, locked.
      * If false, you must abort your running transaction.
@@ -457,27 +466,24 @@ public:
              *         can wait if prior (5b), or die (5c).
              */
             const bool is_prior = (tx_id < h0.tx_id);
-            if ((h0.is_write_locked() || (!h0.latch && h0.is_read_locked_full())) && !is_prior) {
+            if (unlikely((h0.is_write_locked() || (!h0.latch && h0.is_read_locked_full())) && !is_prior)) {
                 return false; // (3b)(5c)
             }
-            if (h0.latch || h0.is_read_locked_full()) {
+            if (unlikely(h0.latch || h0.is_read_locked_full())) {
                 // (2)(3)(4)(5b)(5c) - (3b)(5c) = (2)(3a)(4)(5b)
                 h0 = mutex.load();
                 continue;
             }
             // (1)(5a)
             Header h1 = h0; h1.latch = 1;
-            if (!mutex.cas(h0, h1)) continue;
+            if (unlikely(!mutex.cas(h0, h1))) continue;
             const size_t idx = mutex.add_tx_id(tx_id);
             h1.readers++;
             h1.tx_id = std::min(h1.tx_id, tx_id);
             h1.latch = 0;
             mutex.store(h1);
             // lock has done.
-            mutexp_ = &mutex;
-            mode_ = Mode::S;
-            tx_id_ = tx_id;
-            idx_in_txids_ = idx;
+            set(&mutex, Mode::S, tx_id, idx);
             return true;
         }
         assert(false);
@@ -501,10 +507,10 @@ public:
              *     --> can wait if prior (5a), or die (5b).
              */
             const bool is_prior = (tx_id < h0.tx_id);
-            if ((h0.is_write_locked() || (!h0.latch && h0.is_read_locked())) && !is_prior) {
+            if (unlikely((h0.is_write_locked() || (!h0.latch && h0.is_read_locked())) && !is_prior)) {
                 return false; // (3b)(5b)
             }
-            if (h0.latch || h0.is_locked()) {
+            if (unlikely(h0.latch || h0.is_locked())) {
                 // !(1) - (3b)(5b) = (2)(3a)(4)(5a)
                 h0 = mutex.load();
                 continue;
@@ -513,11 +519,9 @@ public:
             Header h1 = h0;
             h1.latch = 1;
             h1.tx_id = tx_id;
-            if (!mutex.cas(h0, h1)) continue;
+            if (unlikely(!mutex.cas(h0, h1))) continue;
             // lock has done.
-            mutexp_ = &mutex;
-            mode_ = Mode::X;
-            tx_id_ = tx_id;
+            set(&mutex, Mode::X, tx_id);
             return true;
         }
         assert(false);
@@ -538,19 +542,19 @@ public:
         Header h0 = mutex.load();
         for (;;) {
             _mm_pause();
-            if (h0.latch) {
+            if (unlikely(h0.latch)) {
                 h0 = mutex.load();
                 continue;
             }
             Header h1 = h0;
             h1.latch = 1;
-            if (!mutex.cas(h0, h1)) continue;
+            if (unlikely(!mutex.cas(h0, h1))) continue;
             mutex.remove_tx_id(idx_in_txids_);
             h1.readers--;
             h1.latch = 0;
-            if (h1.readers == 0) {
+            if (unlikely(h1.readers == 0)) {
                 h1.tx_id = MAX_TXID;
-            } else if (h1.tx_id == tx_id_) {
+            } else if (unlikely(h1.tx_id == tx_id_)) {
                 h1.tx_id = mutex.get_min_tx_id();
             }
             mutex.store(h1);
@@ -580,16 +584,15 @@ public:
         while (h0.readers == 1) {
             assert(h0.tx_id == tx_id_);
             _mm_pause();
-            if (h0.latch) {
+            if (unlikely(h0.latch)) {
                 h0 = mutex.load();
                 continue;
             }
             Header h1 = h0;
             h1.latch = 1;
-            if (!mutex.cas(h0, h1)) continue;
+            if (unlikely(!mutex.cas(h0, h1))) continue;
             mutex.remove_tx_id(idx_in_txids_);
             h1.readers = 0;
-            // h1.tx_id = tx_id_;
             mutex.store(h1); // upgrade has done.
             mode_ = Mode::X;
             idx_in_txids_ = SIZE_MAX;
@@ -834,7 +837,7 @@ private:
 public:
     INLINE WaitDieData4() : header_(), tail_(mcslike::UNOWNED), head_(nullptr), wq_() {}
 
-    bool do_request(Request& req) {
+    INLINE bool do_request(Request& req) {
         assert(!req.req_type.is_invalid());
         const Message msg = mcslike::do_request_sync(
             req, tail_, head_, [&](Request& tail) { owner_task(req, tail); });
@@ -844,7 +847,7 @@ public:
     /**
      * Debug or test purpuse.
      */
-    void do_request_async(Request& req) {
+    INLINE void do_request_async(Request& req) {
         assert(!req.req_type.is_invalid());
         mcslike::do_request_async(
             req, tail_, head_, [&](Request& tail) { owner_task(req, tail); });
@@ -884,11 +887,11 @@ private:
             // req->next will be destroyed so we obtain its value at first.
             Request* next = (req == &tail ? nullptr : req->get_non_empty_next());
             const RequestType req_type = load(req->req_type);
-            if (req_type.is_lock()) {
-                if (!try_add_lock_req_to_wait_queue(h1, req)) {
+            if (likely(req_type.is_lock())) {
+                if (unlikely(!try_add_lock_req_to_wait_queue(h1, req))) {
                     req->notify(FAILED);
                 }
-            } else if (req_type.is_upgrade()) {
+            } else if (unlikely(req_type.is_upgrade())) {
                 if (!try_add_upgrade_req_to_wait_queue(h1, req)) {
                     req->notify(FAILED);
                 } else {
@@ -921,7 +924,7 @@ private:
 #endif
         store_header(h1);
         notify_success_to_all(unlock_list);
-        if (upgrade_req != nullptr) upgrade_req->notify(SUCCEEDED);
+        if (unlikely(upgrade_req != nullptr)) upgrade_req->notify(SUCCEEDED);
         notify_success_to_all(lock_list);
     }
     INLINE bool try_add_upgrade_req_to_wait_queue(const Header& h0, Request* req) {
@@ -936,8 +939,8 @@ private:
         const TxId tx_id = load(req->tx_id);
         assert(req_type.is_lock());
         if (req_type.is_write()) {
-            if (wq_.empty()) {
-                if (h0.is_unlocked() || tx_id <= h0.tx_id) {
+            if (likely(wq_.empty())) {
+                if (likely(h0.is_unlocked() || tx_id <= h0.tx_id)) {
                     // Use '<=' instead '<' because the worker may used the same tx_id before.
                     assert(h0.write_requests < Header::Max_write_requests); // TODO
                     h0.write_requests++;
@@ -950,7 +953,7 @@ private:
             const RequestType back_req_type = load(back.req_type);
             const bool back_is_write = back_req_type.is_upgrade() || back_req_type.is_write_lock();
             const TxId check_tx_id = (back_is_write ? load(back.tx_id) : load(back.read_tx_id));
-            if (tx_id < check_tx_id) {
+            if (likely(tx_id < check_tx_id)) {
                 assert(h0.write_requests < Header::Max_write_requests); // TODO
                 h0.write_requests++;
                 wq_.push_back(req);
@@ -959,8 +962,8 @@ private:
             return false;
         }
         assert(req_type.is_read());
-        if (wq_.empty()) {
-            if (h0.is_unlocked() || h0.is_read_locked()) {
+        if (likely(wq_.empty())) {
+            if (likely(h0.is_unlocked() || h0.is_read_locked())) {
                 // TODO: if read locked, check Max_readers limitation.
                 assert(load(req->write_tx_id) == MAX_TXID);
                 store(req->read_tx_id, std::min(h0.tx_id, load(req->tx_id)));
@@ -974,7 +977,7 @@ private:
         const bool back_is_write = back_req_type.is_upgrade() || back_req_type.is_write_lock();
         if (back_is_write) {
             const TxId back_tx_id = load(back.tx_id);
-            if (tx_id < back_tx_id) {
+            if (likely(tx_id < back_tx_id)) {
                 store(req->write_tx_id, back_tx_id);
                 store(req->read_tx_id, tx_id);
                 wq_.push_back(req);
@@ -985,7 +988,7 @@ private:
         assert(load(back.req_type).is_read());
         // TODO: check Max_readers limitation.
         const TxId back_write_tx_id = load(back.write_tx_id);
-        if (tx_id < back_write_tx_id) {
+        if (likely(tx_id < back_write_tx_id)) {
             store(req->write_tx_id, back_write_tx_id);
             store(req->read_tx_id, std::min(tx_id, load(back.read_tx_id)));
             wq_.push_back(req);
@@ -998,7 +1001,7 @@ private:
         if (nr_read != 0) {
             assert(h0.readers >= nr_read);
             h0.readers -= nr_read;
-            if (h0.readers == 0) h0.tx_id = MAX_TXID;
+            if (unlikely(h0.readers == 0)) h0.tx_id = MAX_TXID;
             return;
         }
         if (nr_write != 0) {
@@ -1051,7 +1054,7 @@ private:
         assert(req != nullptr);
         assert(load(req->req_type).is_read());
         while (req != nullptr) {
-            if (h0.readers >= Max_readers) {
+            if (unlikely(h0.readers >= Max_readers)) {
                 // TODO: Check Max_readers at try_add_to_wait_queue().
                 wq_.pop_front();
                 req->notify(FAILED);
@@ -1108,6 +1111,12 @@ public:
      */
     INLINE void setMutex(Mutex& mutex) noexcept { mutexp_ = &mutex; }
 
+    INLINE void set(Mutex* mutexp, Mode mode, TxId tx_id) {
+        mutexp_ = mutexp;
+        mode_ = mode;
+        tx_id_ = tx_id;
+    }
+
     /**
      * If true, locked.
      * If false, you must abort your running transaction.
@@ -1117,27 +1126,21 @@ public:
         Header h0 = mutex.load_header();
         const bool writer_exists = (h0.is_write_locked() ||
                                     (h0.is_read_locked() && h0.write_requests > 0));
-        if (writer_exists && h0.tx_id < tx_id) return false;
+        if (unlikely(writer_exists && h0.tx_id < tx_id)) return false;
 
         Request req(tx_id, RequestType::READ_LOCK);
-        if (!mutex.do_request(req)) return false;
-
-        mutexp_ = &mutex;
-        mode_ = Mode::S;
-        tx_id_ = tx_id;
+        if (unlikely(!mutex.do_request(req))) return false;
+        set(&mutex, Mode::S, tx_id);
         return true;
     }
     INLINE bool writeLock(Mutex& mutex, TxId tx_id) noexcept {
         assert(tx_id != MAX_TXID);
         Header h0 = mutex.load_header();
-        if (h0.is_locked() && h0.tx_id < tx_id) return false;
+        if (unlikely(h0.is_locked() && h0.tx_id < tx_id)) return false;
 
         Request req(tx_id, RequestType::WRITE_LOCK);
-        if (!mutex.do_request(req)) return false;
-
-        mutexp_ = &mutex;
-        mode_ = Mode::X;
-        tx_id_ = tx_id;
+        if (unlikely(!mutex.do_request(req))) return false;
+        set(&mutex, Mode::X, tx_id);
         return true;
     }
     INLINE void unlock() noexcept {
@@ -1174,10 +1177,10 @@ public:
         assert_locked(Mode::S);
         Mutex& mutex = *mutexp_;
         Header h0 = mutex.load_header();
-        if (h0.readers != 1 || h0.write_requests != 0) return false;
+        if (unlikely(h0.readers != 1 || h0.write_requests != 0)) return false;
 
         Request req(tx_id_, RequestType::UPGRADE);
-        if (!mutex.do_request(req)) return false;
+        if (unlikely(!mutex.do_request(req))) return false;
 
         mode_ = Mode::X;
         return true;

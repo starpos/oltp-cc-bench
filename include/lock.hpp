@@ -35,18 +35,15 @@ using uint128_t = __uint128_t;
 class Mutexlock
 {
 public:
-    struct Mutex
-    {
-        std::mutex v;
-    };
+    using Mutex = std::mutex;
 private:
-    Mutex *mutex_;
+    Mutex* mutexp_;
 public:
-    Mutexlock(Mutex *mutex) : mutex_(mutex) {
-        mutex_->v.lock();
+    INLINE explicit Mutexlock(Mutex& mutex) : mutexp_(&mutex) {
+        mutex.lock();
     }
-    ~Mutexlock() noexcept {
-        mutex_->v.unlock();
+    INLINE ~Mutexlock() noexcept {
+        mutexp_->unlock();
     }
 };
 
@@ -73,12 +70,12 @@ public:
 private:
     Mutex *mutex_;
 public:
-    TtasSpinlockT(Mutex *mutex) : mutex_(mutex) {
+    INLINE explicit TtasSpinlockT(Mutex *mutex) : mutex_(mutex) {
         int flag = __ATOMIC_ACQUIRE | (useHLE ? __ATOMIC_HLE_ACQUIRE : 0);
         while (mutex_->v || __atomic_exchange_n(&mutex_->v, 1, flag))
             _mm_pause();
     }
-    ~TtasSpinlockT() noexcept {
+    INLINE ~TtasSpinlockT() noexcept {
         int flag = __ATOMIC_RELEASE | (useHLE ? __ATOMIC_HLE_RELEASE : 0);
         __atomic_clear(&mutex_->v, flag);
     }
@@ -104,7 +101,7 @@ private:
     UintT v_;
 #endif
 public:
-    explicit TicketSpinlockT(Mutex *mutex) : mutex_(mutex) {
+    INLINE explicit TicketSpinlockT(Mutex *mutex) : mutex_(mutex) {
         UintT v0 = __atomic_fetch_add(&mutex_->head, 1, __ATOMIC_ACQUIRE);
         while (v0 != __atomic_load_n(&mutex_->tail, __ATOMIC_CONSUME)) {
             _mm_pause();
@@ -113,7 +110,7 @@ public:
         v_ = v0;
 #endif
     }
-    ~TicketSpinlockT() noexcept {
+    INLINE ~TicketSpinlockT() noexcept {
         __attribute__((unused)) UintT v1
             = __atomic_fetch_add(&mutex_->tail, 1, __ATOMIC_RELEASE);
 #ifndef NDEBUG
@@ -159,7 +156,7 @@ private:
 public:
     INLINE McsSpinlock() : mutexp_(nullptr), node_() {
     }
-    INLINE McsSpinlock(Mutex& mutex) : McsSpinlock() {
+    INLINE explicit McsSpinlock(Mutex& mutex) : McsSpinlock() {
         lock(mutex);
     }
     INLINE ~McsSpinlock() noexcept { if (mutexp_) unlock(); }
@@ -217,143 +214,116 @@ private:
     alignas(sizeof(uintptr_t))
     int v_;
 public:
-    XSMutex() : v_(0) {}
+    INLINE XSMutex() : v_(0) {}
     INLINE void lock(Mode mode) {
         switch(mode) {
         case Mode::X:
-            lockX(); return;
+            write_lock(); return;
         case Mode::S:
-            lockS(); return;
+            read_lock(); return;
         default:
-            throw std::runtime_error("XSMutex: invalid mode");
+            assert(false);
         }
     }
     INLINE bool tryLock(Mode mode) {
         switch(mode) {
         case Mode::X:
-            return tryLockX();
+            return write_trylock();
         case Mode::S:
-            return tryLockS();
+            return read_trylock();
         default:
-            throw std::runtime_error("XSMutex: invalid mode");
+            assert(false);
+            return false;
         }
     }
     /**
      * S --> X
      */
     INLINE bool tryUpgrade() {
-        int v = load(v_);
-        if (v > 1) return false;
-        assert(v == 1);
-        return compareExchange(v_, v, -1, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+        int v0 = load(v_);
+        if (unlikely(v0 != 1)) return false;
+        return compare_exchange_acquire(v_, v0, -1);
     }
     INLINE void upgrade() {
-        int v = load(v_);
+        int v0 = load(v_);
         for (;;) {
-            while (v > 1) {
-                _mm_pause();
-                v = load(v_);
+            _mm_pause();
+            while (unlikely(v0 != 1)) {
+                v0 = load(v_);
+                continue;
             }
-            assert(v == 1);
-            if (compareExchange(v_, v, -1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+            if (likely(compare_exchange_acquire(v_, v0, -1))) {
                 return;
             }
         }
     }
     INLINE void unlock(Mode mode) noexcept {
         switch(mode) {
+        case Mode::Invalid:
+            return;
         case Mode::X:
-            unlockX(); return;
+            write_unlock(); return;
         case Mode::S:
-            unlockS(); return;
-        default:
-            assert(false);
+            read_unlock(); return;
         }
     }
     std::string str() const {
         return cybozu::util::formatString("XSMutex(%d)", load(v_));
     }
 
-private:
-    void lockX() {
+    INLINE void write_lock() {
+        int v0 = load(v_);
         for (;;) {
-            if (v_ != 0) {
-                _mm_pause();
-                continue;
-            }
-            if (loadAcquire(v_) != 0) {
-                _mm_pause();
-                continue;
-            }
-            int v = 0;
-            if (!compareExchange(v_, v, -1, __ATOMIC_ACQUIRE)) {
-                _mm_pause();
-                continue;
-            }
-            break;
-        }
-    }
-    bool tryLockX() {
-#if 0
-        int v = loadAcquire(v_);
-        if (v != 0) return false;
-        return compareExchange(v_, v, -1, __ATOMIC_ACQUIRE);
-#else
-        // We should retry CAS.
-        int v = loadAcquire(v_);
-        for (;;) {
-            if (v != 0) return false;
-            if (compareExchange(v_, v, -1, __ATOMIC_ACQUIRE)) {
-                break;
-            }
             _mm_pause();
+            if (unlikely(v0 != 0)) {
+                v0 = load(v_);
+                continue;
+            }
+            if (likely(compare_exchange_acquire(v_, v0, -1))) {
+                return;
+            }
         }
-        return true;
-#endif
     }
-    void unlockX() noexcept {
-        __attribute__((unused)) int ret = __atomic_fetch_add(&v_, 1, __ATOMIC_RELEASE);
-        assert(ret == -1);
-    }
-    bool tryLockS() {
-#if 0
-        int v = loadAcquire(v_);
-        if (v < 0) return false;
-        return compareExchange(v_, v, v + 1, __ATOMIC_ACQUIRE);
-#else
+    INLINE bool write_trylock() {
         // We should retry CAS.
-        int v = loadAcquire(v_);
-        for (;;) {
-            if (v < 0) return false;
-            if (compareExchange(v_, v, v + 1, __ATOMIC_ACQUIRE)) {
-                break;
+        int v = load(v_);
+        while (likely(v == 0)) {
+            if (likely(compare_exchange_acquire(v_, v, -1))) {
+                return true;
             }
+        }
+        return false;
+    }
+    INLINE void write_unlock() noexcept {
+        int ret = fetch_add_rel(v_, 1);
+        assert(ret == -1); unused(ret);
+    }
+    INLINE bool read_trylock() {
+        // We should retry CAS.
+        int v = load(v_);
+        while (likely(v >= 0)) {
+            if (likely(compare_exchange_acquire(v_, v, v + 1))) {
+                return true;
+            }
+        }
+        return false;
+    }
+    INLINE void read_lock() {
+        int v0 = load(v_);
+        for (;;) {
             _mm_pause();
-        }
-        return true;
-#endif
-    }
-    void lockS() {
-        for (;;) {
-            if (v_ < 0) {
-                _mm_pause();
+            if (unlikely(v0 < 0)) {
+                v0 = load(v_);
                 continue;
             }
-            int v = loadAcquire(v_);
-            if (v < 0) {
-                _mm_pause();
-                continue;
+            if (likely(compare_exchange_acquire(v_, v0, v0 + 1))) {
+                return;
             }
-            if (!compareExchange(v_, v, v + 1, __ATOMIC_ACQUIRE)) {
-                _mm_pause();
-                continue;
-            }
-            break;
         }
     }
-    void unlockS() noexcept {
-        __attribute__((unused)) int ret = __atomic_fetch_sub(&v_, 1, __ATOMIC_RELEASE);
-        assert(ret > 0);
+    INLINE void read_unlock() noexcept {
+        int ret = fetch_sub_rel(v_, 1);
+        assert(ret > 0); unused(ret);
     }
 };
 
@@ -370,40 +340,50 @@ private:
     XSMutex *mutex_;
     Mode mode_;
 public:
-    XSLock() : mutex_(nullptr), mode_(Mode::Invalid) {}
-    XSLock(XSMutex *mutex, Mode mode) : XSLock() {
+    INLINE XSLock() : mutex_(nullptr), mode_(Mode::Invalid) {}
+    XSLock(XSMutex& mutex, Mode mode) : XSLock() {
         lock(mutex, mode);
     }
-    ~XSLock() noexcept {
-        unlock();
-    }
+    INLINE ~XSLock() noexcept { unlock(); }
+
     XSLock(const XSLock&) = delete;
-    XSLock(XSLock&& rhs) noexcept : XSLock() { swap(rhs); }
     XSLock& operator=(const XSLock&) = delete;
-    XSLock& operator=(XSLock&& rhs) noexcept { swap(rhs); return *this; }
-    INLINE void lock(XSMutex *mutex, Mode mode) {
+    INLINE XSLock(XSLock&& rhs) noexcept : XSLock() { swap(rhs); }
+    INLINE XSLock& operator=(XSLock&& rhs) noexcept { swap(rhs); return *this; }
+
+    INLINE void lock(XSMutex& mutex, Mode mode) {
         assert(mode_ == Mode::Invalid);
-        assert(mutex);
-        mutex_ = mutex;
+        mutex.lock(mode);
+        mutex_ = &mutex;
         mode_ = mode;
-        mutex_->lock(mode);
     }
-    INLINE bool tryLock(XSMutex *mutex, Mode mode) {
+    INLINE bool tryLock(XSMutex& mutex, Mode mode) {
         assert(mode_ == Mode::Invalid);
-        assert(mutex);
-        mutex_ = mutex;
+        if (unlikely(!mutex.tryLock(mode))) return false;
+        mutex_ = &mutex;
         mode_ = mode;
-        if (mutex_->tryLock(mode)) return true;
-        init();
-        return false;
+        return true;
     }
-    bool isShared() const {
+    INLINE bool write_trylock(XSMutex& mutex) {
+        if (unlikely(!mutex.write_trylock())) return false;
+        mutex_ = &mutex;
+        mode_ = Mode::X;
+        return true;
+    }
+    INLINE bool read_trylock(XSMutex& mutex) {
+        if (unlikely(!mutex.read_trylock())) return false;
+        mutex_ = &mutex;
+        mode_ = Mode::S;
+        return true;
+    }
+
+    INLINE bool isShared() const {
         return mode_ == Mode::S;
     }
     INLINE bool tryUpgrade() {
         assert(mutex_);
         assert(mode_ == Mode::S);
-        if (!mutex_->tryUpgrade()) return false;
+        if (unlikely(!mutex_->tryUpgrade())) return false;
         mode_ = Mode::X;
         return true;
     }
@@ -414,27 +394,41 @@ public:
         mode_ = Mode::X;
     }
     INLINE void unlock() noexcept {
-        if (mode_ == Mode::Invalid) return;
+        if (likely(mode_ == Mode::Invalid)) {
+            mutex_ = nullptr;
+            return;
+        }
         assert(mutex_);
         mutex_->unlock(mode_);
         init();
     }
-    const Mutex* mutex() const { return mutex_; }
-    Mutex* mutex() { return mutex_; }
-    uintptr_t getMutexId() const { return uintptr_t(mutex_); }
-    Mode mode() const { return mode_; }
+    INLINE void write_unlock() noexcept {
+        assert(mode_ == Mode::X); assert(mutex_);
+        mutex_->write_unlock();
+        init();
+    }
+    INLINE void read_unlock() noexcept {
+        assert(mode_ == Mode::S); assert(mutex_);
+        mutex_->read_unlock();
+        init();
+    }
+
+    INLINE const Mutex* mutex() const { return mutex_; }
+    INLINE Mutex* mutex() { return mutex_; }
+    INLINE uintptr_t getMutexId() const { return uintptr_t(mutex_); }
+    INLINE Mode mode() const { return mode_; }
 
     /*
      * This is used for dummy object to comparison.
      */
-    void setMutex(Mutex *mutex) { mutex_ = mutex; }
+    INLINE void setMutex(Mutex *mutex) { mutex_ = mutex; }
 
 private:
-    void init() {
+    INLINE void init() {
         mutex_ = nullptr;
         mode_ = Mode::Invalid;
     }
-    void swap(XSLock& rhs) noexcept {
+    INLINE void swap(XSLock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(mode_, rhs.mode_);
     }

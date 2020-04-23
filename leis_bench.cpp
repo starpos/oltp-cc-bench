@@ -78,15 +78,15 @@ Result1 worker(size_t idx, uint8_t& ready, const bool& start, const bool& quit, 
 
     llSet.init(shared.payload, realNrOp);
 
-    storeRelease(ready, 1);
-    while (!loadAcquire(start)) _mm_pause();
+    store_release(ready, 1);
+    while (!load_acquire(start)) _mm_pause();
     size_t count = 0; unused(count);
-    while (!loadAcquire(quit)) {
+    while (likely(!load_acquire(quit))) {
         size_t firstRecIdx;
         assert(llSet.empty());
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (loadAcquire(quit)) break; // to quit under starvation.
+            if (unlikely(load_acquire(quit))) break; // to quit under starvation.
             rand.setState(randState); // Retries will reproduce the same access pattern.
             for (size_t i = 0; i < realNrOp; i++) {
                 Mode mode = getMode(rand, realNrOp, realNrWr, wrRatio, i);
@@ -94,18 +94,18 @@ Result1 worker(size_t idx, uint8_t& ready, const bool& start, const bool& quit, 
                 auto& item = recV[key];
                 Mutex& mutex = item.value;
                 if (mode == Mode::S) {
-                    if (!llSet.read(mutex, item.payload, &value[0])) goto abort;
+                    if (unlikely(!llSet.read(mutex, item.payload, &value[0]))) goto abort;
                 } else {
                     assert(mode == Mode::X);
                     if (shared.usesRMW) {
-                        if (!llSet.readForUpdate(mutex, item.payload, &value[0])) goto abort;
-                        if (!llSet.write(mutex, item.payload, &value[0])) goto abort;
+                        if (unlikely(!llSet.readForUpdate(mutex, item.payload, &value[0]))) goto abort;
+                        if (unlikely(!llSet.write(mutex, item.payload, &value[0]))) goto abort;
                     } else {
-                        if (!llSet.write(mutex, item.payload, &value[0])) goto abort;
+                        if (unlikely(!llSet.write(mutex, item.payload, &value[0]))) goto abort;
                     }
                 }
             }
-            if (!llSet.blindWriteLockAll()) goto abort;
+            if (unlikely(!llSet.blindWriteLockAll())) goto abort;
             llSet.updateAndUnlock();
             res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);
@@ -203,7 +203,7 @@ struct CmdLineOptionPlus : CmdLineOption
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&useVector, 0, "vector", "[0 or 1]: use vector instead of map. (default:0)");
-        appendOpt(&leisLockType, 0, "lock", "[id]: leis lock type (0:spin, 1:withmcs, 2:sxql, default:0)");
+        appendOpt(&leisLockType, 0, "lock", "[id]: leis lock type (0:spin, 1:withmcs, default:0)");
         appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write 0:w 1:rmw (default: 1)");
     }
     std::string str() const {
@@ -218,7 +218,9 @@ enum LockLockTypeType
 {
     USE_LEIS_SPIN = 0,
     USE_LEIS_WITHMCS = 1,
+#if 0
     USE_LEIS_SXQL = 2,
+#endif
 };
 
 
@@ -264,9 +266,11 @@ void dispatch0(const CmdLineOptionPlus& opt)
     case USE_LEIS_WITHMCS:
         dispatch1<cybozu::lock::LockWithMcs>(opt);
         break;
+#if 0
     case USE_LEIS_SXQL:
         dispatch1<cybozu::lock::SXQLock>(opt);
         break;
+#endif
     default:
         throw cybozu::Exception("bad leisLockType") << opt.leisLockType;
     }

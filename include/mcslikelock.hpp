@@ -3,6 +3,7 @@
 #include "inline.hpp"
 #include "atomic_wrapper.hpp"
 #include "arch.hpp"
+#include "util.hpp"
 
 
 /**
@@ -65,11 +66,11 @@ template <typename Request, typename Func>
 INLINE void do_request_async(Request& req, uintptr_t& tail, Request*& head, Func&& owner_task)
 {
     uintptr_t prev = exchange(tail, from_req_ptr(&req));
-    if (prev == UNOWNED) {
+    if (likely(prev == UNOWNED)) {
         do_owner_task<Request, Func>(tail, head, std::move(owner_task));
         return;
     }
-    if (prev == OWNED) {
+    if (unlikely(prev == OWNED)) {
         store_release(head, &req);
         req.wait_for_ownership();
         do_owner_task<Request, Func>(tail, head, std::move(owner_task));

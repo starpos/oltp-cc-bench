@@ -83,14 +83,14 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     lockSet.init(shared.payload, realNrOp);
 
     storeRelease(ready, 1);
-    while (!loadAcquire(start)) _mm_pause();
-    while (!loadAcquire(quit)) {
+    while (!load_acquire(start)) _mm_pause();
+    while (!load_acquire(quit)) {
         size_t firstRecIdx = 0;
         uint64_t t0 = 0;
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (loadAcquire(quit)) break; // to quit under starvation.
+            if (unlikely(load_acquire(quit))) break; // to quit under starvation.
             // Try to run transaction.
             assert(lockSet.empty());
             rand.setState(randState);
@@ -111,14 +111,14 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 
             // commit phase.
             if (nowait) {
-                if (!lockSet.tryLock()) goto abort;
+                if (unlikely(!lockSet.tryLock())) goto abort;
             } else {
                 lockSet.lock();
             }
 #if 1
-            if (!lockSet.verify()) goto abort;
+            if (unlikely(!lockSet.verify())) goto abort;
 #else
-            if (!lockSet.verifyWithHealing()) goto abort;
+            if (unlikely(!lockSet.verifyWithHealing())) goto abort;
 #endif
             lockSet.updateAndUnlock();
             res.incCommit(isLongTx);
@@ -170,14 +170,14 @@ Result1 worker3(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     const size_t keyBase = shared.nrMuPerTh * idx;
 
     storeRelease(ready, 1);
-    while (!loadAcquire(start)) _mm_pause();
-    while (!loadAcquire(quit)) {
+    while (!load_acquire(start)) _mm_pause();
+    while (!load_acquire(quit)) {
         //size_t firstRecIdx = 0;
         uint64_t t0 = 0;
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (loadAcquire(quit)) break; // to quit under starvation.
+            if (load_acquire(quit)) break; // to quit under starvation.
             // Try to run transaction.
             assert(lockSet.empty());
             rand.setState(randState);
@@ -200,11 +200,11 @@ Result1 worker3(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 
             // commit phase.
             if (nowait) {
-                if (!lockSet.tryLock()) goto abort;
+                if (unlikely(!lockSet.tryLock())) goto abort;
             } else {
                 lockSet.lock();
             }
-            if (!lockSet.verify()) goto abort;
+            if (unlikely(!lockSet.verify())) goto abort;
             lockSet.updateAndUnlock();
             res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);

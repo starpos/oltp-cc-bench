@@ -92,10 +92,10 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 
     lockSet.init(shared.payload, realNrOp);
 
-    storeRelease(ready, 1);
-    while (!loadAcquire(start)) _mm_pause();
+    store_release(ready, 1);
+    while (!load_acquire(start)) _mm_pause();
     size_t count = 0; unused(count);
-    while (!loadAcquire(quit)) {
+    while (likely(!load_acquire(quit))) {
         uint64_t txId;
         if (txIdGenType == SCALABLE_TXID_GEN) {
             txId = priIdGen.get(isLongTx ? 0 : 1);
@@ -114,7 +114,7 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
         log_timestamp_if_necessary_on_tx_start(t0, shared.usesBackOff);
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (loadAcquire(quit)) break; // to quit under starvation.
+            if (unlikely(load_acquire(quit))) break; // to quit under starvation.
             assert(lockSet.empty());
             rand.setState(randState);
             log_timestamp_if_necessary_on_trial_start(t0, t1, t2, retry, shared.usesBackOff);
@@ -125,18 +125,18 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
                 auto& item = recV[key];
                 Mutex& mutex = item.value;
                 if (mode == Mode::S) {
-                    if (!lockSet.read(mutex, item.payload, &value[0])) goto abort;
+                    if (unlikely(!lockSet.read(mutex, item.payload, &value[0]))) goto abort;
                 } else {
                     assert(mode == Mode::X);
                     if (shared.usesRMW) {
-                        if (!lockSet.readForUpdate(mutex, item.payload, &value[0])) goto abort;
-                        if (!lockSet.write(mutex, item.payload, &value[0])) goto abort;
+                        if (unlikely(!lockSet.readForUpdate(mutex, item.payload, &value[0]))) goto abort;
+                        if (unlikely(!lockSet.write(mutex, item.payload, &value[0]))) goto abort;
                     } else {
-                        if (!lockSet.write(mutex, item.payload, &value[0])) goto abort;
+                        if (unlikely(!lockSet.write(mutex, item.payload, &value[0]))) goto abort;
                     }
                 }
             }
-            if (!lockSet.blindWriteLockAll()) goto abort;
+            if (unlikely(!lockSet.blindWriteLockAll())) goto abort;
             lockSet.updateAndUnlock();
             log_timestamp_if_necessary_on_commit(res, t0, t1, t2);
             res.incCommit(isLongTx);
@@ -211,10 +211,10 @@ Result2 worker3(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 
     const size_t realNrOp = txSize;
 
-    storeRelease(ready, 1);
-    while (!loadAcquire(start)) _mm_pause();
+    store_release(ready, 1);
+    while (!load_acquire(start)) _mm_pause();
     size_t count = 0; unused(count);
-    while (!loadAcquire(quit)) {
+    while (likely(!load_acquire(quit))) {
 #if 0
         const uint64_t txId = localTxIdGen.get();
 #else
@@ -225,7 +225,7 @@ Result2 worker3(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
         if (shared.usesBackOff) t0 = cybozu::time::rdtscp();
         auto randState = rand.getState();
         for (size_t retry = 0;; retry++) {
-            if (loadAcquire(quit)) break; // to quit under starvation.
+            if (unlikely(load_acquire(quit))) break; // to quit under starvation.
             assert(lockSet.empty());
             rand.setState(randState);
             boolRand.reset();
@@ -239,18 +239,18 @@ Result2 worker3(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
                 auto& item = recV[key];
                 Mutex& mutex = item.value;
                 if (mode == Mode::S) {
-                    if (!lockSet.read(mutex, item.payload, &value[0])) goto abort;
+                    if (unlikely(!lockSet.read(mutex, item.payload, &value[0]))) goto abort;
                 } else {
                     assert(mode == Mode::X);
                     if (shared.usesRMW) {
-                        if (!lockSet.readForUpdate(mutex, item.payload, &value[0])) goto abort;
-                        if (!lockSet.write(mutex, item.payload, &value[0])) goto abort;
+                        if (unlikely(!lockSet.readForUpdate(mutex, item.payload, &value[0]))) goto abort;
+                        if (unlikely(!lockSet.write(mutex, item.payload, &value[0]))) goto abort;
                     } else {
-                        if (!lockSet.write(mutex, item.payload, &value[0])) goto abort;
+                        if (unlikely(!lockSet.write(mutex, item.payload, &value[0]))) goto abort;
                     }
                 }
             }
-            if (!lockSet.blindWriteLockAll()) goto abort;
+            if (unlikely(!lockSet.blindWriteLockAll())) goto abort;
             lockSet.updateAndUnlock();
             res.incCommit(txSize);
             res.addRetryCount(txSize, retry);
