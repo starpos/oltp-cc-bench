@@ -32,7 +32,7 @@ using GetModeFuncType = Mode (*)(Random&, size_t, size_t, size_t, size_t);
 
 
 template <typename Random, typename Mode, TxMode txMode>
-Mode getModeT(Random& rand, size_t nrOp, size_t nrWr, size_t wrRatio, size_t idx)
+INLINE Mode getModeT(Random& rand, size_t nrOp, size_t nrWr, size_t wrRatio, size_t idx)
 {
     switch (txMode) {
     case USE_MIX_TX:
@@ -55,7 +55,7 @@ Mode getModeT(Random& rand, size_t nrOp, size_t nrWr, size_t wrRatio, size_t idx
 
 
 template <typename Random, typename Mode>
-GetModeFuncType<Random, Mode> selectGetModeFunc(bool isLongTx, TxMode shortTxMode, TxMode longTxMode)
+INLINE GetModeFuncType<Random, Mode> selectGetModeFunc(bool isLongTx, TxMode shortTxMode, TxMode longTxMode)
 {
     struct {
         TxMode txMode;
@@ -194,7 +194,7 @@ using GetRecordIdxType = size_t (*)(Random&, FastZipf&, size_t, size_t, size_t, 
 
 
 template <typename Random, bool isLongTx, TxMode txMode, bool usesZipf>
-size_t getRecordIdxT(Random& rand, FastZipf& fastZipf, size_t nrMu, size_t nrOp, size_t idx, size_t& firstRecIdx)
+INLINE size_t getRecordIdxT(Random& rand, FastZipf& fastZipf, size_t nrMu, size_t nrOp, size_t idx, size_t& firstRecIdx)
 {
     if (usesZipf) return fastZipf();
 
@@ -245,7 +245,7 @@ size_t getRecordIdxT(Random& rand, FastZipf& fastZipf, size_t nrMu, size_t nrOp,
 
 
 template <typename Random, bool isLongTx, TxMode txMode>
-GetRecordIdxType<Random> selectGetRecordIdx2(bool usesZipf)
+INLINE GetRecordIdxType<Random> selectGetRecordIdx2(bool usesZipf)
 {
     if (usesZipf) {
         return getRecordIdxT<Random, isLongTx, txMode, true>;
@@ -256,7 +256,7 @@ GetRecordIdxType<Random> selectGetRecordIdx2(bool usesZipf)
 
 
 template <typename Random>
-GetRecordIdxType<Random> selectGetRecordIdx(bool isLongTx, TxMode shortTxMode, TxMode longTxMode, bool usesZipf)
+INLINE GetRecordIdxType<Random> selectGetRecordIdx(bool isLongTx, TxMode shortTxMode, TxMode longTxMode, bool usesZipf)
 {
     if (isLongTx) {
         switch (longTxMode) {
@@ -313,7 +313,7 @@ struct AccessInfo
     uint64_t key:63;
     uint64_t is_write:1;
 
-    bool operator<(const AccessInfo& rhs) const { return key < rhs.key; }
+    INLINE bool operator<(const AccessInfo& rhs) const { return key < rhs.key; }
 
     std::string str() const {
         std::stringstream ss;
@@ -322,7 +322,7 @@ struct AccessInfo
     }
 
     template <typename Mode>
-    void get(uint64_t& key0, Mode& mode) {
+    INLINE void get(uint64_t& key0, Mode& mode) {
         key0 = key;
         mode = is_write ? Mode::X : Mode::S;
     }
@@ -333,9 +333,10 @@ using AccessInfoVec = std::vector<AccessInfo>;
 
 
 template <typename Random, typename Mode>
-void fillAccessInfoVec(Random& rand, FastZipf& fastZipf,
-                       GetModeFuncType<Random, Mode>& getMode, GetRecordIdxType<Random>& getRecordIdx,
-                       size_t nrMu, size_t wrRatio, AccessInfoVec& out)
+INLINE void fillAccessInfoVec(
+    Random& rand, FastZipf& fastZipf,
+    GetModeFuncType<Random, Mode>& getMode, GetRecordIdxType<Random>& getRecordIdx,
+    size_t nrMu, size_t wrRatio, AccessInfoVec& out)
 {
     const size_t nrOp = out.size();
     size_t firstRecIdx;
