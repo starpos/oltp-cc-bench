@@ -135,6 +135,15 @@ INLINE T0 fetch_add(T0& m, T1 v, int mode = __ATOMIC_ACQ_REL)
     return (T0)__atomic_fetch_add((Int*)&m, (Int)v, mode);
 }
 
+template <typename T0, typename T1>
+INLINE T0 fetch_add_acq(T0& m, T1 v) { return fetch_add(m, v, __ATOMIC_ACQUIRE); }
+
+template <typename T0, typename T1>
+INLINE T0 fetch_add_rel(T0& m, T1 v) { return fetch_add(m, v, __ATOMIC_RELEASE); }
+
+template <typename T0, typename T1>
+INLINE T0 fetch_add_relaxed(T0& m, T1 v) { return fetch_add(m, v, __ATOMIC_RELAXED); }
+
 
 template <typename T0, typename T1>
 INLINE T0 fetch_sub(T0& m, T1 v, int mode = __ATOMIC_ACQ_REL)
@@ -144,6 +153,15 @@ INLINE T0 fetch_sub(T0& m, T1 v, int mode = __ATOMIC_ACQ_REL)
     using Int = typename to_uint_type<T0>::type;
     return (T0)__atomic_fetch_sub((Int*)&m, (Int)v, mode);
 }
+
+template <typename T0, typename T1>
+INLINE T0 fetch_sub_acq(T0& m, T1 v) { return fetch_sub(m, v, __ATOMIC_ACQUIRE); }
+
+template <typename T0, typename T1>
+INLINE T0 fetch_sub_rel(T0& m, T1 v) { return fetch_sub(m, v, __ATOMIC_RELEASE); }
+
+template <typename T0, typename T1>
+INLINE T0 fetch_sub_relaxed(T0& m, T1 v) { return fetch_sub(m, v, __ATOMIC_RELAXED); }
 
 
 INLINE void acq_rel_fence() {
