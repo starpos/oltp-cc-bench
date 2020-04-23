@@ -49,7 +49,6 @@ struct Shared
 enum class Mode : bool { S = false, X = true, };
 
 
-template <bool nowait>
 Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
@@ -209,16 +208,6 @@ struct CmdLineOptionPlus : CmdLineOption
 };
 
 
-void dispatch2(const CmdLineOptionPlus& opt, Shared& shared, Result1& res)
-{
-    if (shared.nowait) {
-        runExec(opt, shared, worker2<1>, res);
-    } else {
-        runExec(opt, shared, worker2<0>, res);
-    }
-}
-
-
 int main(int argc, char *argv[]) try
 {
     CmdLineOptionPlus opt("tictoc_bench: benchmark with tictoc.");
@@ -252,7 +241,7 @@ int main(int argc, char *argv[]) try
         }
         for (size_t i = 0; i < opt.nrLoop; i++) {
             Result1 res;
-            dispatch2(opt, shared, res);
+            runExec(opt, shared, worker2, res);
         }
     } else {
         throw cybozu::Exception("bad workload.") << opt.workload;
