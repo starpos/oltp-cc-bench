@@ -1213,21 +1213,19 @@ private:
 };
 
 
+/**
+ * Lock can be one of WaitDieLock2, WaitDieLock3, and WaitDieLock4.
+ */
+template <typename Lock>
 class LockSet
 {
 public:
-#if 0
-    using Lock = WaitDieLock2;
-#elif 0
-    using Lock = WaitDieLock3;
-#elif 1
-    using Lock = WaitDieLock4;
-#endif
-    using Mode = Lock::Mode;
-    using Mutex = Lock::Mutex;
+    using Mode = typename Lock::Mode;
+    using Mutex = typename Lock::Mutex;
 private:
     using OpEntryL = OpEntry<Lock>;
     using Vec = std::vector<OpEntryL>;
+    using VecIter = typename Vec::iterator;
 
     // key: mutex addr, value: index in the vector.
 #if 1
@@ -1270,7 +1268,7 @@ public:
     void setTxId(TxId txId) { txId_ = txId; }
 
     INLINE bool read(Mutex& mutex, void *sharedVal, void *dst) {
-        Vec::iterator it = find(uintptr_t(&mutex));
+        VecIter it = find(uintptr_t(&mutex));
         if (it != vec_.end()) {
             Lock& lk = it->lock;
             if (lk.mode() == Mode::S) {
@@ -1292,7 +1290,7 @@ public:
         return true;
     }
     INLINE bool write(Mutex& mutex, void *sharedVal, void *src) {
-        Vec::iterator it = find(uintptr_t(&mutex));
+        VecIter it = find(uintptr_t(&mutex));
         if (it != vec_.end()) {
             Lock& lk = it->lock;
             if (lk.mode() == Mode::S) {
@@ -1313,7 +1311,7 @@ public:
         return true;
     }
     INLINE bool readForUpdate(Mutex& mutex, void *sharedVal, void *dst) {
-        Vec::iterator it = find(uintptr_t(&mutex));
+        VecIter it = find(uintptr_t(&mutex));
         if (it != vec_.end()) {
             // Found.
             Lock& lk = it->lock;
@@ -1391,7 +1389,7 @@ public:
         return vec_.empty() && index_.empty();
     }
 private:
-    INLINE Vec::iterator find(uintptr_t key) {
+    INLINE VecIter find(uintptr_t key) {
         // at most 4KiB scan.
         const size_t threshold = 4096 / sizeof(OpEntryL);
         if (vec_.size() > threshold) {

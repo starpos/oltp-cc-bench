@@ -16,17 +16,25 @@
 #endif
 
 
-using Lock = cybozu::wait_die::LockSet::Lock;
-using Mutex = Lock::Mutex;
-using Mode = Lock::Mode;
+template <typename Lock>
+struct LockTypes
+{
+    using LockSet = cybozu::wait_die::LockSet<Lock>;
+    using Mutex = typename Lock::Mutex;
+    using Mode = typename Lock::Mode;
+};
+
 
 std::vector<uint> CpuId_;
 
 EpochGenerator epochGen_;
 
 
+template <typename Lock>
 struct Shared
 {
+    using Mutex = typename LockTypes<Lock>::Mutex;
+
 #ifdef USE_PARTITION
     PartitionedVectorWithPayload<Mutex> recV;
 #else
@@ -55,9 +63,15 @@ struct Shared
 };
 
 
-template <int txIdGenType>
-Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+template <int txIdGenType, typename Lock>
+Result1 worker2(
+    size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit,
+    Shared<Lock>& shared)
 {
+    using LockSet = typename LockTypes<Lock>::LockSet;
+    using Mutex = typename LockTypes<Lock>::Mutex;
+    using Mode = typename LockTypes<Lock>::Mode;
+
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
@@ -76,7 +90,7 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
     FastZipf fastZipf(rand, shared.zipfTheta, recV.size(), shared.zipfZetan);
 
-    cybozu::wait_die::LockSet lockSet;
+    LockSet lockSet;
 
     std::vector<uint8_t> value(shared.payload);
 
@@ -158,8 +172,16 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 /**
  * Long transactions with several transaction sizes.
  */
-Result2 worker3(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+Result2 worker3(
+    size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit,
+    Shared<cybozu::wait_die::WaitDieLock4>& shared)
 {
+    using Lock = cybozu::wait_die::WaitDieLock4;
+    using LockSet = typename LockTypes<Lock>::LockSet;
+    using Mutex = typename LockTypes<Lock>::Mutex;
+    using Mode = typename LockTypes<Lock>::Mode;
+
+
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
@@ -181,7 +203,7 @@ Result2 worker3(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 
     Result2 res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
-    cybozu::wait_die::LockSet lockSet;
+    LockSet lockSet;
     lockSet.init(shared.payload, txSize);
     std::vector<uint8_t> value(shared.payload);
 
@@ -274,37 +296,95 @@ struct CmdLineOptionPlus : CmdLineOption
     int usesBackOff; // 0 or 1.
     size_t writePct;
     int usesRMW; // 0 or 1.
+    int lockType;
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&txIdGenType, 3, "txid-gen", "[id]: txid gen method (0:sclable, 1:bulk, 2:simple, 3:epoch(default))");
         appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
         appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write 0:w 1:rmw (default: 1)");
         appendOpt(&writePct, 50, "writepct", "[pct]: write percentage (0 to 100) for custom3 workload.");
+        appendOpt(&lockType, 2, "lock", "[id]: locking protocol type (0:cas-only, 1:naive, 2:fair).");
     }
     std::string str() const {
         return cybozu::util::formatString(
-            "mode:wait-die %s txidGenType:%d backoff:%d writePct:%zu rmw:%d"
+            "mode:wait-die %s txidGenType:%d backoff:%d writePct:%zu rmw:%d lock:%d"
             , base::str().c_str(), txIdGenType, usesBackOff ? 1 : 0
-            , writePct, usesRMW ? 1 : 0);
+            , writePct, usesRMW ? 1 : 0, lockType);
     }
 };
 
 
-void dispatch1(CmdLineOptionPlus& opt, Shared& shared)
+enum LockType
 {
+    // (0:cas-only, 1:naive, 2:fair)
+    USE_CAS_ONLY = 0,
+    USE_NAIVE = 1,
+    USE_FAIR = 2,
+};
+
+
+template <int TxIdGenType, typename Lock>
+void dispatch3(CmdLineOptionPlus& opt)
+{
+    Shared<Lock> shared;
+    initRecordVector(shared.recV, opt);
+    shared.longTxSize = opt.longTxSize;
+    shared.nrOp = opt.nrOp;
+    shared.wrRatio = opt.wrRatio;
+    shared.nrWr4Long = opt.nrWr4Long;
+    shared.shortTxMode = TxMode(opt.shortTxMode);
+    shared.longTxMode = TxMode(opt.longTxMode);
+    shared.usesBackOff = opt.usesBackOff ? 1 : 0;
+    shared.nrTh4LongTx = opt.nrTh4LongTx;
+    shared.usesRMW = opt.usesRMW != 0;
+    shared.payload = opt.payload;
+    shared.usesZipf = opt.usesZipf;
+    shared.zipfTheta = opt.zipfTheta;
+    if (shared.usesZipf) {
+        shared.zipfZetan = FastZipf::zeta(opt.getNrMu(), shared.zipfTheta);
+    } else {
+        shared.zipfZetan = 1.0;
+    }
+
     Result1 res;
+    runExec(opt, shared, worker2<TxIdGenType, Lock>, res);
+    epochGen_.reset();
+}
+
+
+template <int TxIdGenType>
+void dispatch2(CmdLineOptionPlus& opt)
+{
+    switch (opt.lockType) {
+    case USE_CAS_ONLY:
+        dispatch3<TxIdGenType, cybozu::wait_die::WaitDieLock2>(opt);
+        break;
+    case USE_NAIVE:
+        dispatch3<TxIdGenType, cybozu::wait_die::WaitDieLock3>(opt);
+        break;
+    case USE_FAIR:
+        dispatch3<TxIdGenType, cybozu::wait_die::WaitDieLock4>(opt);
+        break;
+    default:
+        throw cybozu::Exception("bad lockType") << opt.lockType;
+    }
+}
+
+
+void dispatch1(CmdLineOptionPlus& opt)
+{
     switch (opt.txIdGenType) {
     case SCALABLE_TXID_GEN:
-        runExec(opt, shared, worker2<SCALABLE_TXID_GEN>, res);
+        dispatch2<SCALABLE_TXID_GEN>(opt);
         break;
     case BULK_TXID_GEN:
-        runExec(opt, shared, worker2<BULK_TXID_GEN>, res);
+        dispatch2<BULK_TXID_GEN>(opt);
         break;
     case SIMPLE_TXID_GEN:
-        runExec(opt, shared, worker2<SIMPLE_TXID_GEN>, res);
+        dispatch2<SIMPLE_TXID_GEN>(opt);
         break;
     case EPOCH_TXID_GEN:
-        runExec(opt, shared, worker2<EPOCH_TXID_GEN>, res);
+        dispatch2<EPOCH_TXID_GEN>(opt);
 	break;
     default:
         throw cybozu::Exception("bad txIdGenType") << opt.txIdGenType;
@@ -323,31 +403,11 @@ int main(int argc, char *argv[]) try
 #endif
 
     if (opt.workload == "custom") {
-        Shared shared;
-        initRecordVector(shared.recV, opt);
-        shared.longTxSize = opt.longTxSize;
-        shared.nrOp = opt.nrOp;
-        shared.wrRatio = opt.wrRatio;
-        shared.nrWr4Long = opt.nrWr4Long;
-        shared.shortTxMode = TxMode(opt.shortTxMode);
-        shared.longTxMode = TxMode(opt.longTxMode);
-        shared.usesBackOff = opt.usesBackOff ? 1 : 0;
-        shared.nrTh4LongTx = opt.nrTh4LongTx;
-        shared.usesRMW = opt.usesRMW != 0;
-        shared.payload = opt.payload;
-        shared.usesZipf = opt.usesZipf;
-        shared.zipfTheta = opt.zipfTheta;
-        if (shared.usesZipf) {
-            shared.zipfZetan = FastZipf::zeta(opt.getNrMu(), shared.zipfTheta);
-        } else {
-            shared.zipfZetan = 1.0;
-        }
         for (size_t i = 0; i < opt.nrLoop; i++) {
-            dispatch1(opt, shared);
-            epochGen_.reset();
+            dispatch1(opt);
         }
     } else if (opt.workload == "custom3") {
-        Shared shared;
+        Shared<cybozu::wait_die::WaitDieLock4> shared;
         initRecordVector(shared.recV, opt);
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         shared.writePct = opt.writePct;
