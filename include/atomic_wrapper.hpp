@@ -120,6 +120,13 @@ INLINE bool compare_exchange_release(T0& m, T0& before, T1 after)
 
 
 template <typename T0, typename T1>
+INLINE bool compare_exchange_relaxed(T0& m, T0& before, T1 after)
+{
+    return compare_exchange(m, before, after, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+}
+
+
+template <typename T0, typename T1>
 INLINE T0 fetch_add(T0& m, T1 v, int mode = __ATOMIC_ACQ_REL)
 {
     static_assert(std::is_trivially_copyable_v<T0>);
