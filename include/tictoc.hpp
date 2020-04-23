@@ -28,68 +28,47 @@ struct TsWord
     union {
         uint64_t obj;
         struct {
-            bool lock:1;
-            uint16_t delta:15;
+            // This layout is for little endian.
+            uint64_t lock:1;
+            uint64_t delta:15;
             uint64_t wts:48;
         };
     };
+    static constexpr uint64_t Shift_mask = (1U << 16) - 1;
 
-    TsWord() {}
-    void init() {
-        obj = 0;
-    }
-    TsWord(uint64_t v) : obj(v) {}
-    operator uint64_t() const {
-        return obj;
-    }
-    bool operator==(const TsWord& rhs) const {
-        return obj == rhs.obj;
-    }
-    bool operator!=(const TsWord& rhs) const {
-        return !operator==(rhs);
-    }
-    uint64_t rts() const { return wts + delta; }
+    INLINE TsWord() = default;
+    INLINE void init() { obj = 0; }
+    INLINE TsWord(uint64_t v) : obj(v) {}
+    INLINE operator uint64_t() const { return obj; }
+
+    INLINE uint64_t rts() const { return wts + delta; }
 };
+
+
+static_assert(sizeof(TsWord) == sizeof(uint64_t));
 
 
 struct Mutex
 {
-    alignas(sizeof(uintptr_t))
     TsWord tsw;
 
-    Mutex() : tsw() { tsw.init(); }
-#if 0
-    TsWord read() const {
-        return tsw;
-    }
-#endif
-#if 0
-    TsWord atomicRead() const {
-        return (TsWord)__atomic_load_n(&tsw.obj, __ATOMIC_RELAXED);
-    }
-#endif
-    TsWord load() const {
-        return __atomic_load_n(&tsw.obj, __ATOMIC_RELAXED);
-    }
-    TsWord loadAcquire() const {
-        return __atomic_load_n(&tsw.obj, __ATOMIC_ACQUIRE);
-    }
+    INLINE Mutex() : tsw() { tsw.init(); }
+
+    INLINE TsWord load() const { return ::load(tsw); }
+    INLINE TsWord load_acquire() const { return ::load_acquire(tsw); }
+    INLINE void store_release(TsWord tsw0) { ::store_release(tsw, tsw0); }
+
     // This is used in the write-lock phase.
     // Full fence is set at the last point of the phase.
     // So we need not fence with CAS.
-    bool compareAndSwap(TsWord& expected, const TsWord desired) {
-        return __atomic_compare_exchange_n(
-            &tsw.obj, &expected.obj, desired.obj,
-            false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+    INLINE bool cas_relaxed(TsWord& tsw0, TsWord tsw1) {
+        return ::compare_exchange_relaxed(tsw, tsw0, tsw1);
     }
-#if 0
-    void set(const TsWord& desired) {
-        //tsw.obj = desired.obj;
-        __atomic_store_n(&tsw.obj, desired.obj, __ATOMIC_RELAXED);
+    INLINE bool cas_acq(TsWord& tsw0, TsWord tsw1) {
+        return ::compare_exchange_acquire(tsw, tsw0, tsw1);
     }
-#endif
-    void storeRelease(const TsWord& desired) {
-        __atomic_store_n(&tsw.obj, desired.obj, __ATOMIC_RELEASE);
+    INLINE bool cas_rel(TsWord& tsw0, TsWord tsw1) {
+        return ::compare_exchange_release(tsw, tsw0, tsw1);
     }
 };
 
@@ -97,7 +76,7 @@ struct Mutex
 #if 0
 #define USE_TICTOC_RTS_COUNT
 #else
-//#undef USE_TICTOC_RTS_COUNT
+#undef USE_TICTOC_RTS_COUNT
 #endif
 
 #ifdef USE_TICTOC_RTS_COUNT
@@ -106,52 +85,54 @@ thread_local size_t read_count_ = 0;
 #endif
 
 
-class Reader
+struct Reader
 {
+private:
     Mutex *mutex_;
     TsWord tsw_;
 public:
     size_t localValIdx;
 
-    Reader() : mutex_() {}
-    Reader(Reader&& rhs) noexcept : Reader() { swap(rhs); }
-    Reader& operator=(Reader&& rhs) noexcept { swap(rhs); return *this; }
+    /**
+     * You must call set() at first to set mutex_ and localValIdx.
+     * prepare() will set tsw_.
+     */
+    INLINE Reader() = default;
 
-    void set(Mutex *mutex, size_t localValIdx0) {
+    Reader(const Reader&) = delete;
+    Reader& operator=(const Reader&) = delete;
+    INLINE Reader(Reader&& rhs) noexcept : Reader() { swap(rhs); }
+    INLINE Reader& operator=(Reader&& rhs) noexcept { swap(rhs); return *this; }
+
+    INLINE void set(Mutex *mutex, size_t localValIdx0) {
         mutex_ = mutex;
         localValIdx = localValIdx0;
     }
 
-    uintptr_t getId() const {
-        uintptr_t ret;
-        ::memcpy(&ret, &mutex_, sizeof(uintptr_t));
-        return ret;
-    }
-    uint64_t wts() const { return tsw_.wts; }
+    INLINE uintptr_t getId() const { return uintptr_t(mutex_); }
+    INLINE uint64_t wts() const { return tsw_.wts; }
 
-    void prepare() {
+    INLINE void prepare() {
         assert(mutex_);
         spinForUnlocked();
     }
-    void readFence() const {
-        __atomic_thread_fence(__ATOMIC_ACQUIRE);
-    }
-    bool isReadSucceeded() {
+    INLINE void readFence() const { acquire_fence(); }
+    INLINE bool isReadSucceeded() {
         assert(mutex_);
         const TsWord tsw = mutex_->load();
         assert(!tsw_.lock);
-        const bool ret = tsw_ == tsw;
+        const bool ret = (tsw_ == tsw);
         tsw_ = tsw;
         return ret;
     }
-    void prepareRetry() {
+    INLINE void prepareRetry() {
         assert(mutex_);
         if (!tsw_.lock) return;
         spinForUnlocked();
     }
-    bool validate(uint64_t commitTs, bool isInWriteSet) {
+    INLINE bool validate(uint64_t commitTs, bool isInWriteSet) {
 #if 0  // old algorithm until 20180222 (first check is missint...it's inefficient.)
-        TsWord v1 = mutex_->loadAcquire();
+        TsWord v1 = mutex_->load_acquire();
         for (;;) {
             if (tsw_.wts != v1.wts || (v1.rts() <= commitTs && v1.lock && !isInWriteSet)) {
                 return false;
@@ -162,23 +143,23 @@ public:
             if (v1.rts() >= commitTs) break;
 #endif
             uint64_t delta = commitTs - v1.wts;
-            uint64_t shift = delta - (delta & 0x7fff);
+            uint64_t shift = delta - (delta & TsWord::Shift_mask);
             TsWord v2 = v1;
             v2.wts += shift;
             v2.delta = delta - shift;
-            if (mutex_->compareAndSwap(v1, v2)) break;
+            if (mutex_->cas_relaxed(v1, v2)) break;
         }
         return true;
 #else  // algorithm from 20180222
         if (tsw_.rts() >= commitTs) {
             // tsw_.rts() <= v1.rts is invariant so we can avoid checking.
-            assert(!isInWriteSet); // This is read-only.
+            assert(!isInWriteSet); // This must happen on read-only records.
 #ifdef USE_TICTOC_RTS_COUNT
             read_count_++;
 #endif
             return true;
         }
-        TsWord v1 = mutex_->loadAcquire();
+        TsWord v1 = mutex_->load_acquire();
         for (;;) {
             if (tsw_.wts != v1.wts || (v1.rts() < commitTs && v1.lock && !isInWriteSet)) {
                 /* In the original tictoc paper,
@@ -201,11 +182,11 @@ public:
             }
             // Try to extend rts.
             uint64_t delta = commitTs - v1.wts;
-            uint64_t shift = delta - (delta & 0x7fff);
+            uint64_t shift = delta - (delta & TsWord::Shift_mask);
             TsWord v2 = v1;
             v2.wts += shift;
             v2.delta = delta - shift;
-            if (mutex_->compareAndSwap(v1, v2)) {
+            if (mutex_->cas_relaxed(v1, v2)) {
 #ifdef USE_TICTOC_RTS_COUNT
                 read_count_++;
                 update_rts_count_++;
@@ -216,14 +197,15 @@ public:
 #endif
     }
 private:
-    void spinForUnlocked() {
-        for (;;) {
-            tsw_ = mutex_->loadAcquire();
-            if (!tsw_.lock) break;
+    INLINE void spinForUnlocked() {
+        TsWord tsw = mutex_->load_acquire();
+        while (tsw.lock) {
             _mm_pause();
+            tsw = mutex_->load_acquire();
         }
+        tsw_ = tsw;
     }
-    void swap(Reader& rhs) noexcept {
+    INLINE void swap(Reader& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(tsw_, rhs.tsw_);
         std::swap(localValIdx, rhs.localValIdx);
@@ -231,7 +213,7 @@ private:
 };
 
 
-class Writer
+struct Writer
 {
 public:
     Mutex *mutex;
@@ -239,26 +221,28 @@ public:
     void *sharedVal;
     size_t localValIdx;
 
-    Writer() : mutex() {}
-    explicit Writer(Mutex *mutex0) : mutex(mutex0) {}
-    Writer(Writer&& rhs) noexcept : Writer() { swap(rhs); }
-    Writer& operator=(Writer&& rhs) noexcept { swap(rhs); return *this; }
+    /**
+     * All member fields are uninitialized.
+     * Call set() at first.
+     */
+    INLINE Writer() = default;
 
-    void set(Mutex *mutex0, void *sharedVal0, size_t localValIdx0) {
+    Writer(const Writer&) = delete;
+    Writer& operator=(const Writer&) = delete;
+    INLINE Writer(Writer&& rhs) noexcept : Writer() { swap(rhs); }
+    INLINE Writer& operator=(Writer&& rhs) noexcept { swap(rhs); return *this; }
+
+    INLINE void set(Mutex *mutex0, void *sharedVal0, size_t localValIdx0) {
         mutex = mutex0;
         sharedVal = sharedVal0;
         localValIdx = localValIdx0;
     }
 
-    uintptr_t getId() const {
-        uintptr_t ret;
-        ::memcpy(&ret, &mutex, sizeof(uintptr_t));
-        return ret;
-    }
-    operator uintptr_t() const { return getId(); }
-    bool operator<(const Writer& rhs) { return getId() < rhs.getId(); }
+    INLINE uintptr_t getId() const { return uintptr_t(mutex); }
+    INLINE operator uintptr_t() const { return getId(); }
+    INLINE bool operator<(const Writer& rhs) { return getId() < rhs.getId(); }
 private:
-    void swap(Writer& rhs) noexcept {
+    INLINE void swap(Writer& rhs) noexcept {
         std::swap(mutex, rhs.mutex);
         std::swap(localValIdx, rhs.localValIdx);
         std::swap(sharedVal, rhs.sharedVal);
@@ -266,89 +250,88 @@ private:
 };
 
 
-class Lock
+struct Lock
 {
+private:
     Mutex *mutex_;
     TsWord tsw_; // locked state.
 public:
-    Lock() : mutex_(), tsw_() {}
-    explicit Lock(Mutex *mutex) : Lock() {
-        lock(mutex);
-    }
-    ~Lock() noexcept {
-        unlock();
-    }
-    Lock(Lock&& rhs) noexcept : Lock() { swap(rhs); }
-    Lock& operator=(Lock&& rhs) noexcept { swap(rhs); return *this; }
+    /**
+     * tsw_ is uninitialized at first.
+     * lock() or tryLock() wil set tsw_.
+     */
+    INLINE Lock() : mutex_(nullptr) {}
+    INLINE ~Lock() noexcept { unlock(); }
 
-    uintptr_t getId() const {
-        uintptr_t ret;
-        ::memcpy(&ret, &mutex_, sizeof(uintptr_t));
-        return ret;
-    }
-    operator uintptr_t() const { return getId(); }
-    bool operator<(const Lock& rhs) { return getId() < rhs.getId(); }
+    Lock(const Lock&) = delete;
+    Lock& operator=(const Lock&) = delete;
+    INLINE Lock(Lock&& rhs) noexcept : Lock() { swap(rhs); }
+    INLINE Lock& operator=(Lock&& rhs) noexcept { swap(rhs); return *this; }
 
-    uint64_t rts() const { return tsw_.rts(); }
+    INLINE uintptr_t getId() const { return uintptr_t(mutex_); }
+    INLINE operator uintptr_t() const { return getId(); }
+    INLINE bool operator<(const Lock& rhs) { return getId() < rhs.getId(); }
 
-    bool tryLock(Mutex *mutex) {
+    INLINE uint64_t rts() const { return tsw_.rts(); }
+
+    INLINE bool tryLock(Mutex *mutex) {
         assert(!mutex_);
         assert(mutex);
-        TsWord tsw0 = mutex->load();  // loadConsume
+        TsWord tsw0 = mutex->load();
         if (tsw0.lock) return false;
         TsWord tsw1 = tsw0;
-        tsw1.lock = true;
-        if (!mutex->compareAndSwap(tsw0, tsw1)) return false;
+        tsw1.lock = 1;
+        if (!mutex->cas_acq(tsw0, tsw1)) return false;
         mutex_ = mutex;
         tsw_ = tsw1;
         return true;
     }
-    void lock(Mutex *mutex) {
+    INLINE void lock(Mutex *mutex) {
         assert(!mutex_);
-        TsWord tsw0 = mutex->load();  // loadConsume
+        TsWord tsw0 = mutex->load();
         TsWord tsw1;
         for (;;) {
             while (tsw0.lock) {
                 _mm_pause();
-                tsw0 = mutex->load(); // loadConsume
+                tsw0 = mutex->load();
             }
             tsw1 = tsw0;
-            tsw1.lock = true;
-            if (mutex->compareAndSwap(tsw0, tsw1)) break;
+            tsw1.lock = 1;
+            if (mutex->cas_acq(tsw0, tsw1)) break;
         }
         tsw_ = tsw1;
         mutex_ = mutex;
     }
-    void updateAndUnlock(uint64_t commitTs) {
+    INLINE void updateAndUnlock(uint64_t commitTs) {
         if (!mutex_) return;
         TsWord tsw0 = tsw_;
         assert(tsw0.lock);
         tsw0.lock = 0;
         tsw0.wts = commitTs;
         tsw0.delta = 0;
-        mutex_->storeRelease(tsw0);
+        mutex_->store_release(tsw0);
         mutex_ = nullptr;
     }
-    void unlock() {
+    INLINE void unlock() {
         if (!mutex_) return;
         TsWord tsw0 = tsw_;
         assert(tsw0.lock);
         tsw0.lock = 0;
-        mutex_->storeRelease(tsw0);
+        mutex_->store_release(tsw0);
         mutex_ = nullptr;
     }
 private:
-    void swap(Lock& rhs) noexcept {
+    INLINE void swap(Lock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(tsw_, rhs.tsw_);
     }
 };
 
+
 using ReadSet = std::vector<Reader>;
 using WriteSet = std::vector<Writer>;
 using LockSet = std::vector<Lock>;
 using Flags = std::vector<bool>; // isInWriteSet array.
-
 
 
 /**
@@ -359,7 +342,9 @@ using Flags = std::vector<bool>; // isInWriteSet array.
  *   true: you must commit.
  *   false: you must abort.
  */
-INLINE bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags, MemoryVector& local, size_t valueSize, bool nowait)
+INLINE bool preCommit(
+    ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags,
+    MemoryVector& local, size_t valueSize, bool nowait)
 {
     bool ret = false;
     uint64_t commitTs = 0;
@@ -369,11 +354,11 @@ INLINE bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags, Memo
     assert(ls.empty());
     ls.reserve(ws.size());
     for (Writer& w : ws) {
+        ls.emplace_back();
         if (nowait) {
-            ls.emplace_back();
             if (!ls.back().tryLock(w.mutex)) goto fin;
         } else {
-            ls.emplace_back(w.mutex);
+            ls.back().lock(w.mutex);
         }
     }
 
@@ -387,7 +372,7 @@ INLINE bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags, Memo
         const uintptr_t id = rs[i].getId();
         const bool found = std::binary_search(
             ws.begin(), ws.end(), id,
-            [&](const uintptr_t& a, const uintptr_t& b) { return a < b; });
+            [&](uintptr_t a, uintptr_t b) { return a < b; });
         flags.push_back(found);
     }
 
@@ -402,8 +387,7 @@ INLINE bool preCommit(ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags, Memo
 
     // Validate the Read Set.
     for (size_t i = 0; i < rs.size(); i++) {
-        const bool validated = rs[i].validate(commitTs, flags[i]);
-        if (!validated) goto fin;
+        if (!rs[i].validate(commitTs, flags[i])) goto fin;
     }
 
     // Write phase.
@@ -455,8 +439,8 @@ class LocalSet
     bool nowait_;
 
 public:
-    LocalSet() : rs_(), ws_(), ls_(), flags_(), ridx_(), widx_(), local_(), valueSize_(), nowait_(false) {}
-    void init(size_t valueSize, size_t nrReserve) {
+    INLINE LocalSet() : rs_(), ws_(), ls_(), flags_(), ridx_(), widx_(), local_(), valueSize_(), nowait_(false) {}
+    INLINE void init(size_t valueSize, size_t nrReserve) {
         valueSize_ = valueSize;
 
         // MemoryVector does not allow zero-size element.
@@ -470,7 +454,7 @@ public:
         flags_.reserve(nrReserve);
         local_.reserve(nrReserve);
     }
-    void setNowait(bool nowait) { nowait_ = nowait; }
+    INLINE void setNowait(bool nowait) { nowait_ = nowait; }
 
     INLINE void read(Mutex& mutex, void *sharedVal, void *dst) {
         unused(sharedVal); unused(dst);
@@ -567,11 +551,11 @@ private:
             });
     }
     template <typename Vector>
-    bool shouldUseIndex(const Vector& vec) const {
-        const size_t threshold = 2048 * 2 / sizeof(typename Vector::value_type);
+    INLINE bool shouldUseIndex(const Vector& vec) const {
+        constexpr size_t threshold = 4096 / sizeof(typename Vector::value_type);
         return vec.size() > threshold;
     }
-    void copyValue(void* dst, const void* src) {
+    INLINE void copyValue(void* dst, const void* src) {
 #ifndef NO_PAYLOAD
         ::memcpy(dst, src, valueSize_);
 #else
