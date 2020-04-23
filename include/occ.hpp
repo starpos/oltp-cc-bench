@@ -15,214 +15,171 @@
 #include "inline.hpp"
 
 
+#if 1
 #define USE_OCC_MCS
-//#undef USE_OCC_MCS
+#else
+#undef USE_OCC_MCS
+#endif
 
 
 namespace cybozu {
 namespace occ {
 
-struct OccLockData
+
+struct OccMutexData
 {
-    /*
-     * 0-30(31bits) record version
-     * 31(1bit) X lock flag.
-     */
-    uint32_t obj;
-    static constexpr uint32_t mask = (0x1 << 31);
+    union {
+        uint32_t obj;
+        struct {
+            // layout for little endian architecture.
+            uint32_t version:31;
+            uint32_t locked:1;
+        };
+    };
 
-    OccLockData() : obj(0) {
-    }
-    OccLockData(uint32_t obj): obj(obj) {
-    }
-    operator uint32_t() const { return obj; }
-
-    uint32_t getVersion() const {
-        return obj & ~mask;
-    }
-    void setVersion(uint32_t version) {
-        assert(version < mask);
-        obj &= mask;
-        obj |= version;
-    }
-    void incVersion() {
-        uint32_t v = getVersion();
-        if (v < mask - 1) {
-            v++;
-        } else {
-            v = 0;
-        }
-        setVersion(v);
-    }
-    bool isLocked() const {
-        return (obj & mask) != 0;
-    }
-    void setLock() {
-        obj |= mask;
-    }
-    void clearLock() {
-        obj &= ~mask;
-    }
+    INLINE OccMutexData() = default;
+    INLINE OccMutexData(uint32_t obj0): obj(obj0) {}
+    INLINE operator uint32_t() const { return obj; }
 };
 
 
 struct OccMutex
 {
     alignas(sizeof(uintptr_t))
-    uint32_t obj;
+    OccMutexData md;
 #ifdef USE_OCC_MCS
     cybozu::lock::McsSpinlock::Mutex mcsMutex;
 #endif
 
-    OccMutex() : obj(0) {
-    }
-
-    OccLockData load() const {
-        return __atomic_load_n(&obj, __ATOMIC_RELAXED);
-    }
-    OccLockData loadAcquire() const {
-        return __atomic_load_n(&obj, __ATOMIC_ACQUIRE);
-    }
-#if 0
-    void set(const OccLockData& after) {
-        obj = after.obj;
-    }
+#ifdef USE_OCC_MCS
+    INLINE OccMutex() : md(0), mcsMutex() {}
+#else
+    INLINE OccMutex() : md(0) {}
 #endif
-    void store(const OccLockData& after) {
-        __atomic_store_n(&obj, after.obj, __ATOMIC_RELAXED);
-    }
-    void storeRelease(const OccLockData& after) {
-        __atomic_store_n(&obj, after.obj, __ATOMIC_RELEASE);
-    }
+
+    INLINE OccMutexData load() const { return ::load(md); }
+    INLINE OccMutexData load_acquire() const { return ::load_acquire(md); }
+    INLINE void store(OccMutexData md0) { ::store(md, md0); }
+    INLINE void store_release(OccMutexData md0) { ::store_release(md, md0); }
+
     // This is used in the write-lock phase.
-    // Full fence is set at the last point of the phase.
-    // So we need not fence with CAS.
-    bool compareAndSwap(OccLockData& before, const OccLockData& after) {
-        return __atomic_compare_exchange_n(
-            &obj, &before.obj, after.obj,
-            false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+    INLINE bool cas_acq(OccMutexData& md0, OccMutexData md1) {
+        return ::compare_exchange_acquire(md, md0, md1);
     }
 };
 
 class OccLock
 {
 public:
-    using LockData = OccLockData;
+    using MutexData = OccMutexData;
     using Mutex = OccMutex;
 private:
     Mutex *mutex_;
-    LockData lockD_;
+    MutexData md_;
     bool updated_;
 public:
-    INLINE OccLock() : mutex_(), lockD_(), updated_(false) {}
+    INLINE OccLock() : mutex_(), md_(), updated_(false) {}
     INLINE explicit OccLock(Mutex *mutex) : OccLock() {
         lock(mutex);
     }
-    ~OccLock() noexcept {
+    INLINE ~OccLock() noexcept {
         unlock();
     }
     OccLock(const OccLock&) = delete;
-    OccLock(OccLock&& rhs) noexcept : OccLock() { swap(rhs); }
     OccLock& operator=(const OccLock&) = delete;
-    OccLock& operator=(OccLock&& rhs) noexcept { swap(rhs); return *this; }
-    bool operator<(const OccLock& rhs) const {
+    INLINE OccLock(OccLock&& rhs) noexcept : OccLock() { swap(rhs); }
+    INLINE OccLock& operator=(OccLock&& rhs) noexcept { swap(rhs); return *this; }
+    INLINE bool operator<(const OccLock& rhs) const {
         return uintptr_t(mutex_) < uintptr_t(rhs.mutex_);
     }
     INLINE void lock(Mutex *mutex) {
-        if (mutex_) throw std::runtime_error("OccLock::lock: already locked");
         assert(mutex != nullptr);
         mutex_ = mutex;
-
-        lockD_ = mutex_->load();
+        MutexData md0 = mutex_->load();
         for (;;) {
-            if (lockD_.isLocked()) waitFor();
-            LockData lockD = lockD_;
-            lockD.setLock();
-            if (mutex_->compareAndSwap(lockD_, lockD)) {
-                lockD_ = lockD;
+            if (md0.locked) md0 = waitFor();
+            MutexData md1 = md0;
+            md1.locked = 1;
+            if (mutex_->cas_acq(md0, md1)) {
+                md_ = md1;
                 updated_ = false;
                 return;
             }
         }
     }
     INLINE bool tryLock(Mutex *mutex) {
-        if (mutex_) throw std::runtime_error("OccLock::tryLock: already locked");
-        assert(mutex);
-
-        lockD_ = mutex->load();
+        assert(mutex != nullptr);
+        MutexData md0 = mutex->load();
         for (;;) {
-            if (lockD_.isLocked()) {
-                return false;
-            }
-            LockData lockD = lockD_;
-            lockD.setLock();
-            if (mutex->compareAndSwap(lockD_, lockD)) {
-                lockD_ = lockD;
-                updated_ = false;
+            if (md0.locked) return false;
+            MutexData md1 = md0;
+            md1.locked = 1;
+            if (mutex->cas_acq(md0, md1)) {
                 mutex_ = mutex;
+                md_ = md1;
+                updated_ = false;
                 return true;
             }
         }
     }
     INLINE void unlock() {
         if (!mutex_) return;
-
-        LockData lockD = lockD_;
-        assert(lockD.isLocked());
-        if (updated_) lockD.incVersion();
-        lockD.clearLock();
-        mutex_->storeRelease(lockD);
+        MutexData md0 = md_;
+        assert(md0.locked);
+        if (updated_) md0.version++;
+        md0.locked = 0;
+        mutex_->store_release(md0);
         mutex_ = nullptr;
     }
-    void update() {
-        updated_ = true;
-    }
-    uintptr_t getMutexId() const {
-        return uintptr_t(mutex_);
-    }
+    INLINE void update() { updated_ = true; }
+    INLINE uintptr_t getMutexId() const { return uintptr_t(mutex_); }
 private:
-    void swap(OccLock& rhs) noexcept {
+    INLINE void swap(OccLock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
-        std::swap(lockD_, rhs.lockD_);
+        std::swap(md_, rhs.md_);
     }
-    void waitFor() {
-        assert(mutex_);
+    INLINE MutexData waitFor() {
+        assert(mutex_ != nullptr);
 #ifdef USE_OCC_MCS
-        // In order so many threads not to spin on lockD value.
+        // In order so many threads not to spin on md value.
         cybozu::lock::McsSpinlock lk(&mutex_->mcsMutex);
 #endif
-        LockData lockD;
-        for (;;) {
-            lockD = mutex_->load();
-            if (!lockD.isLocked()) {
-                lockD_ = lockD;
-                return;
-            }
+        MutexData md0 = mutex_->load();
+        while (md0.locked) {
             _mm_pause();
+            md0 = mutex_->load();
         }
+        return md0;
     }
 };
+
 
 class OccReader
 {
 public:
-    using LockData = OccLock::LockData;
+    using MutexData = OccLock::MutexData;
     using Mutex = OccLock::Mutex;
 private:
     const Mutex *mutex_;
-    LockData lockD_;
+    MutexData md_;
 public:
     const void *sharedVal;
     size_t localValIdx;  // local data index.
 
-    OccReader() : mutex_(), lockD_() {}
-    OccReader(const OccReader&) = delete;
-    OccReader(OccReader&& rhs) noexcept : OccReader() { swap(rhs); }
-    OccReader& operator=(const OccReader&) = delete;
-    OccReader& operator=(OccReader&& rhs) noexcept { swap(rhs); return *this; }
+    /**
+     * uninitialized.
+     * Call set() first.
+     */
+    INLINE OccReader() = default;
 
-    void set(const Mutex *mutex, const void *sharedVal0, size_t localValIdx0) {
+    OccReader(const OccReader&) = delete;
+    OccReader& operator=(const OccReader&) = delete;
+    INLINE OccReader(OccReader&& rhs) noexcept : OccReader() { swap(rhs); }
+    INLINE OccReader& operator=(OccReader&& rhs) noexcept { swap(rhs); return *this; }
+
+    INLINE void set(const Mutex *mutex, const void *sharedVal0, size_t localValIdx0) {
         mutex_ = mutex;
+        // md_ is still uninitialized.
         sharedVal = sharedVal0;
         localValIdx = localValIdx0;
     }
@@ -230,45 +187,43 @@ public:
     /**
      * Call this before read the resource.
      */
-    void prepare() {
+    INLINE void prepare() {
         assert(mutex_);
-        for (;;) {
-            lockD_ = mutex_->loadAcquire();
-            if (!lockD_.isLocked()) break;
+        MutexData md0 = mutex_->load_acquire();
+        while (md0.locked) {
             _mm_pause();
+            md0 = mutex_->load_acquire();
         }
+        md_ = md0;
     }
-    bool tryPrepare() {
+    INLINE bool tryPrepare() {
         assert(mutex_);
-        lockD_ = mutex_->loadAcquire();
-        return !lockD_.isLocked();
+        md_ = mutex_->load_acquire();
+        return !md_.locked;
     }
     /**
      * Call this just after read the resource.
      */
-    void readFence() const {
-        __atomic_thread_fence(__ATOMIC_ACQUIRE);
-    }
+    INLINE void readFence() const { acquire_fence(); }
     /**
      * Call this to verify read data is valid or not.
      */
-    bool verifyAll() const {
+    INLINE bool verifyAll() const {
         assert(mutex_);
-        const LockData lockD = mutex_->load();
-        return !lockD.isLocked() && lockD_.getVersion() == lockD.getVersion();
+        const MutexData md0 = mutex_->load();
+        return !md0.locked && md_.version == md0.version;
     }
-    bool verifyVersion() const {
+    INLINE bool verifyVersion() const {
         assert(mutex_);
-        const LockData lockD = mutex_->load();
-        return lockD_.getVersion() == lockD.getVersion();
+        const MutexData md0 = mutex_->load();
+        return md_.version == md0.version;
     }
-    uintptr_t getMutexId() const {
-        return uintptr_t(mutex_);
-    }
-private:
-    void swap(OccReader& rhs) noexcept {
+    INLINE uintptr_t getMutexId() const { return uintptr_t(mutex_); }
+
+    INLINE void swap(OccReader& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
-        std::swap(lockD_, rhs.lockD_);
+        std::swap(md_, rhs.md_);
+        std::swap(sharedVal, rhs.sharedVal);
         std::swap(localValIdx, rhs.localValIdx);
     }
 };
@@ -281,26 +236,27 @@ struct WriteEntry
     void *sharedVal;
     size_t localValIdx;  // index in the local data area.
 
-    WriteEntry() : mutex(), sharedVal(), localValIdx() {
-    }
-    WriteEntry(const WriteEntry&) = delete;
-    WriteEntry(WriteEntry&& rhs) noexcept : WriteEntry() { swap(rhs); }
-    WriteEntry& operator=(const WriteEntry&) = delete;
-    WriteEntry& operator=(WriteEntry&& rhs) noexcept { swap(rhs); return *this; }
+    /**
+     * Call set() to fill values.
+     */
+    INLINE WriteEntry() = default;
 
-    bool operator<(const WriteEntry& rhs) const {
+    WriteEntry(const WriteEntry&) = delete;
+    WriteEntry& operator=(const WriteEntry&) = delete;
+    INLINE WriteEntry(WriteEntry&& rhs) noexcept : WriteEntry() { swap(rhs); }
+    INLINE WriteEntry& operator=(WriteEntry&& rhs) noexcept { swap(rhs); return *this; }
+
+    INLINE bool operator<(const WriteEntry& rhs) const {
         return getMutexId() < rhs.getMutexId();
     }
-    void set(Mutex *mutex0, void *sharedVal0, size_t localValIdx0) {
+    INLINE void set(Mutex *mutex0, void *sharedVal0, size_t localValIdx0) {
         mutex = mutex0;
         sharedVal = sharedVal0;
         localValIdx = localValIdx0;
     }
-    uintptr_t getMutexId() const {
-        return uintptr_t(mutex);
-    }
+    INLINE uintptr_t getMutexId() const { return uintptr_t(mutex); }
 private:
-    void swap(WriteEntry& rhs) noexcept {
+    INLINE void swap(WriteEntry& rhs) noexcept {
         std::swap(mutex, rhs.mutex);
         std::swap(sharedVal, rhs.sharedVal);
         std::swap(localValIdx, rhs.localValIdx);
@@ -335,7 +291,7 @@ private:
     size_t valueSize_;
 
 public:
-    void init(size_t valueSize, size_t nrReserve) {
+    INLINE void init(size_t valueSize, size_t nrReserve) {
         valueSize_ = valueSize;  // 0 can be allowed.
 
         // MemoryVector does not allow zero-size element.
@@ -366,7 +322,6 @@ public:
 #ifndef NO_PAYLOAD
                 local_.resize(localValIdx + 1);
 #endif
-
                 OccReader& r = readV_.emplace_back();
                 r.set(&mutex, sharedVal, localValIdx);
                 readToLocal(r);
@@ -516,7 +471,7 @@ public:
         writeM_.clear();
         local_.clear();
     }
-    bool empty() const {
+    INLINE bool empty() const {
         return lockV_.empty() &&
             readV_.empty() &&
             readM_.empty() &&
@@ -562,7 +517,7 @@ private:
     }
     template <typename Vector>
     bool shouldUseIndex(const Vector& vec) const {
-        const size_t threshold = 2048 * 2 / sizeof(typename Vector::value_type);
+        constexpr size_t threshold = 4096 / sizeof(typename Vector::value_type);
         return vec.size() > threshold;
     }
 };
