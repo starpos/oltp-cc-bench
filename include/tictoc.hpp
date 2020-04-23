@@ -267,14 +267,14 @@ private:
 struct Lock
 {
 private:
-    Mutex *mutex_;
+    Mutex *mutexp_;
     TsWord tsw_; // locked state.
 public:
     /**
      * tsw_ is uninitialized at first.
      * lock() or tryLock() wil set tsw_.
      */
-    INLINE Lock() : mutex_(nullptr) {}
+    INLINE Lock() : mutexp_(nullptr) {}
     INLINE ~Lock() noexcept { unlock(); }
 
     Lock(const Lock&) = delete;
@@ -282,58 +282,57 @@ public:
     INLINE Lock(Lock&& rhs) noexcept : Lock() { swap(rhs); }
     INLINE Lock& operator=(Lock&& rhs) noexcept { swap(rhs); return *this; }
 
-    INLINE uintptr_t getId() const { return uintptr_t(mutex_); }
+    INLINE uintptr_t getId() const { return uintptr_t(mutexp_); }
     INLINE operator uintptr_t() const { return getId(); }
     INLINE bool operator<(const Lock& rhs) { return getId() < rhs.getId(); }
 
     INLINE uint64_t rts() const { return tsw_.rts(); }
 
-    INLINE bool tryLock(Mutex *mutex) {
-        assert(!mutex_);
-        assert(mutex);
-        TsWord tsw0 = mutex->load();
+    INLINE bool tryLock(Mutex& mutex) {
+        assert(!mutexp_);
+        TsWord tsw0 = mutex.load();
         if (tsw0.lock) return false;
         TsWord tsw1 = tsw0;
         tsw1.lock = 1;
-        if (!mutex->cas_acq(tsw0, tsw1)) return false;
-        mutex_ = mutex;
+        if (!mutex.cas_acq(tsw0, tsw1)) return false;
+        mutexp_ = &mutex;
         tsw_ = tsw1;
         return true;
     }
-    INLINE void lock(Mutex *mutex) {
-        assert(!mutex_);
-        TsWord tsw0 = mutex->load();
+    INLINE void lock(Mutex& mutex) {
+        assert(!mutexp_);
+        TsWord tsw0 = mutex.load();
         TsWord tsw1;
         for (;;) {
-            while (tsw0.lock) tsw0 = waitFor(*mutex);
+            while (tsw0.lock) tsw0 = waitFor(mutex);
             tsw1 = tsw0;
             tsw1.lock = 1;
-            if (mutex->cas_acq(tsw0, tsw1)) break;
+            if (mutex.cas_acq(tsw0, tsw1)) break;
         }
         tsw_ = tsw1;
-        mutex_ = mutex;
+        mutexp_ = &mutex;
     }
     INLINE void updateAndUnlock(uint64_t commitTs) {
-        if (!mutex_) return;
+        if (!mutexp_) return;
         TsWord tsw0 = tsw_;
         assert(tsw0.lock);
         tsw0.lock = 0;
         tsw0.wts = commitTs;
         tsw0.delta = 0;
-        mutex_->store_release(tsw0);
-        mutex_ = nullptr;
+        mutexp_->store_release(tsw0);
+        mutexp_ = nullptr;
     }
     INLINE void unlock() {
-        if (!mutex_) return;
+        if (!mutexp_) return;
         TsWord tsw0 = tsw_;
         assert(tsw0.lock);
         tsw0.lock = 0;
-        mutex_->store_release(tsw0);
-        mutex_ = nullptr;
+        mutexp_->store_release(tsw0);
+        mutexp_ = nullptr;
     }
 private:
     INLINE void swap(Lock& rhs) noexcept {
-        std::swap(mutex_, rhs.mutex_);
+        std::swap(mutexp_, rhs.mutexp_);
         std::swap(tsw_, rhs.tsw_);
     }
     INLINE TsWord waitFor(Mutex& mutex) {
@@ -378,9 +377,9 @@ INLINE bool preCommit(
     for (Writer& w : ws) {
         Lock& lk = ls.emplace_back();
         if (nowait) {
-            if (!lk.tryLock(w.mutex)) goto fin;
+            if (!lk.tryLock(*w.mutex)) goto fin;
         } else {
-            lk.lock(w.mutex);
+            lk.lock(*w.mutex);
         }
     }
 
