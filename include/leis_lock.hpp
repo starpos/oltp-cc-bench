@@ -208,7 +208,7 @@ public:
 
 private:
     void waitForWrite(int& v) {
-        McsSpinlock lock(&mutex_->mcsMu);
+        McsSpinlock lock(mutex_->mcsMu);
         // Up to one thread can spin.
         v = mutex_->atomicLoad();
         while (v != 0) {
@@ -217,7 +217,7 @@ private:
         }
     }
     void waitForRead(int& v) {
-        McsSpinlock lock(&mutex_->mcsMu);
+        McsSpinlock lock(mutex_->mcsMu);
         // Up to one thread can spin.
         v = mutex_->atomicLoad();
         while (v < 0) {

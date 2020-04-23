@@ -142,7 +142,7 @@ private:
         assert(mutex_ != nullptr);
 #ifdef USE_OCC_MCS
         // In order so many threads not to spin on md value.
-        cybozu::lock::McsSpinlock lk(&mutex_->mcsMutex);
+        cybozu::lock::McsSpinlock lk(mutex_->mcsMutex);
 #endif
         MutexData md0 = mutex_->load();
         while (md0.locked) {

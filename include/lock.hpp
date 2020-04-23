@@ -124,7 +124,7 @@ public:
 
 /**
  * MCS spinlock.
- * This is sequence lock. Do not share a lock by too much threads.
+ * This is a fair locking protocol.
  */
 class McsSpinlock
 {
@@ -132,7 +132,8 @@ private:
     struct Node {
         bool wait;
         Node *next;
-        Node() : wait(false), next(nullptr) {}
+        INLINE Node() { reset(); }
+        INLINE void reset() { wait = false; next = nullptr; }
 #if 0
         void print() const {
             ::printf("%p wait %d next %p\n", this, wait, next);
@@ -142,10 +143,10 @@ private:
 public:
     struct Mutex {
         Node *tail;
-        Mutex() : tail(nullptr) {}
+        INLINE Mutex() : tail(nullptr) {}
     };
 private:
-    Mutex *mutex_;
+    Mutex *mutexp_;
     Node node_;
 
 #if 0
@@ -156,24 +157,51 @@ private:
 #endif
 
 public:
-    McsSpinlock(Mutex *mutex) : mutex_(mutex) {
-        assert(mutex_);
-        Node *prev = exchange(mutex_->tail, &node_, __ATOMIC_ACQ_REL);
-        if (prev) {
-            store(node_.wait, true);
-            storeRelease(prev->next, &node_);
-            while (loadAcquire(node_.wait)) _mm_pause();
-        }
+    INLINE McsSpinlock() : mutexp_(nullptr), node_() {
     }
-    ~McsSpinlock() noexcept {
-        if (!load(node_.next)) {
+    INLINE McsSpinlock(Mutex& mutex) : McsSpinlock() {
+        lock(mutex);
+    }
+    INLINE ~McsSpinlock() noexcept { if (mutexp_) unlock(); }
+
+    INLINE bool try_lock(Mutex& mutex) {
+        assert(mutexp_ == nullptr);
+        Node* tail = ::load(mutex.tail);
+        while (tail == nullptr) {
+            _mm_pause();
+            if (compare_exchange_acquire(mutex.tail, tail, &node_)) {
+                mutexp_ = &mutex;
+                return true;
+            }
+        }
+        return false;
+    }
+    INLINE void lock(Mutex& mutex) {
+        assert(mutexp_ == nullptr);
+        Node *prev = exchange_acquire(mutex.tail, &node_);
+        if (prev != nullptr) {
+            store(node_.wait, true);
+            store_release(prev->next, &node_);
+            while (load_acquire(node_.wait)) _mm_pause();
+        }
+        mutexp_ = &mutex;
+    }
+    INLINE void unlock() {
+        assert(mutexp_ != nullptr);
+        Node* next = load(node_.next);
+        if (next == nullptr) {
             Node *node = &node_;
-            if (compareExchange(mutex_->tail, node, nullptr, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
+            if (compare_exchange_release(mutexp_->tail, node, nullptr)) {
+                mutexp_ = nullptr;
+                node_.reset();
                 return;
             }
-            while (!load(node_.next)) _mm_pause();
+            while ((next = load(node_.next)) == nullptr) _mm_pause();
         }
-        storeRelease(node_.next->wait, false);
+        assert(next != nullptr);
+        store_release(next->wait, false);
+        mutexp_ = nullptr;
+        node_.reset();
     }
 };
 
