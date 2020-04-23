@@ -19,6 +19,13 @@
 #include "inline.hpp"
 
 
+#if 0
+#define USE_TICTOC_MCS
+#else
+#undef USE_TICTOC_MCS
+#endif
+
+
 namespace cybozu {
 namespace tictoc {
 
@@ -51,8 +58,15 @@ static_assert(sizeof(TsWord) == sizeof(uint64_t));
 struct Mutex
 {
     TsWord tsw;
+#ifdef USE_TICTOC_MCS
+    cybozu::lock::McsSpinlock::Mutex mcs_mutex;
+#endif
 
+#ifdef USE_TICTOC_MCS
+    INLINE Mutex() : tsw(), mcs_mutex() { tsw.init(); }
+#else
     INLINE Mutex() : tsw() { tsw.init(); }
+#endif
 
     INLINE TsWord load() const { return ::load(tsw); }
     INLINE TsWord load_acquire() const { return ::load_acquire(tsw); }
@@ -291,10 +305,7 @@ public:
         TsWord tsw0 = mutex->load();
         TsWord tsw1;
         for (;;) {
-            while (tsw0.lock) {
-                _mm_pause();
-                tsw0 = mutex->load();
-            }
+            while (tsw0.lock) tsw0 = waitFor(*mutex);
             tsw1 = tsw0;
             tsw1.lock = 1;
             if (mutex->cas_acq(tsw0, tsw1)) break;
@@ -324,6 +335,17 @@ private:
     INLINE void swap(Lock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
         std::swap(tsw_, rhs.tsw_);
+    }
+    INLINE TsWord waitFor(Mutex& mutex) {
+#ifdef USE_TICTOC_MCS
+        cybozu::lock::McsSpinlock lk(mutex.mcs_mutex);
+#endif
+        TsWord tsw0 = mutex.load();
+        while (tsw0.lock) {
+            _mm_pause();
+            tsw0 = mutex.load();
+        }
+        return tsw0;
     }
 };
 
