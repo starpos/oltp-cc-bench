@@ -323,11 +323,12 @@ public:
         }
     }
     template <typename... Args>
-    void emplace_back(Args&&... args) {
+    DataWithPayload<T>& emplace_back(Args&&... args) {
         if (isFull()) reserve((nrElem_ + 1) * 2);
         void *addr = (void *)getAddress(nrElem_);
         nrElem_++;
         new(addr) T(std::forward<Args>(args)...);
+        return *reinterpret_cast<DataWithPayload<T>*>(addr);
     }
     void push_back(T&& t) {
         if (isFull()) reserve((nrElem_ + 1) * 2);
@@ -617,13 +618,14 @@ public:
     }
 
     template <typename... Args>
-    void emplace_back(Args&&... args) {
+    DataWithPayload<T>& emplace_back(Args&&... args) {
         if (size_ == reservedSize_) {
             reserve((size_ + 1) * 2);
         }
         void *addr = (void *)getAddress(size_);
         size_++;
         new(addr) T(std::forward<Args>(args)...);
+        return *reinterpret_cast<DataWithPayload<T>*>(addr);
     }
     void push_back(T&& t) {
         if (size_ == reservedSize_) reserve((size_ + 1) * 2);

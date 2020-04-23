@@ -367,8 +367,7 @@ public:
                 local_.resize(localValIdx + 1);
 #endif
 
-                readV_.emplace_back();
-                OccReader& r = readV_.back();
+                OccReader& r = readV_.emplace_back();
                 r.set(&mutex, sharedVal, localValIdx);
                 readToLocal(r);
             }
@@ -414,8 +413,7 @@ public:
             } else {
                 localValIdx = itR->localValIdx;
             }
-            writeV_.emplace_back();
-            WriteEntry& w = writeV_.back();
+            WriteEntry& w = writeV_.emplace_back();
             w.set(&mutex, sharedVal, localValIdx);
         }
         // write local data.
@@ -434,8 +432,8 @@ public:
     INLINE bool tryLock() {
         std::sort(writeV_.begin(), writeV_.end());
         for (WriteEntry& w : writeV_) {
-            lockV_.emplace_back();
-            if (!lockV_.back().tryLock(w.mutex)) return false;
+            OccLock& lk = lockV_.emplace_back();
+            if (!lk.tryLock(w.mutex)) return false;
         }
         // Serialization point.
         SERIALIZATION_POINT_BARRIER();

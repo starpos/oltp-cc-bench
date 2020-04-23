@@ -1279,8 +1279,7 @@ public:
             return true;
         }
         // Try to read lock.
-        vec_.emplace_back();
-        OpEntryL &ope = vec_.back();
+        OpEntryL &ope = vec_.emplace_back();
         Lock& lk = ope.lock;
         if (!lk.readLock(mutex, txId_)) {
             // should die.
@@ -1302,8 +1301,7 @@ public:
             return true;
         }
         // This is blind write.
-        vec_.emplace_back();
-        OpEntryL& ope = vec_.back();
+        OpEntryL& ope = vec_.emplace_back();
         // Lock will be tried later. See blindWriteLockAll().
         ope.lock.setMutex(mutex); // for search.
         bwV_.emplace_back(&mutex, vec_.size() - 1);
@@ -1334,8 +1332,7 @@ public:
             return true;
         }
         // Not found. Try to write lock.
-        vec_.emplace_back();
-        OpEntryL &ope = vec_.back();
+        OpEntryL &ope = vec_.emplace_back();
         Lock& lk = ope.lock;
         LocalValInfo& info = ope.info;
         if (!lk.writeLock(mutex, txId_)) {

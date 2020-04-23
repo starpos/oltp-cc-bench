@@ -354,11 +354,11 @@ INLINE bool preCommit(
     assert(ls.empty());
     ls.reserve(ws.size());
     for (Writer& w : ws) {
-        ls.emplace_back();
+        Lock& lk = ls.emplace_back();
         if (nowait) {
-            if (!ls.back().tryLock(w.mutex)) goto fin;
+            if (!lk.tryLock(w.mutex)) goto fin;
         } else {
-            ls.back().lock(w.mutex);
+            lk.lock(w.mutex);
         }
     }
 
@@ -470,8 +470,7 @@ public:
             } else {
                 // allocate new local value area.
                 lvidx = allocateLocalVal();
-                rs_.emplace_back();
-                Reader& r = rs_.back();
+                Reader& r = rs_.emplace_back();
                 r.set(&mutex, lvidx);
                 r.prepare();
                 for (;;) {
@@ -497,8 +496,7 @@ public:
             } else {
                 lvidx = itR->localValIdx;
             }
-            ws_.emplace_back();
-            Writer& w = ws_.back();
+            Writer& w = ws_.emplace_back();
             w.set(&mutex, sharedVal, lvidx);
         }
         copyValue(&local_[lvidx], src); // write local

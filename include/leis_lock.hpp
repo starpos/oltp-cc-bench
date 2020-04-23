@@ -696,10 +696,9 @@ public:
     bool read(Mutex& mutex, const void* sharedVal, void* dst) {
         if (maxMutex_ < uintptr_t(&mutex)) {
             // Lock order is preserved so the lock operation can block.
-            vec_.emplace_back(OpEntryL(Lock(&mutex, Mode::S)));
+            OpEntryL& ope = vec_.emplace_back(OpEntryL(Lock(&mutex, Mode::S)));
             maxMutex_ = uintptr_t(&mutex);
             if (nrSorted_ + 1 == vec_.size()) nrSorted_++;
-            OpEntryL& ope = vec_.back();
             ope.isShared = true;
             copyValue(dst, sharedVal);
             return true;
@@ -722,8 +721,7 @@ public:
         }
         // Lock order is not preserved.
         // If tryLock failed, we must goto retrospective mode.
-        vec_.emplace_back();
-        OpEntryL& ope = vec_.back();
+        OpEntryL& ope = vec_.emplace_back();
         ope.isShared = true;
         if (ope.lock.tryLock(&mutex, Mode::S)) {
             copyValue(dst, sharedVal);
@@ -738,8 +736,7 @@ public:
         typename Vec::iterator it = find(&mutex);
         if (it == vec_.end()) {
             // Blind write.
-            vec_.emplace_back();
-            OpEntryL& ope = vec_.back();
+            OpEntryL& ope = vec_.emplace_back();
             ope.isShared = false;
             ope.lock.setMutex(&mutex);
             ope.info.set(allocateLocalVal(), sharedVal);
@@ -770,10 +767,9 @@ public:
     bool readForUpdate(Mutex& mutex, void* sharedVal, void* dst) {
         if (maxMutex_ < uintptr_t(&mutex)) {
             // Lock order is preserved so the lock operation can block.
-            vec_.emplace_back(OpEntryL(Lock(&mutex, Mode::X)));
+            OpEntryL& ope = vec_.emplace_back(OpEntryL(Lock(&mutex, Mode::X)));
             maxMutex_ = uintptr_t(&mutex);
             if (nrSorted_ + 1 == vec_.size()) nrSorted_++;
-            OpEntryL& ope = vec_.back();
             ope.isShared = false;
             ope.info.set(allocateLocalVal(), sharedVal);
             copyValue(dst, getValidLocalValPtr(ope, sharedVal));
@@ -813,8 +809,7 @@ public:
         }
         // Lock order will not be preserved.
         // If trylock failed, we need to go to retrospective mode.
-        vec_.emplace_back();
-        OpEntryL& ope = vec_.back();
+        OpEntryL& ope = vec_.emplace_back();
         Lock& lk = ope.lock;
         ope.isShared = false;
         ope.info.set(allocateLocalVal(), sharedVal);

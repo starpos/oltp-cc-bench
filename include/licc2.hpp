@@ -1268,8 +1268,7 @@ public:
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it = find_entry(key);
         if (it == vec_.end()) {
-            vec_.emplace_back(Lock(mutex, ord_id_));
-            OpEntryL& ope = vec_.back();
+            OpEntryL& ope = vec_.emplace_back(Lock(mutex, ord_id_));
             ope.info.set(allocate_local_val(), (void*)shared_val);
             Lock& lk = ope.lock;
             void* local_val = get_local_val_ptr(ope.info);
@@ -1316,8 +1315,7 @@ public:
         const uintptr_t key = uintptr_t(&mutex);
         typename Vec::iterator it = find_entry(key);
         if (it == vec_.end()) {
-            vec_.emplace_back(Lock(mutex, ord_id_));
-            OpEntryL& ope = vec_.back();
+            OpEntryL& ope = vec_.emplace_back(Lock(mutex, ord_id_));
             Lock& lk = ope.lock;
             lk.blind_write();
             ope.info.set(allocate_local_val(), shared_val);

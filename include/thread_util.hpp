@@ -711,8 +711,7 @@ public:
         if (!workerV_.empty()) throw Err(NAME()) << "started";
         assert(nrRunning_ == 0);
         for (size_t i = 0; i < nrThreads; i++) {
-            workerV_.emplace_back(new Worker());
-            Worker& w = *workerV_.back();
+            Worker& w = *workerV_.emplace_back(new Worker());
             w.th.set([this, &w]() noexcept { threadWorker(w); });
             w.th.start();
         }
