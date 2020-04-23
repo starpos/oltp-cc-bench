@@ -68,6 +68,7 @@ struct OccMutex
     }
 };
 
+
 class OccLock
 {
 public:
@@ -76,9 +77,8 @@ public:
 private:
     Mutex *mutex_;
     MutexData md_;
-    bool updated_;
 public:
-    INLINE OccLock() : mutex_(), md_(), updated_(false) {}
+    INLINE OccLock() : mutex_(), md_() {}
     INLINE explicit OccLock(Mutex *mutex) : OccLock() {
         lock(mutex);
     }
@@ -102,7 +102,6 @@ public:
             md1.locked = 1;
             if (mutex_->cas_acq(md0, md1)) {
                 md_ = md1;
-                updated_ = false;
                 return;
             }
         }
@@ -117,21 +116,19 @@ public:
             if (mutex->cas_acq(md0, md1)) {
                 mutex_ = mutex;
                 md_ = md1;
-                updated_ = false;
                 return true;
             }
         }
     }
-    INLINE void unlock() {
+    INLINE void unlock(bool updated = false) {
         if (!mutex_) return;
         MutexData md0 = md_;
         assert(md0.locked);
-        if (updated_) md0.version++;
+        if (updated) md0.version++;
         md0.locked = 0;
         mutex_->store_release(md0);
         mutex_ = nullptr;
     }
-    INLINE void update() { updated_ = true; }
     INLINE uintptr_t getMutexId() const { return uintptr_t(mutex_); }
 private:
     INLINE void swap(OccLock& rhs) noexcept {
@@ -452,12 +449,11 @@ public:
         auto itW = writeV_.begin();
         while (itLk != lockV_.end()) {
             assert(itW != writeV_.end());
-            itLk->update();
 #ifndef NO_PAYLOAD
             // writeback
             ::memcpy(itW->sharedVal, &local_[itW->localValIdx], valueSize_);
 #endif
-            itLk->unlock();
+            itLk->unlock(true);
             ++itLk;
             ++itW;
         }
