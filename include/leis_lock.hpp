@@ -105,6 +105,7 @@ public:
         if (mode == Mode::X) {
             write_lock(mutex);
         } else {
+            assert(mode == Mode::S);
             read_lock(mutex);
         }
     }
@@ -198,8 +199,7 @@ public:
     INLINE void read_unlock() noexcept {
         assert(mode_ == Mode::S); assert(mutexp_);
         int ret = mutexp_->fetch_sub_rel(1);
-        unused(ret);
-        assert(ret >= 1);
+        assert(ret >= 1); unused(ret);
         reset();
     }
 
@@ -256,7 +256,7 @@ private:
  * If 0, std::map will be used.
  * If 1, std::vector and sort will be used.
  *
- * Lock: XSLock, LockWithMcs, or SXQLock.
+ * Lock: XSLock, LockWithMcs, or SXQLock (obsolete).
  *   XSLock is normal shared-exclusive lock.
  *   LockWithMcs is XSLock with a helper MCS lock.
  *   SXQLock is a shared eXclusive Queuing lock (original).
@@ -345,9 +345,10 @@ public:
         typename Map::iterator it = map_.lower_bound(&mutex);
         if (unlikely(it == map_.end())) {
             // Lock order is preserved so the lock operation can block.
-            auto pair = map_.emplace(&mutex, OpEntryL(Lock(mutex, Mode::S)));
+            auto pair = map_.emplace(&mutex, OpEntryL());
             assert(pair.second);
             OpEntryL& ope = pair.first->second;
+            ope.lock.read_lock(mutex);
             ope.isShared = true;
             copyValue(dst, sharedVal); // read shared data.
             return true;
@@ -417,9 +418,10 @@ public:
         typename Map::iterator it = map_.lower_bound(&mutex);
         if (unlikely(it == map_.end())) {
             // Lock order is preserved so the lock operation can block.
-            auto pair = map_.emplace(&mutex, OpEntryL(Lock(mutex, Mode::X)));
+            auto pair = map_.emplace(&mutex, OpEntryL());
             assert(pair.second);
             OpEntryL& ope = pair.first->second;
+            ope.lock.write_lock(mutex);
             ope.isShared = false;
             ope.info.set(allocateLocalVal(), sharedVal);
             copyValue(dst, getValidLocalValPtr(ope, sharedVal));
@@ -559,11 +561,13 @@ public:
         while (it != map_.end()) {
             OpEntryL& ope = it->second;
             assert(ope.lock.mode() != Mode::Invalid);
-            if (!ope.lock.isShared()) {
+            if (ope.lock.isShared()) {
+                ope.lock.read_unlock();
+            } else {
                 // Update the shared value.
                 copyValue(ope.info.sharedVal, getLocalValPtr(ope.info));
+                ope.lock.write_unlock();
             }
-            ope.lock.unlock();
             ++it;
         }
         map_.clear();
@@ -672,6 +676,7 @@ public:
 
 private:
     using Vec = std::vector<OpEntryL>;
+    using VecIter = typename Vec::iterator;
     Vec vec_;
     uintptr_t maxMutex_;
     size_t nrSorted_;
@@ -702,14 +707,15 @@ public:
     INLINE bool read(Mutex& mutex, const void* sharedVal, void* dst) {
         if (unlikely(maxMutex_ < uintptr_t(&mutex))) {
             // Lock order is preserved so the lock operation can block.
-            OpEntryL& ope = vec_.emplace_back(OpEntryL(Lock(mutex, Mode::S)));
+            OpEntryL& ope = vec_.emplace_back();
+            ope.lock.read_lock(mutex);
             maxMutex_ = uintptr_t(&mutex);
             if (nrSorted_ + 1 == vec_.size()) nrSorted_++;
             ope.isShared = true;
             copyValue(dst, sharedVal);
             return true;
         }
-        typename Vec::iterator it = find(&mutex);
+        VecIter it = find(&mutex);
         if (unlikely(it != vec_.end())) {
             // Already exists.
             OpEntryL& ope = *it;
@@ -739,7 +745,7 @@ public:
         }
     }
     INLINE bool write(Mutex& mutex, void* sharedVal, const void* src) {
-        typename Vec::iterator it = find(&mutex);
+        VecIter it = find(&mutex);
         if (likely(it == vec_.end())) {
             // Blind write.
             OpEntryL& ope = vec_.emplace_back();
@@ -773,7 +779,8 @@ public:
     INLINE bool readForUpdate(Mutex& mutex, void* sharedVal, void* dst) {
         if (unlikely(maxMutex_ < uintptr_t(&mutex))) {
             // Lock order is preserved so the lock operation can block.
-            OpEntryL& ope = vec_.emplace_back(OpEntryL(Lock(mutex, Mode::X)));
+            OpEntryL& ope = vec_.emplace_back();
+            ope.lock.write_lock(mutex);
             maxMutex_ = uintptr_t(&mutex);
             if (nrSorted_ + 1 == vec_.size()) nrSorted_++;
             ope.isShared = false;
@@ -781,7 +788,7 @@ public:
             copyValue(dst, getValidLocalValPtr(ope, sharedVal));
             return true;
         }
-        typename Vec::iterator it = find(&mutex);
+        VecIter it = find(&mutex);
         if (unlikely(it != vec_.end())) {
             OpEntryL& ope = *it;
             Lock& lk = ope.lock;
@@ -865,18 +872,18 @@ public:
 
         // Search the first invalid item and
         // invalidate local values until it.
-        typename Vec::iterator it = vec_.begin();
+        VecIter it = vec_.begin();
         while (it != vec_.end() && it->lock.mode() != Mode::Invalid) {
             if (!it->isShared) it->isValid = false;
             ++it;
         }
         assert(it != vec_.end());
-        typename Vec::iterator target = it;
+        VecIter target = it;
         // Unlock and invalidate local values.
         while (it != vec_.end()) {
             if (!it->isShared) it->isValid = false;
             Lock& lk = it->lock;
-            Mutex* mu = (Mutex*)lk.getMutexId();
+            Mutex* mu = lk.mutex();
             lk.unlock();
             lk.setMutex(mu);
             ++it;
@@ -885,7 +892,7 @@ public:
         it = target;
         while (it != vec_.end()) {
             Lock& lk = it->lock;
-            Mutex& mu = *reinterpret_cast<Mutex*>(lk.getMutexId());
+            Mutex& mu = *lk.mutex();
             lk.lock(mu, it->isShared ? Mode::S : Mode::X);
             ++it;
         }
@@ -902,12 +909,14 @@ public:
         for (OpEntryL& ope : vec_) {
             Lock& lk = ope.lock;
             assert(lk.mode() != Mode::Invalid);
-            if (!lk.isShared()) {
+            if (lk.isShared()) {
+                lk.read_unlock();
+            } else {
                 // Update the shared value.
                 assert(ope.info.sharedVal != nullptr);
                 copyValue(ope.info.sharedVal, getLocalValPtr(ope.info));
+                lk.write_unlock();
             }
-            lk.unlock(); // This is S2PL protocol.
         }
         vec_.clear();
         maxMutex_ = 0; // smaller than any valid pointers.
@@ -923,11 +932,11 @@ public:
     INLINE bool empty() const { return vec_.empty(); }
     INLINE size_t size() const { return vec_.size(); }
 private:
-    INLINE typename Vec::iterator find(Mutex *mutex) {
+    INLINE VecIter find(Mutex *mutex) {
         const uintptr_t key = uintptr_t(mutex);
 #if 1
         // Binary search in sorted area.
-        typename Vec::iterator sortedEnd, it;
+        VecIter sortedEnd, it;
         sortedEnd = vec_.begin();
         std::advance(sortedEnd, nrSorted_);
         it = lower_bound(mutex, sortedEnd);
@@ -1002,7 +1011,7 @@ public:
         }
         ::printf("%p %s END\n", this, prefix);
     }
-    INLINE typename Vec::iterator lower_bound(Mutex *mutex, typename Vec::iterator end) {
+    INLINE VecIter lower_bound(Mutex *mutex, VecIter end) {
         Lock lkcmp;
         lkcmp.setMutex(mutex);
         OpEntryL ope(std::move(lkcmp));

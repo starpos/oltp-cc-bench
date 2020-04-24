@@ -81,7 +81,7 @@ Result1 worker(size_t idx, uint8_t& ready, const bool& start, const bool& quit, 
     store_release(ready, 1);
     while (!load_acquire(start)) _mm_pause();
     size_t count = 0; unused(count);
-    while (likely(!load_acquire(quit))) {
+    while (!load_acquire(quit)) {
         size_t firstRecIdx;
         assert(llSet.empty());
         auto randState = rand.getState();

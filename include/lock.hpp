@@ -337,11 +337,11 @@ public:
     using Mutex = XSMutex;
     using Mode = XSMutex::Mode;
 private:
-    XSMutex *mutex_;
+    Mutex *mutex_;
     Mode mode_;
 public:
     INLINE XSLock() : mutex_(nullptr), mode_(Mode::Invalid) {}
-    XSLock(XSMutex& mutex, Mode mode) : XSLock() {
+    INLINE XSLock(Mutex& mutex, Mode mode) : XSLock() {
         lock(mutex, mode);
     }
     INLINE ~XSLock() noexcept { unlock(); }
@@ -351,38 +351,44 @@ public:
     INLINE XSLock(XSLock&& rhs) noexcept : XSLock() { swap(rhs); }
     INLINE XSLock& operator=(XSLock&& rhs) noexcept { swap(rhs); return *this; }
 
-    INLINE void lock(XSMutex& mutex, Mode mode) {
-        assert(mode_ == Mode::Invalid);
+    INLINE void lock(Mutex& mutex, Mode mode) {
+        assert(!mutex_); assert(mode_ == Mode::Invalid);
         mutex.lock(mode);
-        mutex_ = &mutex;
-        mode_ = mode;
+        reset(&mutex, mode);
     }
-    INLINE bool tryLock(XSMutex& mutex, Mode mode) {
-        assert(mode_ == Mode::Invalid);
+    INLINE void write_lock(Mutex& mutex) {
+        assert(!mutex_); assert(mode_ == Mode::Invalid);
+        mutex.write_lock();
+        reset(&mutex, Mode::X);
+    }
+    INLINE void read_lock(Mutex& mutex) {
+        assert(!mutex_); assert(mode_ == Mode::Invalid);
+        mutex.read_lock();
+        reset(&mutex, Mode::S);
+    }
+    INLINE bool tryLock(Mutex& mutex, Mode mode) {
+        assert(!mutex_); assert(mode_ == Mode::Invalid);
         if (unlikely(!mutex.tryLock(mode))) return false;
-        mutex_ = &mutex;
-        mode_ = mode;
+        reset(&mutex, mode);
         return true;
     }
-    INLINE bool write_trylock(XSMutex& mutex) {
+    INLINE bool write_trylock(Mutex& mutex) {
+        assert(!mutex_); assert(mode_ == Mode::Invalid);
         if (unlikely(!mutex.write_trylock())) return false;
-        mutex_ = &mutex;
-        mode_ = Mode::X;
+        reset(&mutex, Mode::X);
         return true;
     }
-    INLINE bool read_trylock(XSMutex& mutex) {
+    INLINE bool read_trylock(Mutex& mutex) {
+        assert(!mutex_); assert(mode_ == Mode::Invalid);
         if (unlikely(!mutex.read_trylock())) return false;
-        mutex_ = &mutex;
-        mode_ = Mode::S;
+        reset(&mutex, Mode::S);
         return true;
     }
 
-    INLINE bool isShared() const {
-        return mode_ == Mode::S;
-    }
+    INLINE bool isShared() const { return mode_ == Mode::S; }
+
     INLINE bool tryUpgrade() {
-        assert(mutex_);
-        assert(mode_ == Mode::S);
+        assert(mutex_); assert(mode_ == Mode::S);
         if (unlikely(!mutex_->tryUpgrade())) return false;
         mode_ = Mode::X;
         return true;
@@ -400,17 +406,17 @@ public:
         }
         assert(mutex_);
         mutex_->unlock(mode_);
-        init();
+        reset();
     }
     INLINE void write_unlock() noexcept {
-        assert(mode_ == Mode::X); assert(mutex_);
+        assert(mutex_); assert(mode_ == Mode::X);
         mutex_->write_unlock();
-        init();
+        reset();
     }
     INLINE void read_unlock() noexcept {
-        assert(mode_ == Mode::S); assert(mutex_);
+        assert(mutex_); assert(mode_ == Mode::S);
         mutex_->read_unlock();
-        init();
+        reset();
     }
 
     INLINE const Mutex* mutex() const { return mutex_; }
@@ -424,9 +430,9 @@ public:
     INLINE void setMutex(Mutex *mutex) { mutex_ = mutex; }
 
 private:
-    INLINE void init() {
-        mutex_ = nullptr;
-        mode_ = Mode::Invalid;
+    INLINE void reset(Mutex* mutexp = nullptr, Mode mode = Mode::Invalid) {
+        mutex_ = mutexp;
+        mode_ = mode;
     }
     INLINE void swap(XSLock& rhs) noexcept {
         std::swap(mutex_, rhs.mutex_);
