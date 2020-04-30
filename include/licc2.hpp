@@ -1243,6 +1243,8 @@ private:
     // key: mutex pointer. value: index in vec_.
     UMap index_;
 
+    bool is_read_only_;
+
     uint32_t ord_id_;
     size_t value_size_;
 
@@ -1255,6 +1257,8 @@ public:
 
         vec_.reserve(nr_reserve);
         local_.reserve(nr_reserve);
+
+        is_read_only_ = true;
     }
     INLINE void set_ord_id(uint32_t ord_id) {
         ord_id_ = ord_id;
@@ -1323,11 +1327,13 @@ public:
             lk.blind_write();
             ope.info.set(allocate_local_val(), shared_val);
             copy_value(get_local_val_ptr(ope.info), src);
+            is_read_only_ = false;
             return true;
         }
         Lock& lk = it->lock;
         if (unlikely(lk.is_state(LockState::READ) && !lk.upgrade())) return false;
         copy_value(get_local_val_ptr(it->info), src);
+        is_read_only_ = false;
         return true;
     }
 
@@ -1354,6 +1360,10 @@ public:
      * to check read set in the early stage.
      */
     INLINE bool preemptive_verify() {
+        if (is_read_only_) {
+            // It is enough to execute normal verify.
+            return true;
+        }
         for (OpEntryL& ope : vec_) {
             Lock& lk = ope.lock;
             if (!lk.is_state_in({LockState::READ, LockState::READ_MODIFY_WRITE})) continue;
@@ -1414,6 +1424,7 @@ public:
         index_.clear();
         vec_.clear();
         local_.clear();
+        is_read_only_ = true;
     }
     INLINE bool is_empty() const { return vec_.empty(); }
 

@@ -393,6 +393,12 @@ using Flags = std::vector<bool>; // isInWriteSet array.
 
 INLINE bool preemptive_verify(const ReadSet& rs, const WriteSet& ws, const Flags& flags)
 {
+    if (rs.empty() || ws.empty()) {
+        // Preemptive verify is not required.
+        // If rs is empty then verify is not required.
+        // If ws is empty then we should do normal verify only.
+        return true;
+    }
     uint64_t commitTs = 0;
     for (const Reader& r : rs) {
         commitTs = std::max(commitTs, r.local_tsw().wts);
