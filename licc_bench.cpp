@@ -29,6 +29,7 @@ struct CmdLineOptionPlus : CmdLineOption
     int usesBackOff; // 0 or 1.
     size_t writePct; // 0 to 100.
     int usesRMW; // 0 or 1.
+    bool preverify;
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&modeStr, "licc-hybrid", "mode", "[mode]: specify mode in licc-pcc, licc-occ, licc-hybrid.");
@@ -36,12 +37,13 @@ struct CmdLineOptionPlus : CmdLineOption
         appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
         appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write 0:w 1:rmw (default: 1)");
         appendOpt(&writePct, 50, "writepct", "[pct]: write percentage (0 to 100) for custom3 workload");
+        appendOpt(&preverify, 0, "preverify", "[0 or 1]: preemptive verify 0:off 1:on");
     }
     std::string str() const {
         return cybozu::util::formatString(
-            "mode:%s %s pqLockType:%d backoff:%d writePct:%zu rmw:%d"
+            "mode:%s %s pqLockType:%d backoff:%d writePct:%zu rmw:%d preverify:%d"
             , modeStr.c_str(), base::str().c_str(), pqLockType
-            , usesBackOff ? 1 : 0, writePct, usesRMW ? 1 : 0);
+            , usesBackOff ? 1 : 0, writePct, usesRMW ? 1 : 0, preverify ? 1 : 0);
     }
 };
 
@@ -49,6 +51,7 @@ struct CmdLineOptionPlus : CmdLineOption
 enum class IMode : uint8_t {
     S = 0, X = 1, INVALID = 2,
 };
+
 
 template <typename PQLock>
 struct ILockTypes
@@ -139,6 +142,7 @@ struct ILockShared
     bool usesZipf;
     double zipfTheta;
     double zipfZetan;
+    bool preverify;
 };
 
 
@@ -146,21 +150,36 @@ struct ILockShared
 #undef MONITOR_LATENCY
 
 
-template <typename PQLock>
-Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
+struct LiccResult : Result1
 {
-#if 0
-    cybozu::lock::cas_success = 0;
-    cybozu::lock::cas_total = 0;
-#endif
+    size_t nr_preemptive_aborts;
 
+    LiccResult() : Result1(), nr_preemptive_aborts(0) {
+    }
+
+    void operator+=(const LiccResult& rhs) {
+        Result1::operator+=(rhs);
+        nr_preemptive_aborts += rhs.nr_preemptive_aborts;
+    }
+
+    std::string str() const {
+        std::stringstream ss;
+        ss << Result1::str();
+        ss << " preemptive_aborts:" << nr_preemptive_aborts;
+        return ss.str();
+    }
+};
+
+
+template <typename PQLock>
+LiccResult worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, ILockShared<PQLock>& shared)
+{
     using IMutex = typename ILockTypes<PQLock>::IMutex;
     using ILockSet = typename ILockTypes<PQLock>::ILockSet;
 
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
 
-    //std::vector<IMutex>& muV = shared.muV;
     auto& recV = shared.recV;
 #ifdef USE_PARTITION
     recV.allocate(idx);
@@ -174,7 +193,7 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     const TxMode longTxMode = shared.longTxMode;
     const bool usesRMW = shared.usesRMW;
 
-    Result1 res;
+    LiccResult res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
     FastZipf fastZipf(rand, shared.zipfTheta, recV.size(), shared.zipfZetan);
     const bool isLongTx = longTxSize != 0 && idx < shared.nrTh4LongTx;
@@ -183,41 +202,17 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     auto getMode = selectGetModeFunc<decltype(rand), IMode>(isLongTx, shortTxMode, longTxMode);
     auto getRecordIdx = selectGetRecordIdx<decltype(rand)>(isLongTx, shortTxMode, longTxMode, shared.usesZipf);
 
-#if 0
-    cybozu::lock::OrdIdGen ordIdGen;
-    assert(idx < cybozu::lock::MAX_WORKER_ID);
-    ordIdGen.workerId = idx;
-    cybozu::lock::SimpleEpochGenerator epochGen;
-#else
     EpochTxIdGenerator<9, 2> epochTxIdGen(idx + 1, epochGen_);
-#endif
 
     ILockSet lockSet;
     lockSet.init(shared.payload, realNrOp);
     std::vector<uint8_t> value(shared.payload);
 
-    //std::unordered_map<size_t, size_t> retryMap;
-#if 0
-    uint64_t tdiffTotal = 0;
-    uint64_t count = 0;
-
-    uint64_t nrSuccess = 1000; // initial abort rate is 0.1%.
-    uint64_t nrAbort = 1;
-    size_t factor = 1;
-#endif
-
     store_release(ready, 1);
     while (!load_acquire(start)) _mm_pause();
     while (!load_acquire(quit)) {
-#if 0
-        ordIdGen.epochId = epochGen.get();
-        const uint32_t ordId = ordIdGen.ordId;
-#else
         const uint32_t ordId = epochTxIdGen.get();
-#endif
-
         lockSet.set_ord_id(ordId);
-        //::printf("Tx begin\n"); // debug code
         size_t firstRecIdx;
 
         uint64_t t0;
@@ -227,18 +222,14 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
             if (load_acquire(quit)) break; // to quit under starvation.
             assert(lockSet.is_empty());
             rand.setState(randState);
-            //::printf("begin\n"); // QQQQQ
 #ifdef MONITOR_LATENCY
             uint64_t ts[6];
             ts[0] = cybozu::time::rdtscp();
 #endif
             for (size_t i = 0; i < realNrOp; i++) {
-                //::printf("op %zu\n", i); // debug code
-
                 size_t key = getRecordIdx(rand, fastZipf, recV.size(), realNrOp, i, firstRecIdx);
                 IMode mode = getMode(rand, realNrOp, realNrWr, wrRatio, i);
 
-                //::printf("mode %c key %zu\n", mode == IMode::S ? 'S' : 'X', key); // QQQQQ
                 auto& rec = recV[key];
                 IMutex& mutex = rec.value;
                 void *sharedValue = rec.payload;
@@ -264,11 +255,14 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 #ifdef MONITOR_LATENCY
             ts[1] = cybozu::time::rdtscp();
 #endif
-            //::printf("try protect %zu\n", retry); // debug code
             lockSet.reserve_all_blind_writes();
 #ifdef MONITOR_LATENCY
             ts[2] = cybozu::time::rdtscp();
 #endif
+            if (shared.preverify && unlikely(!lockSet.preemptive_verify())) {
+                res.nr_preemptive_aborts++;
+                goto abort;
+            }
             if (unlikely(!lockSet.protect_all())) goto abort;
 #ifdef MONITOR_LATENCY
             ts[3] = cybozu::time::rdtscp();
@@ -283,7 +277,6 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
 #endif
             res.incCommit(isLongTx);
             res.addRetryCount(isLongTx, retry);
-            //retryMap[retry]++;
 
 #ifdef MONITOR_LATENCY
             if (isLongTx) {
@@ -300,59 +293,13 @@ Result1 worker0(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
             }
 #endif
 
-#if 0
-            nrSuccess++;
-#endif
             break;
           abort:
             res.incAbort(isLongTx);
             lockSet.clear();
-#if 0 // Backoff
-            const size_t n = rand() % (1 << (retry + 10));
-            for (size_t i = 0; i < n; i++) _mm_pause();
-#elif 1
-#if 0
-            nrAbort++;
-#endif
             if (shared.usesBackOff) backOff(t0, retry, rand);
-#elif 0
-            nrAbort++;
-            if ((rand() & 0x1) == 0) continue; // do not use backoff.
-            if (nrAbort < 10000) {
-                // do noghint
-            } else if (nrAbort * 10 / (nrSuccess + nrAbort) > 0) {
-                // Abort rate > 10%
-                factor = std::min<size_t>(factor + 1, 20);
-            } else if (nrAbort * 10 / (nrSuccess + nrAbort) == 0) {
-                // Abort rate < 10%
-                factor = std::max<size_t>(factor - 1, 1);
-            }
-            if (nrSuccess + nrAbort > UINT64_MAX / 2) {
-                nrSuccess /= 2;
-                nrAbort = std::max<uint64_t>(nrAbort / 2, 1);
-            }
-            const uint64_t t1 = cybozu::time::rdtscp();
-            const uint64_t tdiff = std::max<uint64_t>(t1 - t0, 2);
-            uint64_t waittic = rand() % (tdiff << factor);
-            uint64_t t2 = t1;
-            while (t2 - t1 < waittic) {
-                _mm_pause();
-                t2 = cybozu::time::rdtscp();
-            }
-            t0 = t2;
-#endif
         }
     }
-    //for (const auto& pair: retryMap) {
-     //   ::printf("retry:%zu\tcount:%zu\n", pair.first, pair.second);
-    //}
-    //::printf("%zu\n", tdiffTotal / count);
-    //::printf("idx %zu factor %zu nrSuccess %zu nrAbort %zu\n", idx, factor, nrSuccess, nrAbort);
-
-#if 0
-    cybozu::lock::g_cas_success += cybozu::lock::cas_success;
-    cybozu::lock::g_cas_total += cybozu::lock::cas_total;
-#endif
 
     return res;
 }
@@ -396,30 +343,7 @@ Result2 worker1(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     BoolRandom<decltype(rand)> boolRand(rand);
     const size_t realNrOp = txSize;
 
-#if 0
-    cybozu::lock::OrdIdGen ordIdGen;
-    assert(idx + 1 < cybozu::lock::MAX_WORKER_ID);
-    ordIdGen.workerId = idx + 1;
-    cybozu::lock::SimpleEpochGenerator epochGen;
-#else
     EpochTxIdGenerator<9, 2> epochTxIdGen(idx + 1, epochGen_);
-#if 0
-    if (idx == 0) {
-        epochTxIdGen.setOrderId(0);
-    } else if (idx <= 5) {
-        epochTxIdGen.setOrderId(1);
-    } else {
-        epochTxIdGen.setOrderId(3);
-    }
-#endif
-#if 0
-    if (idx == 0) {
-        epochTxIdGen.boost(1000);
-    } else if (idx <= 5) {
-        epochTxIdGen.boost(100);
-    }
-#endif
-#endif
 
     std::vector<uint8_t> value(shared.payload);
     ILockSet lockSet;
@@ -428,12 +352,7 @@ Result2 worker1(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     store_release(ready, 1);
     while (!load_acquire(start)) _mm_pause();
     while (!load_acquire(quit)) {
-#if 0
-        ordIdGen.epochId = epochGen.get();
-        const uint32_t ordId = ordIdGen.ordId;
-#else
         const uint32_t ordId = epochTxIdGen.get();
-#endif
 
         lockSet.set_ord_id(ordId);
         uint64_t t0;
@@ -445,11 +364,7 @@ Result2 worker1(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
             rand.setState(randState);
             boolRand.reset();
             for (size_t i = 0; i < realNrOp; i++) {
-#if 0
-                IMode mode = boolRand() ? IMode::X : IMode::S;
-#else
                 IMode mode = rand() % 100 < shared.writePct ? IMode::X : IMode::S;
-#endif
                 size_t key = rand() % recV.size();
                 auto& rec = recV[key];
                 IMutex& mutex = rec.value;
@@ -501,11 +416,6 @@ void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
     shared.nrWr4Long = opt.nrWr4Long;
     shared.shortTxMode = TxMode(opt.shortTxMode);
     shared.longTxMode = TxMode(opt.longTxMode);
-#if 0
-    ::printf("txmode1 %u %u\n", opt.shortTxMode, opt.longTxMode); // QQQQQ
-    ::printf("txmode2 %u %u\n", shared.shortTxMode, shared.longTxMode); // QQQQQ
-#endif
-
     shared.usesBackOff = opt.usesBackOff != 0;
     shared.writePct = opt.writePct;
     shared.usesRMW = opt.usesRMW != 0;
@@ -518,6 +428,7 @@ void setShared(const CmdLineOptionPlus& opt, ILockShared<PQLock>& shared)
     } else {
         shared.zipfZetan = 1.0;
     }
+    shared.preverify = opt.preverify;
 }
 
 
@@ -529,7 +440,7 @@ void dispatch1(CmdLineOptionPlus& opt)
 
     for (size_t i = 0; i < opt.nrLoop; i++) {
         if (opt.workload == "custom") {
-            Result1 res;
+            LiccResult res;
             runExec(opt, shared, worker0<PQLock>, res);
         } else if (opt.workload == "custom3") {
             Result2 res;
@@ -610,10 +521,6 @@ int main(int argc, char *argv[]) try
 #endif
 
     dispatch0(opt);
-#if 0
-    ::printf("CAS success %zu  total %zu\n"
-        , cybozu::lock::g_cas_success.load(), cybozu::lock::g_cas_total.load());
-#endif
 
 } catch (std::exception& e) {
     ::fprintf(::stderr, "exception: %s\n", e.what());

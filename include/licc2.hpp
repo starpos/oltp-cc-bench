@@ -514,7 +514,7 @@ public:
         licc2::invisible_read(*mutex_, ld_, shared, local, size);
     }
     /**
-     * WRITE_RESERVE = true
+     * does_write_reserve is true then
      *   INIT --> READ_MODIFY_WRITE
      * otherwise
      *   INIT --> READ
@@ -613,6 +613,7 @@ public:
         assert(ld_.state == lock_state);
         MutexData md0 = mutex_->load();
         for (;;) {
+            _mm_pause();
             auto moc1 = MutexOpCreator(ld_, md0).reserve<lock_state, true>();
             if (unlikely(moc1.capability == IMPOSSIBLE)) return false;
             if (unlikely(moc1.capability == MUST_WAIT)) {
@@ -1348,6 +1349,24 @@ public:
             }
         }
     }
+    /**
+     * You can call this after reserve_all_blind_writes() and before protect_all()
+     * to check read set in the early stage.
+     */
+    INLINE bool preemptive_verify() {
+        for (OpEntryL& ope : vec_) {
+            Lock& lk = ope.lock;
+            if (!lk.is_state_in({LockState::READ, LockState::READ_MODIFY_WRITE})) continue;
+            if (!lk.template is_unchanged<true>()) return false;
+            /* We could not distinguish between invisible- and reserved- read
+               with current implementation. Therefore we does not try to
+               keep reservation for read.
+               We also does not try to keep reservation of the object for write
+               because we will protect it soon. */
+        }
+        return true;
+    }
+
     /**
      * Here all the reserved write (BLIND_WRITE and READ_MODIFY_WRITE) is unprotected (if not intercepted).
      * For BLIND_WRITE, reserve_all_blind_writes() ensures it.
