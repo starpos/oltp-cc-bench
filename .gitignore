@@ -13,6 +13,9 @@ cmake_install.cmake
 *.ninja
 .ninja_*
 compile_commands.json
+.clangd/
+
+hoge*
 
 cn_bench
 leis_bench
