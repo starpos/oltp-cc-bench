@@ -13,6 +13,7 @@
 #include "cache_line_size.hpp"
 #include "write_set.hpp"
 #include "inline.hpp"
+#include "atomic_wrapper.hpp"
 
 
 namespace cybozu {
@@ -104,15 +105,6 @@ struct ILockData
 };
 
 
-#if 0
-thread_local size_t cas_success = 0;
-thread_local size_t cas_total = 0;
-
-std::atomic<size_t> g_cas_success(0);
-std::atomic<size_t> g_cas_total(0);
-#endif
-
-
 template <typename PQLock>
 struct IMutex
 {
@@ -136,32 +128,9 @@ struct IMutex
     }
     bool compareAndSwap(ILockData &before, const ILockData& after,
                         int mode0 = __ATOMIC_ACQ_REL, int mode1 = __ATOMIC_ACQUIRE) {
-#if 1
         bool ret = __atomic_compare_exchange(
             &obj, (uint64_t *)&before, (uint64_t *)&after, false, mode0, mode1);
-#if 0
-        cas_success += ret;
-        cas_total++;
-#endif
         return ret;
-#else // debug code.
-        ILockData before0 = before;
-        bool ret = __atomic_compare_exchange(
-            &obj, (uint64_t *)&before, (uint64_t *)&after, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
-        if (ret) {
-            ::printf("CAS_OK %p %s\n"
-                     "       %p %s\n"
-                     , this, before.str().c_str(), this, after.str().c_str());
-        } else {
-            ::printf("CAS_NG %p %s\n"
-                     "       %p %s\n"
-                     "       %p %s\n"
-                     , this, before0.str().c_str()
-                     , this, before.str().c_str()
-                     , this, after.str().c_str());
-        }
-        return ret;
-#endif
     }
     bool compareAndSwapBegin(ILockData &before, const ILockData& after) {
         return compareAndSwap(before, after, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
@@ -357,7 +326,7 @@ public:
                 waitFor<PREPARE_READ>(ld0);
                 continue;
             }
-            acquire_memory_barrier();
+            acquire_fence();
             // read shared memory.
 #ifndef NO_PAYLOAD
             ::memcpy(local, shared, size);
