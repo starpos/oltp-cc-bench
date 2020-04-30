@@ -196,17 +196,17 @@ private:
         return (x << k) | (x >> (64 - k));
     }
     void jumpOnce() {
-	uint64_t s[2] = {0, 0};
+        uint64_t s[2] = {0, 0};
         for (uint64_t jump : {0xbeac0467eba5facb, 0xd86b048b86aa9922}) {
-	    for (size_t b = 0; b < 64; b++) {
-	        if (jump & UINT64_C(1) << b) {
-		    s[0] ^= s_[0];
-		    s[1] ^= s_[1];
-		}
-		operator()();
-	    }
-	}
-	::memcpy(&s_[0], &s[0], sizeof(s_));
+            for (size_t b = 0; b < 64; b++) {
+                if (jump & UINT64_C(1) << b) {
+                    s[0] ^= s_[0];
+                    s[1] ^= s_[1];
+                }
+                operator()();
+            }
+        }
+        ::memcpy(&s_[0], &s[0], sizeof(s_));
     }
 };
 
