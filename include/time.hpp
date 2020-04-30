@@ -9,6 +9,8 @@
 
 #include <chrono>
 #include <deque>
+#include <cinttypes>
+
 
 namespace cybozu {
 namespace time {
