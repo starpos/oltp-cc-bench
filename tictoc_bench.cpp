@@ -37,7 +37,8 @@ struct Shared
     TxMode longTxMode;
     bool usesBackOff;
     bool usesRMW;
-    bool nowait;
+    cybozu::tictoc::NoWaitMode nowait_mode;
+    bool do_preemptive_verify;
     size_t nrTh4LongTx;
     size_t payload;
     bool usesZipf;
@@ -49,7 +50,30 @@ struct Shared
 enum class Mode : bool { S = false, X = true, };
 
 
-Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit, bool& shouldQuit, Shared& shared)
+struct TicTocResult : Result1
+{
+    size_t nr_preemptive_aborts;
+
+    TicTocResult() : Result1(), nr_preemptive_aborts(0) {
+    }
+
+    void operator+=(const TicTocResult& rhs) {
+        Result1::operator+=(rhs);
+        nr_preemptive_aborts += rhs.nr_preemptive_aborts;
+    }
+
+    std::string str() const {
+        std::stringstream ss;
+        ss << Result1::str();
+        ss << " preemptive_aborts:" << nr_preemptive_aborts;
+        return ss.str();
+    }
+};
+
+
+TicTocResult worker2(
+    size_t idx, uint8_t& ready, const bool& start, const bool& quit,
+    bool& shouldQuit, Shared& shared)
 {
     unused(shouldQuit);
     cybozu::thread::setThreadAffinity(::pthread_self(), CpuId_[idx]);
@@ -65,7 +89,7 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     const TxMode shortTxMode = shared.shortTxMode;
     const TxMode longTxMode = shared.longTxMode;
 
-    Result1 res;
+    TicTocResult res;
     cybozu::util::Xoroshiro128Plus rand(::time(0), idx);
     FastZipf fastZipf(rand, shared.zipfTheta, recV.size(), shared.zipfZetan);
     cybozu::tictoc::LocalSet localSet;
@@ -77,7 +101,8 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
     auto getMode = selectGetModeFunc<decltype(rand), Mode>(isLongTx, shortTxMode, longTxMode);
     auto getRecordIdx = selectGetRecordIdx<decltype(rand)>(isLongTx, shortTxMode, longTxMode, shared.usesZipf);
     localSet.init(shared.payload, realNrOp);
-    localSet.setNowait(shared.nowait);
+    localSet.setNowait(shared.nowait_mode);
+    localSet.set_do_preemptive_verify(shared.do_preemptive_verify);
 
     store_release(ready, 1);
     while (!load_acquire(start)) _mm_pause();
@@ -122,6 +147,7 @@ Result1 worker2(size_t idx, uint8_t& ready, const bool& start, const bool& quit,
              , idx, cybozu::tictoc::update_rts_count_
              , cybozu::tictoc::read_count_);
 #endif
+    res.nr_preemptive_aborts = cybozu::tictoc::get_nr_preemptive_aborts();
     return res;
 }
 
@@ -193,17 +219,33 @@ struct CmdLineOptionPlus : CmdLineOption
 
     int usesBackOff; // 0 or 1.
     int usesRMW; // 0 or 1.
-    int nowait;  // 0 or 1.
+    int nowait;  // 0, 1, or 2.
+    bool do_preemptive_verify;
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff (0:off, 1:on)");
         appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write (0:w, 1:rmw, default:1)");
-        appendOpt(&nowait, 0, "nowait", "[0 or 1]: use nowait optimization for write lock.");
+        appendOpt(&nowait, 0, "nowait", "[0, 1, or 2]: use nowait optimization for write lock.");
+        appendOpt(&do_preemptive_verify, 0, "preverify", "[0 or 1]: use preemptive verify.");
     }
     std::string str() const {
         return cybozu::util::formatString(
-            "mode:tictoc %s backoff:%d rmw:%d nowait:%d"
-            , base::str().c_str(), usesBackOff ? 1 : 0, usesRMW ? 1 : 0, nowait ? 1 : 0);
+            "mode:tictoc %s backoff:%d rmw:%d nowait:%d preverify:%d"
+            , base::str().c_str(), usesBackOff ? 1 : 0, usesRMW ? 1 : 0, nowait
+            , int(do_preemptive_verify));
+    }
+
+    cybozu::tictoc::NoWaitMode nowait_mode() const {
+        switch (nowait) {
+        case 0:
+            return cybozu::tictoc::NoWaitMode::Wait;
+        case 1:
+            return cybozu::tictoc::NoWaitMode::NoWait1;
+        case 2:
+            return cybozu::tictoc::NoWaitMode::Nowait2;
+        default:
+            throw cybozu::Exception("invalid nowait option.");
+        }
     }
 };
 
@@ -229,7 +271,8 @@ int main(int argc, char *argv[]) try
         shared.longTxMode = TxMode(opt.longTxMode);
         shared.usesBackOff = opt.usesBackOff ? 1 : 0;
         shared.usesRMW = opt.usesRMW ? 1 : 0;
-        shared.nowait = opt.nowait ? 1 : 0;
+        shared.nowait_mode = opt.nowait_mode();
+        shared.do_preemptive_verify = opt.do_preemptive_verify;
         shared.nrTh4LongTx = opt.nrTh4LongTx;
         shared.payload = opt.payload;
         shared.usesZipf = opt.usesZipf;
@@ -240,7 +283,7 @@ int main(int argc, char *argv[]) try
             shared.zipfZetan = 1.0;
         }
         for (size_t i = 0; i < opt.nrLoop; i++) {
-            Result1 res;
+            TicTocResult res;
             runExec(opt, shared, worker2, res);
         }
     } else {

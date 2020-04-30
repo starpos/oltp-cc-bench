@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstring>
 #include <unordered_map>
+#include "cache_line_size.hpp"
 #include "lock.hpp"
 #include "arch.hpp"
 #include "vector_payload.hpp"
@@ -44,6 +45,7 @@ struct TsWord
     static constexpr uint64_t Shift_mask = (1U << 16) - 1;
 
     INLINE TsWord() = default;
+
     INLINE void init() { obj = 0; }
     INLINE TsWord(uint64_t v) : obj(v) {}
     INLINE operator uint64_t() const { return obj; }
@@ -103,7 +105,7 @@ struct Reader
 {
 private:
     Mutex *mutex_;
-    TsWord tsw_;
+    TsWord tsw_; // This is uninitialized at beginning and will be set in read success.
 public:
     size_t localValIdx;
 
@@ -124,7 +126,7 @@ public:
     }
 
     INLINE uintptr_t getId() const { return uintptr_t(mutex_); }
-    INLINE uint64_t wts() const { return tsw_.wts; }
+    INLINE const TsWord& local_tsw() const { return tsw_; }
 
     INLINE void prepare() {
         assert(mutex_);
@@ -143,6 +145,19 @@ public:
         assert(mutex_);
         if (likely(!tsw_.lock)) return;
         spinForUnlocked();
+    }
+    /**
+     * commitTs is estimated one.
+     */
+    INLINE bool pre_validate(uint64_t commitTs, bool isInWriteSet) const {
+        if (unlikely(tsw_.rts() >= commitTs)) {
+            return true;
+        }
+        TsWord v1 = mutex_->load_acquire();
+        if (unlikely(tsw_.wts != v1.wts || (v1.rts() < commitTs && v1.lock && !isInWriteSet))) {
+            return false;
+        }
+        return true;
     }
     INLINE bool validate(uint64_t commitTs, bool isInWriteSet) {
 #if 0  // old algorithm until 20180222 (first check is missint...it's inefficient.)
@@ -235,6 +250,10 @@ public:
     void *sharedVal;
     size_t localValIdx;
 
+private:
+    TsWord tsw_; // used for preemptive verify.
+
+public:
     /**
      * All member fields are uninitialized.
      * Call set() at first.
@@ -250,16 +269,33 @@ public:
         mutex = mutex0;
         sharedVal = sharedVal0;
         localValIdx = localValIdx0;
+        tsw_.init();
     }
 
     INLINE uintptr_t getId() const { return uintptr_t(mutex); }
     INLINE operator uintptr_t() const { return getId(); }
     INLINE bool operator<(const Writer& rhs) { return getId() < rhs.getId(); }
+
+    /**
+     * This reads the mutex object.
+     */
+    INLINE TsWord load_tsw() {
+        assert(mutex);
+        TsWord tsw = mutex->load();
+        set_local_tsw(tsw);
+        return tsw;
+    }
+    /**
+     * This may return the initialized TsWord which wts/rts is zero.
+     */
+    INLINE TsWord local_tsw() const { return tsw_; }
+    INLINE void set_local_tsw(TsWord tsw) { tsw_ = tsw; }
 private:
     INLINE void swap(Writer& rhs) noexcept {
         std::swap(mutex, rhs.mutex);
         std::swap(localValIdx, rhs.localValIdx);
         std::swap(sharedVal, rhs.sharedVal);
+        std::swap(tsw_, rhs.tsw_);
     }
 };
 
@@ -274,7 +310,7 @@ public:
      * tsw_ is uninitialized at first.
      * lock() or tryLock() wil set tsw_.
      */
-    INLINE Lock() : mutexp_(nullptr) {}
+    INLINE Lock() : mutexp_(nullptr), tsw_() {}
     INLINE ~Lock() noexcept { unlock(); }
 
     Lock(const Lock&) = delete;
@@ -286,7 +322,7 @@ public:
     INLINE operator uintptr_t() const { return getId(); }
     INLINE bool operator<(const Lock& rhs) { return getId() < rhs.getId(); }
 
-    INLINE uint64_t rts() const { return tsw_.rts(); }
+    const TsWord& local_tsw() const { return tsw_; }
 
     INLINE bool tryLock(Mutex& mutex) {
         assert(!mutexp_);
@@ -355,6 +391,40 @@ using LockSet = std::vector<Lock>;
 using Flags = std::vector<bool>; // isInWriteSet array.
 
 
+INLINE bool preemptive_verify(const ReadSet& rs, const WriteSet& ws, const Flags& flags)
+{
+    uint64_t commitTs = 0;
+    for (const Reader& r : rs) {
+        commitTs = std::max(commitTs, r.local_tsw().wts);
+    }
+    for (const Writer& w : ws) {
+#if 0
+        commitTs = std::max(commitTs, w.load_tsw().rts() + 1);
+#else
+        commitTs = std::max(commitTs, w.local_tsw().rts() + 1);
+#endif
+    }
+    for (size_t i = 0; i < rs.size(); i++) {
+        if (!rs[i].pre_validate(commitTs, flags[i])) return false;
+    }
+    return true;
+}
+
+
+enum class NoWaitMode : int {
+    Wait = 0,    // Wait log lock released.
+    NoWait1 = 1, // When trylock failed, abort/retry.
+    Nowait2 = 2, // when trylock failed, retry from beginning of verify phase.
+};
+
+
+INLINE size_t& get_nr_preemptive_aborts()
+{
+    thread_local CacheLineAligned<size_t> nr_preemptive_aborts(0);
+    return nr_preemptive_aborts.value;
+}
+
+
 /**
  * Args:
  *   ls and flags are temporary data.
@@ -365,28 +435,16 @@ using Flags = std::vector<bool>; // isInWriteSet array.
  */
 INLINE bool preCommit(
     ReadSet& rs, WriteSet& ws, LockSet& ls, Flags& flags,
-    MemoryVector& local, size_t valueSize, bool nowait)
+    MemoryVector& local, size_t valueSize, NoWaitMode nowait_mode,
+    bool do_preemptive_verify)
 {
     bool ret = false;
     uint64_t commitTs = 0;
 
-    // Lock Write Set.
-    std::sort(ws.begin(), ws.end());
-    assert(ls.empty());
-    ls.reserve(ws.size());
-    for (Writer& w : ws) {
-        Lock& lk = ls.emplace_back();
-        if (nowait) {
-            if (unlikely(!lk.tryLock(*w.mutex))) goto fin;
-        } else {
-            lk.lock(*w.mutex);
-        }
-    }
-
-    // Serialization point.
-    SERIALIZATION_POINT_BARRIER();
-
     // Calculate isInWriteSet for all the readers.
+    // WriteSet sort is required to avoid deadlock for lock waiting
+    // or to do binary search.
+    std::sort(ws.begin(), ws.end());
     assert(flags.empty());
     flags.reserve(rs.size());
     for (size_t i = 0; i < rs.size(); i++) {
@@ -397,13 +455,45 @@ INLINE bool preCommit(
         flags.push_back(found);
     }
 
+    // Lock/trylock Write Set.
+    ls.reserve(ws.size());
+  retry_verify:
+    assert(ls.empty());
+    if (do_preemptive_verify && unlikely(!preemptive_verify(rs, ws, flags))) {
+        get_nr_preemptive_aborts()++;
+        goto fin;
+    }
+    for (Writer& w : ws) {
+        Lock& lk = ls.emplace_back();
+        if (nowait_mode == NoWaitMode::NoWait1) {
+            if (unlikely(!lk.tryLock(*w.mutex))) goto fin;
+        } else if (nowait_mode == NoWaitMode::Nowait2) {
+            if (unlikely(!lk.tryLock(*w.mutex))) {
+                ls.clear();
+#if 0
+                // The original algorithm in the paper sleeps 1us here.
+                // It must effect like backoff.
+                sleep_us(1);
+#endif
+                goto retry_verify;
+            }
+            w.set_local_tsw(lk.local_tsw()); // for preemptive verify.
+        } else {
+            assert(nowait_mode == NoWaitMode::Wait);
+            lk.lock(*w.mutex);
+        }
+    }
+
+    // Serialization point.
+    SERIALIZATION_POINT_BARRIER();
+
     // Compute the Commit Timestamp.
     for (Lock& lk : ls) {
-        commitTs = std::max(commitTs, lk.rts() + 1);
+        commitTs = std::max(commitTs, lk.local_tsw().rts() + 1);
     }
     for (size_t i = 0; i < rs.size(); i++) {
         if (flags[i]) continue;
-        commitTs = std::max(commitTs, rs[i].wts());
+        commitTs = std::max(commitTs, rs[i].local_tsw().wts);
     }
 
     // Validate the Read Set.
@@ -457,10 +547,14 @@ class LocalSet
 
     MemoryVector local_; // stores local values of read/write set.
     size_t valueSize_;
-    bool nowait_;
+    NoWaitMode nowait_mode_;
+    bool do_preemptive_verify_;
 
 public:
-    INLINE LocalSet() : rs_(), ws_(), ls_(), flags_(), ridx_(), widx_(), local_(), valueSize_(), nowait_(false) {}
+    INLINE LocalSet()
+        : rs_(), ws_(), ls_(), flags_(), ridx_(), widx_(), local_()
+        , valueSize_(), nowait_mode_(NoWaitMode::Wait)
+        , do_preemptive_verify_(false) {}
     INLINE void init(size_t valueSize, size_t nrReserve) {
         valueSize_ = valueSize;
 
@@ -475,7 +569,10 @@ public:
         flags_.reserve(nrReserve);
         local_.reserve(nrReserve);
     }
-    INLINE void setNowait(bool nowait) { nowait_ = nowait; }
+    INLINE void setNowait(NoWaitMode nowait_mode) { nowait_mode_ = nowait_mode; }
+    INLINE void set_do_preemptive_verify(bool do_preemptive_verify) {
+        do_preemptive_verify_ = do_preemptive_verify;
+    }
 
     INLINE void read(Mutex& mutex, void *sharedVal, void *dst) {
         unused(sharedVal); unused(dst);
@@ -523,7 +620,9 @@ public:
         copyValue(&local_[lvidx], src); // write local
     }
     INLINE bool preCommit() {
-        bool ret = cybozu::tictoc::preCommit(rs_, ws_, ls_, flags_, local_, valueSize_, nowait_);
+        bool ret = cybozu::tictoc::preCommit(
+            rs_, ws_, ls_, flags_, local_, valueSize_,
+            nowait_mode_, do_preemptive_verify_);
         ridx_.clear();
         widx_.clear();
         local_.clear();
