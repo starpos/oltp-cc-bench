@@ -514,6 +514,11 @@ void waitForAllTrue(const std::vector<uint8_t>& v)
 }
 
 
+/**
+ * Result:
+ *   default constructible, copyable,
+ *   member functions: operator+(), str(), nrCommit().
+ */
 template <typename SharedData, typename Worker, typename Result>
 void runExec(const CmdLineOption& opt, SharedData& shared, Worker&& worker, Result& res)
 {
