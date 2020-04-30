@@ -147,7 +147,8 @@ TicTocResult worker2(
              , idx, cybozu::tictoc::update_rts_count_
              , cybozu::tictoc::read_count_);
 #endif
-    res.nr_preemptive_aborts = cybozu::tictoc::get_nr_preemptive_aborts();
+    res.nr_preemptive_aborts =
+        cybozu::tictoc::get_thread_local_monitor_data().nr_preemptive_aborts;
     return res;
 }
 

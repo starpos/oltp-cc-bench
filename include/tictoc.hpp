@@ -418,10 +418,20 @@ enum class NoWaitMode : int {
 };
 
 
-INLINE size_t& get_nr_preemptive_aborts()
+
+struct MonitorData
 {
-    thread_local CacheLineAligned<size_t> nr_preemptive_aborts(0);
-    return nr_preemptive_aborts.value;
+    size_t nr_preemptive_aborts;
+
+    MonitorData() : nr_preemptive_aborts(0) {
+    }
+};
+
+
+INLINE MonitorData& get_thread_local_monitor_data()
+{
+    thread_local CacheLineAligned<MonitorData> local;
+    return local.value;
 }
 
 
@@ -460,7 +470,7 @@ INLINE bool preCommit(
   retry_verify:
     assert(ls.empty());
     if (do_preemptive_verify && unlikely(!preemptive_verify(rs, ws, flags))) {
-        get_nr_preemptive_aborts()++;
+        get_thread_local_monitor_data().nr_preemptive_aborts++;
         goto fin;
     }
     for (Writer& w : ws) {
