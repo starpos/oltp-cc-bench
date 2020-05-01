@@ -32,12 +32,12 @@ struct CmdLineOptionPlus : CmdLineOption
     bool preverify;
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
-        appendOpt(&modeStr, "licc-hybrid", "mode", "[mode]: specify mode in licc-pcc, licc-occ, licc-hybrid.");
-        appendOpt(&pqLockType, 0, "pqlock", "[id]: pqlock type (0:none, 1:pqspin, 3:pqmcs1, 4:pqmcs2, 5:pq1993, 6:pq1997, 7:pqmcs3, 8:mcslike)");
-        appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
+        appendOpt(&modeStr, "licc-hybrid", "mode", "[mode]: specify mode in licc-pcc, licc-occ, licc-hybrid (default).");
+        appendOpt(&pqLockType, 0, "pqlock", "[id]: pqlock type (0:none(default), 1:pqspin, 3:pqmcs1, 4:pqmcs2, 5:pq1993, 6:pq1997, 7:pqmcs3, 8:mcslike)");
+        appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on (default: 0)");
         appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write 0:w 1:rmw (default: 1)");
-        appendOpt(&writePct, 50, "writepct", "[pct]: write percentage (0 to 100) for custom3 workload");
-        appendOpt(&preverify, 0, "preverify", "[0 or 1]: preemptive verify 0:off 1:on");
+        appendOpt(&writePct, 50, "writepct", "[pct]: write percentage (0 to 100) for custom3 workload (default: 50)");
+        appendOpt(&preverify, 0, "preverify", "[0 or 1]: preemptive verify 0:off 1:on (defaut: 0)");
     }
     std::string str() const {
         return cybozu::util::formatString(
