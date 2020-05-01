@@ -261,20 +261,25 @@ class EpochGenerator
 {
     bool quit_;
     size_t intervalMs_;
-    uint64_t epoch_;
+    uint64_t epoch_; // must be accessed atomically.
     cybozu::thread::ThreadRunner runner_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+
+    using Lock = std::unique_lock<std::mutex>;
 
 public:
-    EpochGenerator() {
-        storeRelease(quit_, false);
-        storeRelease(epoch_, 0);
-        intervalMs_ = 1;
-
+    EpochGenerator()
+        : quit_(false), intervalMs_(1), epoch_(0), runner_(), mutex_(), cv_() {
         runner_.set([this]() { worker(); });
         runner_.start();
     }
     ~EpochGenerator() noexcept {
-        storeRelease(quit_, true);
+        {
+            Lock lk(mutex_);
+            quit_ = true;
+            cv_.notify_one();
+        }
         runner_.joinNoThrow();
     }
 
@@ -285,19 +290,18 @@ public:
         intervalMs_ = intervalMs;
     }
 
-    uint64_t get() const {
-        return loadAcquire(epoch_);
-    }
-
-    void reset() {
-        storeRelease(epoch_, 0);
-    }
+    uint64_t get() const { return load_acquire(epoch_); }
+    void reset() { store_release(epoch_, 0); }
 
 private:
     void worker() {
-        while (!loadAcquire(quit_)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs_));
-            fetchAdd(epoch_, 1, __ATOMIC_RELEASE);
+        for (;;) {
+            Lock lk(mutex_);
+            if (cv_.wait_for(lk, std::chrono::milliseconds(intervalMs_),
+                             [&]() { return quit_; })) {
+                return;
+            }
+            fetch_add_rel(epoch_, 1);
         }
     }
 };
