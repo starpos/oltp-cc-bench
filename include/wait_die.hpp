@@ -758,7 +758,7 @@ struct WaitDieData4
         FAILED    = 3, // Your request failed.
     };
     struct Request {
-        using Message = Message;
+        using Message = WaitDieData4::Message;
 
         alignas(CACHE_LINE_SIZE)
         Request* next; // Another thread will set the variable.

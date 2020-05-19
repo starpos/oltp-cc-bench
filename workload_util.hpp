@@ -95,8 +95,8 @@ DEPRECATED INLINE Mode getMode(Random& rand, const std::vector<bool>& isWriteV,
         case USE_MIX_TX:
             {
                 using RInt = typename Random::ResultType;
-                double ratio = (double)nrWr / (double)(nrOp) * (double)(RInt)(-1);
-                return (RInt)ratio > rand() ? Mode::X : Mode::S;
+                double ratio = double(nrWr) / double(nrOp) * double(RInt(-1));
+                return RInt(ratio) > rand() ? Mode::X : Mode::S;
             }
         case USE_READONLY_TX:
             return Mode::S;

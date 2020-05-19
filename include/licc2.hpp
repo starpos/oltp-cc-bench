@@ -803,7 +803,7 @@ enum Message : uint8_t
  */
 struct Request
 {
-    using Message = Message;
+    using Message = mcs::Message;
 
     alignas(CACHE_LINE_SIZE)
     Request* next;  // for linked list as a request queue.

@@ -46,7 +46,7 @@ INLINE T load(const T& m, int order = __ATOMIC_RELAXED)
     static_assert(std::is_trivially_copyable_v<T>);
     using Int = typename to_uint_type<T>::type;
     Int tmp = __atomic_load_n((Int*)&m, order);
-    return *(T*)&tmp;
+    return T(tmp);
 }
 
 
@@ -81,7 +81,7 @@ INLINE T0 exchange(T0& m, T1 v, int mode = __ATOMIC_ACQ_REL)
     static_assert(std::is_trivially_copyable_v<T1>);
     using Int = typename to_uint_type<T0>::type;
     Int tmp = __atomic_exchange_n((Int*)&m, (Int)v, mode);
-    return *(T0*)&tmp;
+    return T0(tmp);
 }
 
 

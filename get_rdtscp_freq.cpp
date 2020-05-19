@@ -1,3 +1,4 @@
+#include <cstdio>
 #include "time.hpp"
 #include "sleep.hpp"
 
