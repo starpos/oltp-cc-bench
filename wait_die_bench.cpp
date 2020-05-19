@@ -300,10 +300,10 @@ struct CmdLineOptionPlus : CmdLineOption
 
     CmdLineOptionPlus(const std::string& description) : CmdLineOption(description) {
         appendOpt(&txIdGenType, 3, "txid-gen", "[id]: txid gen method (0:sclable, 1:bulk, 2:simple, 3:epoch(default))");
-        appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off 1:on");
+        appendOpt(&usesBackOff, 0, "backoff", "[0 or 1]: backoff 0:off(default) 1:on");
         appendOpt(&usesRMW, 1, "rmw", "[0 or 1]: use read-modify-write or normal write 0:w 1:rmw (default: 1)");
         appendOpt(&writePct, 50, "writepct", "[pct]: write percentage (0 to 100) for custom3 workload.");
-        appendOpt(&lockType, 2, "lock", "[id]: locking protocol type (0:cas-only, 1:naive, 2:fair).");
+        appendOpt(&lockType, 2, "lock", "[id]: locking protocol type (0:cas-only, 1:naive, 2:fair(default)).");
     }
     std::string str() const {
         return cybozu::util::formatString(
