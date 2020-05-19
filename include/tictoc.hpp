@@ -18,6 +18,7 @@
 #include "vector_payload.hpp"
 #include "allocator.hpp"
 #include "inline.hpp"
+#include "sleep.hpp"
 
 
 #if 0
@@ -500,8 +501,10 @@ INLINE bool preCommit(
         }
     }
 
-    // Serialization point.
-    SERIALIZATION_POINT_BARRIER();
+    // store-load fence is required here in design.
+    //   x86_64: 'lock cmpxchg' and mov (load) is not reordered.
+    //   aarch64: stlxr and ldaxr is not reordered.
+    // so explicit fence is not required on both architectures.
 
     // Compute the Commit Timestamp.
     for (Lock& lk : ls) {
