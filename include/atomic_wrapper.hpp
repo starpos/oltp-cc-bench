@@ -179,6 +179,14 @@ INLINE void acquire_fence() {
 }
 
 
+template <typename T0>
+INLINE bool test_and_set(T0& m)
+{
+    static_assert(sizeof(m) == 1);
+    return __atomic_test_and_set(&m, __ATOMIC_ACQUIRE);
+}
+
+
 /**
  * For compatibility.
  */

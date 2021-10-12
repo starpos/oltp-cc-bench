@@ -3,27 +3,29 @@
 #include <vector>
 #include "thread_util.hpp"
 #include "arch.hpp"
+#include "util.hpp"
+#include "atomic_wrapper.hpp"
+#include "cache_line_size.hpp"
 
-template <typename T>
-void unused(T&)
-{
-}
 
-size_t worker(size_t idx, bool& start, bool&quit, uint64_t& val)
+size_t worker(size_t idx, bool& start, bool& quit, uint64_t& val)
 {
     unused(idx);
     size_t c = 0;
-    while (!start) _mm_pause();
-    while (!quit) {
-        __atomic_fetch_add(&val, 1, __ATOMIC_RELAXED);
+    while (!load_acquire(start)) _mm_pause();
+    while (!load_acquire(quit)) {
+        fetch_add(val, 1);
         c++;
     }
     return c;
 }
 
-void runExpr(size_t nrTh, size_t runSec, bool verbose)
+
+void run_expr(size_t nrTh, size_t runSec, bool verbose)
 {
+    alignas(CACHE_LINE_SIZE)
     uint64_t val = 0;
+    alignas(CACHE_LINE_SIZE)
     bool start = false;
     bool quit = false;
     cybozu::thread::ThreadRunnerSet thS;
@@ -56,9 +58,9 @@ void runExpr(size_t nrTh, size_t runSec, bool verbose)
 
 int main()
 {
-    for (size_t nrTh = 1; nrTh <= 32; nrTh++) {
-        for (size_t i = 0; i < 10; i++) {
-            runExpr(nrTh, 10, false);
+    for (size_t nrTh = 1; nrTh <= 16; nrTh++) {
+        for (size_t i = 0; i < 3; i++) {
+            run_expr(nrTh, 10, false);
         }
     }
 }

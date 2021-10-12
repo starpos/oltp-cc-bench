@@ -44,3 +44,4 @@ test_llsc
 test_wait_die
 test_node_list
 test_rdtscp
+test_lock
